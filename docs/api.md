@@ -16,20 +16,19 @@ EC-CUBE 4.2 は店のルート = 公開ディレクトリ(`index.php` がある�
 
 ## 鍵と設定
 
-インストール時にプラグインが作る `<root>/var/self-harden/config.php`:
+インストール時にプラグインが作る `<root>/var/self-harden/config.php`。1 行目は PHP の `exit` だけの行(`<?php exit; ?>`)、2 行目からが JSON:
 
-```php
-<?php return [
-  'shop_id'    => 'shp_xxxxxxxx',      // API に登録したときの ID
-  'secret'     => '<64 文字の 16 進数>', // random_bytes(32) を bin2hex したもの
-  'api_base'   => 'http://api:8787',    // 店 → API の呼び出し先
-  'self_base'  => 'http://localhost',   // 受け口が自分の店を開いて確かめるときの URL(同じ箱の中から見た URL)
-  'public_base'=> 'http://localhost:8081', // 外から見た店の URL(表示用)
-  'created_at' => 1730000000,
-];
+```
+<?php exit; ?>
+{"shop_id":"shp_xxxxxxxx","secret":"<64 文字の 16 進数>","api_base":"http://api:8787","self_base":"http://kagoya","public_base":"http://127.0.0.1:8081","created_at":1730000000}
 ```
 
-`config.php` は `return` で配列を返すだけなので、仮に Web から開かれても何も出ない。受け口はこれを `include` せず、`file_get_contents` して決まった形の文字列として読む(受け口の「include を持たない」を守るため。読み方は `plugin/` 側で決める。JSON の `config.json` に `<?php exit; ?>` の前置きを付ける形でもよい)。
+- `secret`: `random_bytes(32)` を `bin2hex` したもの
+- `api_base`: 店 → API の呼び出し先
+- `self_base`: 受け口が自分の店を開いて確かめるときの URL(箱の中から見た URL)
+- `public_base`: 外から見た店の URL(表示用)
+
+Web から開かれても 1 行目で止まるので何も出ない。受け口は `include` せず、`file_get_contents` で読んで 2 行目からを JSON として読む。
 
 鍵の交換(プラグインの「API とつなぐ」ボタン):
 
