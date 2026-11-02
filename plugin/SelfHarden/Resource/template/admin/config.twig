@@ -30,6 +30,7 @@
   .sh-report .sev { display: inline-block; min-width: 3.5em; font-size: 12px; padding: 1px 6px; border-radius: 3px; background: #eee; margin-right: 6px; }
   .sh-report .sev-high { background: #fde0e0; } .sh-report .sev-medium { background: #fff1d6; }
   .sh-report .summary { white-space: pre-wrap; font-size: 15px; }
+  .sh-report .sh-draft { white-space: pre-wrap; background: #f7f7f7; border-left: 3px solid #ccc; padding: 8px 10px; font-size: 13px; margin: 6px 0; }
 </style>
 {% endblock %}
 
@@ -127,10 +128,21 @@
     reportEl.hidden = false;
     reportEl.appendChild(el('h3', null, 'まとめ'));
     reportEl.appendChild(el('p', 'summary', r.summary));
+    if (r.status) { reportEl.appendChild(el('h3', null, 'いまの守り')); reportEl.appendChild(el('p', 'summary', r.status)); }
     var sections = [
-      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + (stLabels[f.status] || f.status) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
       ['したこと', r.actions, function (a) { var li = el('li', null, a.title + ' — ' + a.target); li.appendChild(el('div', 'text-muted small', '確かめ方: ' + a.verified + (a.backup_id ? '(退避: ' + a.backup_id + ')' : ''))); return li; }],
+      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + (stLabels[f.status] || f.status) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
+      ['これから self-harden がやること', r.next_by_self_harden, function (x) { return el('li', null, x.title + (x.when ? '(' + x.when + ')' : '')); }],
+      ['お願い(依頼文つき)', r.requests, function (x) {
+        var li = el('li', null, x.title + '(宛先: ' + x.to + ')');
+        li.appendChild(el('div', 'text-muted small', x.why));
+        var pre = el('pre', 'sh-draft', x.message); li.appendChild(pre);
+        var btn = el('button', 'btn btn-sm btn-ec-regular', '依頼文をコピー'); btn.type = 'button';
+        btn.addEventListener('click', function () { try { navigator.clipboard.writeText(x.message); btn.textContent = 'コピーしました'; } catch (e) {} });
+        li.appendChild(btn); return li;
+      }],
       ['まだ残っていること', r.remaining, function (x) { var li = el('li', null, x.title + '(' + x.who + ')'); li.appendChild(el('div', 'text-muted small', x.why)); return li; }],
+      ['長い目で見て', r.long_term, function (x) { var li = el('li', null, x.title); li.appendChild(el('div', 'text-muted small', x.why)); return li; }],
       ['参考にした情報', r.sources, function (s) { var li = el('li'); var a = el('a', null, s.title); if (/^https?:\/\//.test(s.url)) { a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; } li.appendChild(a); return li; }]
     ];
     sections.forEach(function (s) {

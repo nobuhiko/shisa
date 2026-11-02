@@ -213,21 +213,33 @@ export const CLIENT_TOOLS: Tool[] = [
             additionalProperties: false,
           },
         },
-        remaining: {
+        status: { type: "string", description: "Where the shop's defense stands now, in 2-3 plain sentences" },
+        next_by_self_harden: {
           type: "array",
+          description: "What self-harden itself will keep doing (for example re-checking, applying an official fix when it is published)",
+          items: { type: "object", properties: { title: { type: "string" }, when: { type: "string" } }, required: ["title"], additionalProperties: false },
+        },
+        requests: {
+          type: "array",
+          description: "Only what truly cannot be done from the shop side. Each with a ready-to-send message",
           items: {
             type: "object",
-            properties: { title: { type: "string" }, why: { type: "string" }, who: { type: "string" } },
-            required: ["title", "why", "who"],
+            properties: { to: { type: "string" }, title: { type: "string" }, why: { type: "string" }, message: { type: "string", description: "Ready-to-send message in Japanese" } },
+            required: ["to", "title", "why", "message"],
             additionalProperties: false,
           },
+        },
+        long_term: {
+          type: "array",
+          description: "Version upgrades and other long-term improvements, for later",
+          items: { type: "object", properties: { title: { type: "string" }, why: { type: "string" } }, required: ["title", "why"], additionalProperties: false },
         },
         sources: {
           type: "array",
           items: { type: "object", properties: { title: { type: "string" }, url: { type: "string" } }, required: ["title", "url"], additionalProperties: false },
         },
       },
-      ["summary", "findings", "actions", "remaining", "sources"],
+      ["summary", "findings", "actions", "status", "next_by_self_harden", "requests", "long_term", "sources"],
     ),
   },
 ];

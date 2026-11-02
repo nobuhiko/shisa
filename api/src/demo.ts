@@ -176,7 +176,7 @@ const PAGE = String.raw`<!doctype html>
     li.appendChild(b); return li;
   }
 
-  // 最後のまとめ: 直したこと / 人に頼むこと を大きく
+  // 最後のまとめ: 直したこと を大きく。これから自分でやること。お願いは件数と宛先だけ小さく
   function report(box, r) {
     if (!r) return; box.textContent = ''; box.style.display = 'block';
     var fixed = (r.findings || []).filter(function (f) { return f.status === 'fixed' || f.status === 'mitigated'; });
@@ -184,10 +184,17 @@ const PAGE = String.raw`<!doctype html>
     var ul = el('ul');
     (fixed.length ? fixed : (r.actions || [])).slice(0, 5).forEach(function (x) { ul.appendChild(el('li', null, '✓ ' + x.title)); });
     box.appendChild(ul);
-    if (r.remaining && r.remaining.length) {
-      box.appendChild(el('h3', 'ask', '人に頼むこと'));
+    if (r.next_by_self_harden && r.next_by_self_harden.length) {
+      box.appendChild(el('h3', 'fix', 'これから自分でやること'));
+      var ul3 = el('ul');
+      r.next_by_self_harden.slice(0, 3).forEach(function (x) { ul3.appendChild(el('li', null, '↻ ' + x.title)); });
+      box.appendChild(ul3);
+    }
+    var asks = r.requests || r.remaining || [];
+    if (asks.length) {
+      box.appendChild(el('h3', 'ask', r.requests ? 'お願い(依頼文つき)' : '人に頼むこと'));
       var ul2 = el('ul');
-      r.remaining.slice(0, 3).forEach(function (x) { var li = el('li', null, '→ ' + x.title); li.appendChild(el('small', null, x.who)); ul2.appendChild(li); });
+      asks.slice(0, r.requests ? 2 : 3).forEach(function (x) { var li = el('li', null, '→ ' + x.title); li.appendChild(el('small', null, x.to || x.who || '')); ul2.appendChild(li); });
       box.appendChild(ul2);
     }
   }
