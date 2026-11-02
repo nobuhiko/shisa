@@ -1,0 +1,20 @@
+{
+  "note": "secret is used as the ASCII hex string (64 chars) as HMAC key, not decoded bytes",
+  "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "request": {
+    "method": "POST",
+    "path": "/self-harden.php",
+    "shop": "shp_test0001",
+    "timestamp": "1798848000",
+    "nonce": "0123456789abcdef0123456789abcdef",
+    "body": "{\"op\":\"ping\",\"args\":{}}",
+    "body_sha256": "2b9169242cc120678b29e13c0f3527c9ea2c53d9a5f956b1e12799e62dd6c6e5",
+    "string_to_sign": "SH1\nPOST\n/self-harden.php\nshp_test0001\n1798848000\n0123456789abcdef0123456789abcdef\n2b9169242cc120678b29e13c0f3527c9ea2c53d9a5f956b1e12799e62dd6c6e5",
+    "signature": "fa0cdb4e3b70dbd467612af98c74cbf4880f811b0763eb1ad3e6ad432cfcd965"
+  },
+  "response": {
+    "body": "{\"ok\":true,\"result\":{\"pong\":true}}",
+    "string_to_sign": "SH1-RES\n0123456789abcdef0123456789abcdef\nabb4a4f1ee6059d4588d1750ecb6be4f581ae2c7a6c9f7f7ae90c21228ee4ef2",
+    "signature": "50e0053bc01ace5dcc683f2d7c0b41a7932519af3ce7fc0aaf99826fab1805a6"
+  }
+}

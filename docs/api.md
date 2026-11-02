@@ -63,6 +63,8 @@ SH1
 {hex(SHA256(body))}   ← 本文が空なら空文字の SHA256
 ```
 
+HMAC の鍵は `secret` の 16 進数の文字列(64 文字の ASCII)をそのまま使う(バイトに戻さない)。両側の実装は [signature-test-vector.json](signature-test-vector.json) の値と一致することをテストで確かめる。
+
 受け口の確かめ方(どれか 1 つでも外れたら 401、本文は `{"ok":false,"error":"unauthorized"}` だけ。理由は返さない):
 
 - 見出しが全部ある。形が正しい
