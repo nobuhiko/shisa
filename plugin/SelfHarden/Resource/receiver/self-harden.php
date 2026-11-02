@@ -212,7 +212,8 @@ function sh_is_inside($rel, $dir)
 }
 
 // 書いてよい場所の論理名を、絶対パスにする
-function sh_resolve_target($target)
+// $allow_code は restore(退避から戻す)のときだけ true。write_file からは code: を受け付けない
+function sh_resolve_target($target, $allow_code = false)
 {
     if (!is_string($target)) {
         throw new ShError('bad_target', 'target がありません');
@@ -229,6 +230,9 @@ function sh_resolve_target($target)
             sh_ensure_lab();
         }
     } elseif (strpos($target, 'code:') === 0) {
+        if (!$allow_code) {
+            throw new ShError('bad_target', 'code: は退避から戻すときと公式の修正の経路でだけ使えます');
+        }
         $rel = sh_code_path(substr($target, 5));
     } elseif (strpos($target, 'dir:') === 0) {
         $rest = substr($target, 4);
@@ -339,6 +343,22 @@ function sh_content_lines($content)
 // PHP や CGI として動かす・サーバー側で取り込む、に当たる言葉
 const SH_EXEC_WORDS = '/php|phtml|phar|cgi|fcgi|proxy:|x-httpd|server-parsed|includes|script/';
 
+// .htaccess の守りの行(アクセスを止める・PHP を動かさない・一覧を出さない など)。今の中身にあるものは、新しい中身から消させない
+function sh_guard_line($l)
+{
+    return (bool) preg_match('/^(order\s|deny\s|allow\s|require\s|satisfy\s|php_flag\s+engine\s+off|php_value\s+engine\s+(off|0)|sethandler\s+none|removehandler\s|removetype\s|options\s+.*-(execcgi|indexes|includes)|<files|<filesmatch|<\/files|<directorymatch|<\/directorymatch|rewriterule\s.*\[[^\]]*\bf\b)/', $l);
+}
+
+function sh_check_guards($content, $existing)
+{
+    $new = array_flip(sh_content_lines($content));
+    foreach (sh_content_lines($existing) as $l) {
+        if (sh_guard_line($l) && !isset($new[$l])) {
+            throw new ShError('removes_guard', '今の .htaccess にある守りの行を消す中身は書けません: ' . $l);
+        }
+    }
+}
+
 // $existing は今のファイルの中身。もともとある行(店の人や EC-CUBE が書いたもの)はそのまま残せるように、決まりは新しく足す行にだけ当てる
 function sh_check_content($kind, $content, $existing = '')
 {
@@ -446,7 +466,7 @@ function sh_restore_backup($id)
         throw new ShError('not_found', 'その退避はありません');
     }
     // 退避に書かれた場所をそのまま信じず、書いてよい場所かをもう一度確かめる
-    list($rel, $abs) = sh_resolve_target($meta['target']);
+    list($rel, $abs) = sh_resolve_target($meta['target'], true);
     $now = sh_backup($rel, $abs, $meta['target']);
     if ($meta['existed']) {
         $content = @file_get_contents(sh_var('backups/' . $id . '.bak'));
@@ -648,8 +668,9 @@ function op_read_file(array $args)
     $top = strpos($relnorm, '/') === false ? '' : substr($relnorm, 0, strpos($relnorm, '/'));
     $is_backup = (bool) preg_match('#^' . preg_quote(SH_VAR_DIR, '#') . '/backups/[0-9]{14}-[0-9a-f]{8}\.bak$#', $relnorm);
     // 読めるのは、設定ファイルと本体・部品のファイル(公式と比べるため)。鍵・.env・var/ の中(退避を除く)は読めない
+    $named = in_array($base, ['.htaccess', '.user.ini', 'composer.json', 'composer.lock', 'web.config', 'robots.txt'], true);
     $allowed = $is_backup
-        || in_array($base, ['.htaccess', '.user.ini', 'composer.json', 'composer.lock', 'web.config', 'robots.txt'], true)
+        || ($named && (!sh_is_protected($relnorm) || in_array($relnorm, ['composer.json', 'composer.lock'], true) || strpos($relnorm, SH_LAB_DIR . '/') === 0))
         || (in_array($top, ['', 'src', 'app', 'html', 'vendor'], true) && !sh_is_protected($relnorm));
     if (!$allowed) {
         throw new ShError('not_readable', 'このファイルは読めません');
@@ -669,9 +690,21 @@ function op_write_file(array $cfg, array $args)
 {
     $target = isset($args['target']) ? $args['target'] : null;
     list($rel, $abs) = sh_resolve_target($target);
-    $kind = substr($rel, -9) === '.htaccess' ? 'htaccess' : 'userini';
+    // write_file で書けるのは .htaccess と .user.ini だけ(名前で確かめる。中身の決まりの種類もここで決まる)
+    $base = basename($rel);
+    if ($base === '.htaccess') {
+        $kind = 'htaccess';
+    } elseif ($base === '.user.ini') {
+        $kind = 'userini';
+    } else {
+        throw new ShError('bad_target', 'write_file で書けるのは .htaccess と .user.ini だけです');
+    }
     $content = isset($args['content']) ? $args['content'] : null;
-    sh_check_content($kind, $content, is_file($abs) ? (string) @file_get_contents($abs) : '');
+    $existing = is_file($abs) ? (string) @file_get_contents($abs) : '';
+    sh_check_content($kind, $content, $existing);
+    if ($kind === 'htaccess' && strpos($rel, SH_LAB_DIR . '/') !== 0) {
+        sh_check_guards($content, $existing);
+    }
 
     $lock = @fopen(sh_var('lock'), 'c');
     if ($lock) {
@@ -811,6 +844,13 @@ function sh_official_url($rel, $ref)
         return SH_OFFICIAL_RAW . $m[1] . '/' . $m[2] . '/' . $ref . '/' . $parts[3];
     }
     $installed = sh_eccube_version();
+    if ($sha) {
+        // コミットの番号なら、その時点の公式の Constant.php を受け口が自分で取り、版が今より古くないかを確かめる
+        $c = sh_fetch_official(SH_OFFICIAL_RAW . SH_ECCUBE_REPO . '/' . $ref . '/src/Eccube/Common/Constant.php');
+        if (!preg_match("/const\s+VERSION\s*=\s*'([^']+)'/", $c, $m) || $installed === null || version_compare($m[1], $installed, '<')) {
+            throw new ShError('bad_ref', 'そのコミットの版(' . (isset($m[1]) ? $m[1] : '不明') . ')は今の版(' . $installed . ')より古いので使えません');
+        }
+    }
     if (!$sha) {
         if (!preg_match('/^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/', $ref) || $installed === null || version_compare($ref, $installed, '<')) {
             throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号(40 文字の 16 進数。短い形は不可)だけにできます');
@@ -1182,6 +1222,7 @@ function sh_main()
     if ($nonce === null) {
         sh_unauthorized();
     }
+    sh_ensure_var();
     $secret = $cfg['secret'];
     $req = json_decode($body, true);
     if (!is_array($req) || !isset($req['op']) || !is_string($req['op'])) {

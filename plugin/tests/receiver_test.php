@@ -442,6 +442,52 @@ $log = file_get_contents($root . '/var/self-harden/audit.log');
 check('記録に鍵や中身は書かない', strpos($log, $secret) === false && strpos($log, 'BREAK-ME') === false && strpos($log, 'auto_prepend') === false);
 check('署名が通らなかった呼び出しは記録しない(知らない操作は記録する)', strpos($log, '"op":"eval"') !== false && substr_count($log, '"op":"ping"') < 10);
 
+
+echo "別の目の点検で見つかった穴\n";
+foreach (['code:shell.php', 'code:index.php', 'code:src/Eccube/Kernel.php', 'code:html/x.php', 'code:.htaccess'] as $t) {
+    $r = call('write_file', ['target' => $t, 'content' => "<?php echo 'x';", 'expected_sha256' => null]);
+    check('write_file に ' . $t . ' を渡すと拒否', isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+check('拒否のあと PHP のファイルは作られていない', !file_exists($root . '/shell.php') && !file_exists($root . '/html/x.php') && file_get_contents($root . '/index.php') === "<?php echo 'shop';");
+// 守りの行を消させない
+file_put_contents($root . '/.htaccess', "Require all denied\nphp_flag engine off\nOptions -Indexes\n");
+$cur = hash_file('sha256', $root . '/.htaccess');
+$r = call('write_file', ['target' => 'root/.htaccess', 'content' => "Options -Indexes\n", 'expected_sha256' => $cur]);
+check('.htaccess の守りの行(Require / engine off)を消す中身は拒否', err($r) === 'removes_guard', $r['body']);
+$r = call('write_file', ['target' => 'root/.htaccess', 'content' => "Require all denied\nphp_flag engine off\nOptions -Indexes\nHeader always unset X-Powered-By\n", 'expected_sha256' => $cur]);
+check('守りの行を残して足すのは書ける', !empty($r['json']['ok']), $r['body']);
+mkdir($root . '/html/up', 0777, true);
+file_put_contents($root . '/html/up/.htaccess', "<FilesMatch \"\\.php$\">\nRequire all denied\n</FilesMatch>\n");
+$r = call('write_file', ['target' => 'dir:html/up/.htaccess', 'content' => "# empty\n", 'expected_sha256' => hash_file('sha256', $root . '/html/up/.htaccess')]);
+check('dir: の .htaccess でも守りの行は消させない', err($r) === 'removes_guard', $r['body']);
+call('lab_arm');
+$r = call('write_file', ['target' => 'lab/.htaccess', 'content' => "Require all denied\n", 'expected_sha256' => null]);
+$r = call('write_file', ['target' => 'lab/.htaccess', 'content' => "", 'expected_sha256' => hash_file('sha256', $root . '/self-harden-lab/.htaccess')]);
+check('小部屋の .htaccess は空に戻せる', !empty($r['json']['ok']), $r['body']);
+unlink($root . '/.htaccess');
+// コミットの番号でも古い版には戻せない
+$r = call('restore_official', ['path' => 'index.php', 'ref' => '710b64ce96786770fe59ba8255ff16925171f172']);
+check('古い版(4.1.2)のコミットの番号は拒否', err($r) === 'bad_ref' && strpos($r['body'], '4.1.2') !== false, $r['body']);
+$r = call('apply_official_fix', ['ref' => '710b64ce96786770fe59ba8255ff16925171f172', 'paths' => ['index.php']]);
+check('公式の修正の経路でも古い版のコミットは拒否', err($r) === 'bad_ref', $r['body']);
+$r = call('restore_official', ['path' => 'index.php', 'ref' => 'daed16e5da3c6847b232af24b06d76d55d8cbd42']);
+check('今より新しい版(4.2.3)のコミットの番号は使える', !empty($r['json']['ok']), $r['body']);
+if (!empty($r['json']['ok'])) {
+    call('restore', ['backup_id' => $r['json']['result']['backup_id']]);
+}
+check('戻したあと index.php は元どおり', file_get_contents($root . '/index.php') === "<?php echo 'shop';");
+// 置き場の守りは毎回作り直す
+@unlink($root . '/var/self-harden/.htaccess');
+call('ping');
+check('署名が通るたびに var/self-harden の守りを置き直す', is_file($root . '/var/self-harden/.htaccess'));
+// read_file の名前での許可は、触ってはいけない場所の中では効かない
+@mkdir($root . '/var/other', 0777, true);
+file_put_contents($root . '/var/other/composer.json', '{"secret":1}');
+foreach (['var/self-harden/.htaccess', 'var/other/composer.json', 'var/self-harden/audit.log'] as $p) {
+    $r = call('read_file', ['path' => $p]);
+    check('名前が許可の一覧にあっても読めない: ' . $p, isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+
 // ---- 受け口に危ない関数が無いこと ----
 echo "受け口のコード\n";
 $src = file_get_contents($receiver);

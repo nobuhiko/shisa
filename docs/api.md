@@ -114,7 +114,8 @@ Content-Type: application/json
 
 ### `read_file`
 - args: `{"path": "<root からの相対パス>"}`
-- 読めるのは名前が `.htaccess`, `.user.ini`, `composer.json`, `composer.lock`, `web.config`, `robots.txt` のものと、`var/self-harden/backups/` の退避ファイルだけ。`.env` 系は `inspect` の伏せた形でしか出さない
+- 読めるもの: `src/` `app/` `html/` `vendor/` の中と root 直下のふつうのファイル(公式と比べるため)、名前が `.htaccess` `.user.ini` `composer.json` `composer.lock` `web.config` `robots.txt` のもの、小部屋の中、`var/self-harden/backups/` の退避ファイル
+- 読めないもの: `.env*`、受け口自身、`var/` の中(退避を除く)。名前の許可も、これらの場所の中では効かない
 - 256KB まで。result: `{content, sha256, size, mtime}`。無いファイルは `{exists: false}`
 
 ### `write_file`
@@ -129,6 +130,8 @@ Content-Type: application/json
   }
   ```
 - `dir:` は `<root>` の中に既にあるディレクトリだけ(作らない)。名前は `.htaccess` だけ
+- `write_file` で書けるのは、行き先の名前が `.htaccess` か `.user.ini` のものだけ。`code:` は受け付けない(本体のファイルは `restore_official` / `apply_official_fix` で、中身は受け口が公式から取る)
+- 本番と `dir:` の `.htaccess` は、今の中身にある守りの行(アクセスを止める・PHP を動かさない・一覧を出さない など)を新しい中身から消すと `removes_guard`
 - `expected_sha256` が今と違えば `conflict`(だれかが先に書き換えた)
 - 中身の決まり(受け口自身が裏口にならないため。詳しくは `docs/security.md`): 64KB まで、NUL なし。PHP に他のファイルを読ませる・別の形式を PHP として動かす指示は `forbidden_directive` で断る(`auto_prepend_file`, `auto_append_file`, `include_path`, `SetHandler`/`AddHandler`/`AddType`/`ForceType` で php を含むもの, `Action`, `php_admin_*`, `extension`, `zend_extension`, `open_basedir` を緩めるもの, `disable_functions` を空にするもの, `allow_url_include`)。これは「受け口を通して任意のコードを動かせない」ための決まりで、守りの手の答えではない
 - 書き方: 退避(`backups/<id>.bak` と `<id>.json` に元の場所・sha256・時刻) → 同じディレクトリの一時ファイルに書く → `rename` で置き換え
