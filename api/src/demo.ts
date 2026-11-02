@@ -4,6 +4,10 @@
 // 見せるのは実際に動いた点検の記録だけ。行を作ったり足したりしない。字幕は行に書かれていることだけから作る
 import type { Hono } from "hono";
 import type { Store } from "./store.js";
+import { readFile } from "node:fs/promises";
+
+// 「起」の文は本人が書く。ここではファイルの文をそのまま流すだけ
+const STORY = new URL("../demo/story.json", import.meta.url);
 
 export function mountDemo(app: Hono, store: Store) {
   if (process.env.SH_DEMO !== "1") return;
@@ -22,6 +26,14 @@ export function mountDemo(app: Hono, store: Store) {
     if (!r) return c.json({ error: "not_found" }, 404);
     const shop = await store.getShop(r.shop_id);
     return c.json({ run_id: r.run_id, shop: shop ? new URL(shop.shop_url).host : "", steps: r.steps, report: r.report ?? null, advisory_url: r.advisory_url });
+  });
+
+  app.get("/demo/story", async (c) => {
+    try {
+      return c.json(JSON.parse(await readFile(STORY, "utf8")));
+    } catch {
+      return c.json({ lines: [] });
+    }
   });
 
   app.get("/demo", (c) => c.html(PAGE));
@@ -81,6 +93,10 @@ const PAGE = String.raw`<!doctype html>
   body.explain .diagram .lead { color: #cbd5e1; }
   body.explain .ok { color: #4ade80; } body.explain .ng { color: #f87171; }
   body.real main { outline: 4px solid #3949ab; outline-offset: -2px; border-radius: 8px; margin: 0 12px; }
+  .story { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 28px; padding: 40px 12vw; }
+  .story p { margin: 0; font-size: 34px; line-height: 1.5; color: #e2e8f0; opacity: 0; transform: translateY(8px); transition: opacity .8s, transform .8s; }
+  .story p.last { font-size: 48px; font-weight: 800; color: #fbbf24; margin-top: 16px; }
+  .story p.in { opacity: 1; transform: none; }
   .chain .row { opacity: 0; transform: translateY(6px); transition: opacity .5s, transform .5s; }
   .chain .row.in, .chain .arrow.in, .chain .last.in { opacity: 1; transform: none; }
   .chain .arrow, .chain .last { opacity: 0; transition: opacity .5s; }
@@ -395,6 +411,16 @@ const PAGE = String.raw`<!doctype html>
     return holdFor(2600 * 6 + 3000);
   };
 
+  // 起: 暗い背景に、本人が書いた文を 1 行ずつ
+  scenes.K = function () {
+    layout(1); badge(false);
+    var d = el('div', 'story'); main.appendChild(d);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var lines = (st.lines || []).map(function (x) { var p = el('p', x.last ? 'last' : null, x.text); d.appendChild(p); return { p: p, ms: (x.hold || 3) * 1000 }; });
+      return lines.reduce(function (pr, x) { return pr.then(function () { x.p.classList.add('in'); return holdFor(x.ms); }); }, Promise.resolve());
+    });
+  };
+
   // 説明のカード: レンタルサーバーごとに、正しい手が違う
   scenes.X = function () {
     layout(1); badge(false);
@@ -524,7 +550,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['K', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -549,7 +575,7 @@ const PAGE = String.raw`<!doctype html>
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
-    else if (k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'K' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
