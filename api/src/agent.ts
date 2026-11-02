@@ -2,7 +2,7 @@
 // Agent の 1 歩。モデルを 1 回呼び、出てきた道具を実行して、結果を保存する。
 // 1 歩ずつ保存するので、途中で止まっても次の 1 歩から続けられる(Workers では alarm から呼ぶ)
 import Anthropic from "@anthropic-ai/sdk";
-import { SYSTEM_PROMPT, firstUserMessage } from "./prompt.js";
+import { SYSTEM_PROMPT, firstUserMessage, advisoryNote } from "./prompt.js";
 import { CLIENT_TOOLS, SERVER_TOOLS, runTool } from "./tools.js";
 import type { Run, Shop, Step, Store } from "./store.js";
 
@@ -141,9 +141,9 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   // 経過に出す: Agent の一言、調べものの様子
   for (const b of msg.content) {
     if (b.type === "text" && b.text.trim()) push(run, "think", short(b.text.trim(), 1000));
-    if (b.type === "server_tool_use") {
+    if (b.type === "server_tool_use" && (b.name === "web_search" || b.name === "web_fetch")) {
       const q = (b.input as any)?.query ?? (b.input as any)?.url ?? "";
-      push(run, "tool", b.name === "web_search" ? `公開の情報を探す: ${q}` : `公開の情報を読む: ${q}`);
+      if (q) push(run, "tool", b.name === "web_search" ? `公開の情報を探す: ${q}` : `公開の情報を読む: ${q}`);
     }
   }
 
@@ -197,7 +197,13 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     }
     results.push({ type: "tool_result", tool_use_id: u.id, content: out.content, is_error: out.isError || undefined });
   }
-  run.messages.push({ role: "user", content: results });
+  const content: Anthropic.Beta.BetaContentBlockParam[] = [...results];
+  for (const url of run.pending_advisories ?? []) {
+    content.push({ type: "text", text: advisoryNote(url) });
+    push(run, "info", `通知の URL を受け取った: ${url}`);
+  }
+  run.pending_advisories = [];
+  run.messages.push({ role: "user", content });
   if (waitSec) run.wake_at = Date.now() + waitSec * 1000;
   await store.putRun(run);
   return run;

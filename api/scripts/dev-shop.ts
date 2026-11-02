@@ -3,6 +3,7 @@
 //   npx tsx scripts/dev-shop.ts connect kagoya
 //   npx tsx scripts/dev-shop.ts start kagoya [通知の URL]
 //   npx tsx scripts/dev-shop.ts watch kagoya <run_id>
+//   npx tsx scripts/dev-shop.ts break lolipop       わざと壊れる .htaccess を書かせ、同じリクエストの中で戻るかを確かめる
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomHex, signRequest } from "../src/sign.js";
@@ -65,6 +66,23 @@ if (cmd === "connect") {
     }
     await new Promise((res) => setTimeout(res, 3000));
   }
+} else if (cmd === "break") {
+  // 店に置かれている鍵(プラグインが作ったもの)で受け口を直接呼ぶ
+  const raw = execFileSync("docker", ["exec", h.container, "cat", "/var/www/html/var/self-harden/config.php"], { encoding: "utf8" });
+  const cfg = JSON.parse(raw.slice(raw.indexOf("\n") + 1));
+  const call = async (op: string, args: Record<string, unknown>) => {
+    const body = JSON.stringify({ op, args });
+    const hd = await signRequest(cfg.secret, "POST", "/self-harden.php", cfg.shop_id, body);
+    return (await fetch(h.public + "/self-harden.php", { method: "POST", headers: { "Content-Type": "application/json", ...hd }, body })).json() as Promise<any>;
+  };
+  const before = await call("read_file", { path: ".htaccess" });
+  const top0 = (await fetch(h.public + "/")).status;
+  // 壊れる中身: 前の中身の先頭に、Apache が知らない命令を 1 行足す
+  const broken = "ThisIsNotAnApacheDirective on\n" + (before.result.content ?? "");
+  const w = await call("write_file", { target: "root/.htaccess", content: broken, expected_sha256: before.result.sha256 ?? null, verify: { paths: ["/", "/self-harden.php"], timeout_sec: 8 } });
+  const after = await call("read_file", { path: ".htaccess" });
+  const top1 = (await fetch(h.public + "/")).status;
+  console.log({ top_before: top0, verify: w.result?.verify, rolled_back: w.result?.rolled_back, rollback_verify: w.result?.rollback_verify, same_as_before: after.result.sha256 === before.result.sha256, top_after: top1 });
 } else {
-  throw new Error("connect | start | watch");
+  throw new Error("connect | start | watch | break");
 }

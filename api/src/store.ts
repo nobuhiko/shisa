@@ -27,6 +27,7 @@ export interface Run {
   status: "running" | "done" | "failed";
   trigger: "connect" | "schedule" | "manual" | "advisory";
   advisory_url: string | null;
+  pending_advisories?: string[]; // 点検の途中で貼られた通知。次の 1 歩で渡す
   created_at: number;
   updated_at: number;
   wake_at: number;

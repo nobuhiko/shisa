@@ -10,7 +10,14 @@ export function createApp(store: Store, kick: (runId: string) => void) {
   // 店ごとに同時に回す点検は 1 つだけ
   async function startRun(shop: Shop, advisoryUrl: string | null, trigger: "connect" | "manual") {
     const running = (await store.listRuns(shop.shop_id)).find((r) => r.status === "running");
-    if (running && !advisoryUrl) return running.run_id;
+    if (running) {
+      // 同じ店で 2 つの点検が同時に書き換えないように、通知は動いている点検に渡す
+      if (advisoryUrl) {
+        running.pending_advisories = [...(running.pending_advisories ?? []), advisoryUrl];
+        await store.putRun(running);
+      }
+      return running.run_id;
+    }
     const run = newRun(`run_${randomHex(8)}`, shop, advisoryUrl, trigger);
     await store.putRun(run);
     kick(run.run_id);

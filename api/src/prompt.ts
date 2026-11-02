@@ -24,7 +24,8 @@ export const SYSTEM_PROMPT = `You are self-harden, an agent that hardens one sma
 - Do not attack or probe anything other than this shop. http_get only reads pages of this shop.
 - If an operation fails, read the error and adapt. Do not repeat the same failing call.
 - You have a wait tool if you decide you need to pause between steps.
-- Before each tool call, say in one short Japanese sentence what you are about to do and why. These sentences are shown live to the shop owner.`;
+- Before each tool call, say in one short Japanese sentence what you are about to do and why. These sentences are shown live to the shop owner, so write them in Japanese for the whole session, including near the end.
+- The shop owner may paste a security advisory URL while you are working. When that happens, handle it as part of this session.`;
 
 export function firstUserMessage(advisoryUrl: string | null, shopUrl: string): string {
   if (advisoryUrl) {
@@ -32,4 +33,9 @@ export function firstUserMessage(advisoryUrl: string | null, shopUrl: string): s
 この通知を読み、この店(${shopUrl})に当てはまるかを、サーバーを調べて判断してください。当てはまるなら、このサーバーで本当に効く手で守りを固めてください。あわせて、点検の中で見つけたほかの弱いところも扱ってください。`;
   }
   return `この店(${shopUrl})の点検を始めてください。サーバーを自分で調べ、弱いところを見つけ、このサーバーで本当に効く手で守りを固めてください。`;
+}
+
+export function advisoryNote(url: string): string {
+  return `店の人が、セキュリティの通知の URL を貼りました: ${url}
+この通知を読み、この店に当てはまるかを、サーバーを調べて判断してください。当てはまるなら、このサーバーで本当に効く手で対応し、報告に含めてください。`;
 }
