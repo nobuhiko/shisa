@@ -1,0 +1,15 @@
+# API(頭)。鍵はリポジトリ直下の .env(コミットしない)から読む。ポートは 127.0.0.1 にだけ開く
+name: self-harden-api
+services:
+  api:
+    build: .
+    image: self-harden/api:dev
+    hostname: api
+    env_file: ../.env
+    ports: ["127.0.0.1:8787:8787"]
+    volumes: ["./data:/data"]
+    networks: [self-harden]
+networks:
+  self-harden:
+    name: self-harden
+    external: true
