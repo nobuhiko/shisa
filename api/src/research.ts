@@ -41,12 +41,13 @@ export function satisfies(version: string, constraint: string): boolean {
 // ---- 部品の弱点 ----
 
 export async function checkPackages(shop: Shop) {
-  const r = await callReceiver(shop, "read_file", { path: "composer.lock" });
-  if (!r.ok || !r.result.exists) throw new Error("composer.lock を読めませんでした");
-  const lock = JSON.parse(r.result.content);
-  const pkgs: { name: string; version: string }[] = [...(lock.packages ?? []), ...(lock["packages-dev"] ?? [])]
-    .filter((p: any) => p?.name && p?.version)
-    .map((p: any) => ({ name: p.name, version: p.version }));
+  // composer.lock は大きい(EC-CUBE 4.2 で 256KB を超える)ので、受け口の inspect が抜き出した名前と版を使う
+  const r = await callReceiver(shop, "inspect", { sections: ["app"] });
+  if (!r.ok) throw new Error("composer.lock の部品の一覧を読めませんでした");
+  const pkgs: { name: string; version: string }[] = ((r.result.app?.packages ?? []) as any[])
+    .filter((p) => p?.name && p?.version)
+    .map((p) => ({ name: p.name, version: p.version }));
+  if (!pkgs.length) throw new Error("composer.lock に部品が見つかりませんでした");
   const body = new URLSearchParams();
   for (const p of pkgs) body.append("packages[]", p.name);
   const res = await fetch(PACKAGIST_ADVISORIES, { method: "POST", body, signal: AbortSignal.timeout(30_000) });

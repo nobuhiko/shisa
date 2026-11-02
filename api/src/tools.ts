@@ -181,7 +181,7 @@ export const CLIENT_TOOLS: Tool[] = [
   },
   {
     name: "wait",
-    description: "Pause the session for the given number of seconds (max 360) before continuing.",
+    description: "Pause for the given number of seconds (max 360). The pause happens between this turn and the next one, so call wait alone (or as the last call of a turn) and do the checks in the next turn; calls placed after wait in the same turn are not run.",
     input_schema: obj({ seconds: { type: "integer", minimum: 1, maximum: 360 } }, ["seconds"]),
   },
   {
@@ -531,7 +531,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     }
     case "wait": {
       const sec = Math.max(1, Math.min(360, Number(input.seconds) || 1));
-      return { content: j({ waited_seconds: sec }), waitSec: sec, title: `${sec} 秒待つ` };
+      return { content: j({ will_wait_seconds: sec, detail: "The pause happens before your next turn. Tools called after wait in this same turn are not run." }), waitSec: sec, title: `${sec} 秒待つ` };
     }
     case "report": {
       return { content: j({ ok: true }), report: input, title: "報告をまとめる" };

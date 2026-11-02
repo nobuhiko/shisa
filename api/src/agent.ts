@@ -141,7 +141,7 @@ export function summarize(name: string, content: string, isError?: boolean): str
     case "list_backups":
       return errOf(d) ?? `${d.result?.backups?.length ?? 0} 件`;
     case "wait":
-      return `${d.waited_seconds} 秒待った`;
+      return `${d.will_wait_seconds} 秒あけてから次へ進む`;
     case "report":
       return "";
     default:
@@ -257,6 +257,13 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
   let waitSec = 0;
   for (const u of uses) {
+    // 「待つ」は次の 1 歩を遅らせるもの。同じ 1 歩の中で「待つ」より後に呼ばれた道具は、待つ前に動いてしまうので実行しない
+    if (waitSec > 0) {
+      const content = JSON.stringify({ ok: false, error: "not_run_before_wait", detail: `Not run: it was called in the same turn after wait. Call it again in the next turn; the pause of ${waitSec} seconds happens before the next turn.` });
+      push(run, "info", "待ったあとで確かめ直すため、この確認はあとに回した", content, undefined, u.name);
+      results.push({ type: "tool_result", tool_use_id: u.id, content, is_error: true });
+      continue;
+    }
     let out;
     try {
       out = await runTool(shop, u.name, u.input, { store, runId: run.run_id });
