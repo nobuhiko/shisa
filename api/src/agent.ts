@@ -128,6 +128,7 @@ export function summarize(name: string, content: string, isError?: boolean): str
     case "clear_cache":
       return errOf(d) ?? `キャッシュを消した。店を開いて確かめた(${((d.result?.verify ?? []) as any[]).map((x) => `${x.path} ${x.status}`).join("、")})`;
     case "apply_official_fix": {
+      if (d.error === "customized_files") return `お店の改造があるファイル(${d.customized.length} 件)を上書きしてしまうので、何も置いていない`;
       if (d.error === "incomplete_fix") return `公式の修正のファイルがそろっていないので、何も置いていない(足りない ${d.missing.length} 件)`;
       if (d.error === "needs_db_or_vendor_change") return "DB や部品の変更が要る版なので、何も置いていない";
       if (errOf(d)) return `${errOf(d)}(何も置いていない)`;

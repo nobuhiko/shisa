@@ -492,6 +492,19 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           if (scope.blockers.length) {
             return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages; it cannot be applied with these tools. Apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           }
+          // お店の改造を上書きしない: 当てる先が、今の版の公式の中身と違えば(self-harden が当てたものを除く)断る
+          const version = await installedVersion(shop);
+          const m = await manifest(version);
+          const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
+          const customized: string[] = [];
+          for (const p of paths) {
+            if (!m.files[p]) continue; // 公式に無い新しいファイル
+            const cur = await currentFile(shop, p);
+            if (cur.sha && cur.sha !== m.files[p] && !applied.some((a) => a.path === p && a.sha256 === cur.sha)) customized.push(p);
+          }
+          if (customized.length) {
+            return { content: j({ ok: false, error: "customized_files", detail: "Nothing was written. These files differ from the official release of the installed version (likely the shop's own customization); applying official files would erase it. Report it to a person instead.", customized, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          }
           if (missing.length) {
             return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           }
