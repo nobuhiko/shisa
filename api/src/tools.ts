@@ -84,7 +84,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "compare_with_official",
     description:
-      "Compare every file of the shop (root files, app/, html/, src/, vendor/) with the official EC-CUBE release of the installed version, by SHA-256. Returns files that differ from the official release, files that are not in the official release, and files of the official release that are missing. Takes some time on large installations.",
+      "Compare every file of the shop (root files, app/, html/, src/, vendor/) with the official EC-CUBE release of the installed version, by SHA-256. Returns files that differ from the official release, files that are not in the official release, and files of the official release that are missing. Files that self-harden itself changed by applying official fixes (and that still have the content it wrote) are listed separately as intended; do not revert them to the release. Takes some time on large installations.",
     input_schema: obj({
       only_php: { type: "boolean", description: "List only PHP-like files among the added files (default true)" },
     }),
@@ -97,7 +97,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "restore_official",
     description:
-      "Replace one file of the shop (under src/, app/, html/, vendor/ or directly under the root) with its official content. You only name the file and the official version (ref); the receiver itself fetches the content from fixed official sources (the EC-CUBE GitHub repository, or for vendor/ files the GitHub repository written in composer.lock). For EC-CUBE files, ref is a release tag not older than the installed version, or a commit hash of the official repository. For vendor/ files, ref is the locked reference or a newer tag of the same major version. A backup is taken first; after writing, the receiver opens the shop pages and rolls back on a server error.",
+      "Use this to undo tampering: replace one existing file of the shop (whose folder exists) (under src/, app/, html/, vendor/ or directly under the root) with its official content. You only name the file and the official version (ref); the receiver itself fetches the content from fixed official sources (the EC-CUBE GitHub repository, or for vendor/ files the GitHub repository written in composer.lock). For EC-CUBE files, ref is a release tag not older than the installed version, or a commit hash of the official repository. For vendor/ files, ref is the locked reference or a newer tag of the same major version. A backup is taken first; after writing, the receiver opens the shop pages and rolls back on a server error.",
     input_schema: obj(
       {
         path: { type: "string" },
@@ -105,6 +105,20 @@ export const CLIENT_TOOLS: Tool[] = [
         extra_verify_paths: { type: "array", items: { type: "string" }, description: "More shop paths to open after writing (e.g. the admin login page)" },
       },
       ["path", "ref"],
+    ),
+  },
+  {
+    name: "apply_official_fix",
+    description:
+      "Apply an official fix as one unit: every file of the fix at the given official ref (an EC-CUBE release tag not older than the installed version or a full 40-character commit hash of the official repository; for vendor/ files, a newer tag of the same major version of that package's official repository). The receiver first fetches all files from the official sources; if any file cannot be fetched, nothing is written. Then it backs up and writes all files (creating missing folders inside src/, app/, html/, vendor/ only), opens the shop pages, and rolls back everything if the shop breaks. List every file the official fix changes or adds.",
+    input_schema: obj(
+      {
+        ref: { type: "string" },
+        paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 30 },
+        reason: { type: "string", description: "Which official fix this is (advisory id and source URL)" },
+        extra_verify_paths: { type: "array", items: { type: "string" } },
+      },
+      ["ref", "paths", "reason"],
     ),
   },
   {
@@ -372,11 +386,19 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const version = await installedVersion(shop);
         const m = await manifest(version);
         const mine = await shopHashes(shop);
+        const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
+        const intendedBy = new Map(applied.map((f) => [f.path, f]));
         const onlyPhp = input?.only_php !== false;
         const modified: string[] = [];
         const added: string[] = [];
+        const intended: unknown[] = [];
         let addedOther = 0;
         for (const [p, sha] of Object.entries(mine)) {
+          const fx = intendedBy.get(p);
+          if (fx && fx.sha256 === sha) {
+            intended.push({ path: p, ref: fx.ref, reason: fx.reason, applied_at: new Date(fx.at).toISOString() });
+            continue;
+          }
           if (p in m.files) {
             if (m.files[p] !== sha) modified.push(p);
           } else if (!onlyPhp || PHP_LIKE.test(p)) added.push(p);
@@ -388,6 +410,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           content: j({
             official: { version, source: m.source, tarball_sha256: m.tarball_sha256, files: Object.keys(m.files).length },
             shop_files: Object.keys(mine).length,
+            intended: { count: intended.length, note: "official fixes applied by self-harden, still as written", items: intended },
             modified: { count: modified.length, by_top: byTop(modified), paths: modified.sort().slice(0, 300) },
             added: { count: added.length, by_top: byTop(added), paths: added.sort().slice(0, 300), other_files_not_listed: addedOther },
             missing: { count: missing.length, by_top: byTop(missing), sample: missing.sort().slice(0, 30) },
@@ -425,7 +448,29 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         /* 一覧が無くても、受け口は公式の場所からしか取らない */
       }
       const r = await callReceiver(shop, "restore_official", args);
+      // 入っている版とは別の版にしたもの(= 修正)は記録して、次の照らし合わせで戻さないようにする
+      if (r.ok && !r.result.rolled_back && ctx) {
+        let installed: string | null = null;
+        try { installed = await installedVersion(shop); } catch { /* 分からなければ記録する */ }
+        if (input.ref !== installed) {
+          await ctx.store.addApplied(shop.shop_id, [{ path: input.path, sha256: r.result.sha256_after, ref: String(input.ref), source: r.result.source, reason: "restore_official", run_id: ctx.runId, at: Date.now() }]);
+        }
+      }
       return { content: j(r), isError: !r.ok, title: `公式の中身に戻す: ${input.path} @ ${input.ref}` };
+    }
+    case "apply_official_fix": {
+      const r = await callReceiver(shop, "apply_official_fix", {
+        ref: input.ref,
+        paths: input.paths,
+        verify: { paths: verifyPaths(shop, input.extra_verify_paths), timeout_sec: 8 },
+      });
+      if (r.ok && !r.result.rolled_back && ctx) {
+        await ctx.store.addApplied(
+          shop.shop_id,
+          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now() })),
+        );
+      }
+      return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
     }
     case "quarantine": {
       const r = await callReceiver(shop, "quarantine", { path: input.path, verify: { paths: verifyPaths(shop, null), timeout_sec: 8 } });

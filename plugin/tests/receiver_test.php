@@ -363,6 +363,42 @@ check('公式(GitHub の EC-CUBE 4.2.0)から取ってきて戻せる', !empty($
 $r = call('restore', ['backup_id' => $r['json']['result']['backup_id']]);
 check('公式に戻したものも退避から戻せる', !empty($r['json']['ok']) && file_get_contents($root . '/index.php') === "<?php echo 'shop';", $r['body']);
 
+
+echo "公式の修正を全部そろえて当てる\n";
+$bad_sets = [
+    ['ref' => '4.2.0', 'paths' => ['var/self-harden/x.php']],
+    ['ref' => '4.2.0', 'paths' => ['self-harden.php']],
+    ['ref' => '4.2.0', 'paths' => ['.env']],
+    ['ref' => '4.2.0', 'paths' => ['bin/new/x.php']],
+    ['ref' => '4.2.0', 'paths' => ['linkdir/new/x.php']],
+    ['ref' => '4.2.0', 'paths' => ['../outside/new/x.php']],
+    ['ref' => '4.2.0', 'paths' => ['self-harden-lab/new/x.php']],
+    ['ref' => '4.2.0', 'paths' => ['index.php', 'index.php']],
+    ['ref' => '4.2.0', 'paths' => []],
+    ['ref' => 'c07e298', 'paths' => ['index.php']],
+    ['ref' => '4.1.0', 'paths' => ['index.php']],
+];
+foreach ($bad_sets as $b) {
+    $r = call('apply_official_fix', $b);
+    check('断る: ' . implode(',', $b['paths']) . ' @ ' . $b['ref'], isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+check('断ったあと、フォルダは作られていない', !is_dir($root . '/bin/new') && !is_dir($outside . '/new') && !is_dir($root . '/self-harden-lab/new'));
+$r = call('apply_official_fix', ['ref' => '4.2.0', 'paths' => ['src/Eccube/Kernel.php', 'app/config/eccube/routes.yaml', 'src/Eccube/NoSuchFile.php']]);
+check('1 つでも公式から取れなければ、何も置かない', err($r) === 'official_fetch_failed' && !file_exists($root . '/src/Eccube/Kernel.php') && !is_dir($root . '/app/config'), $r['body']);
+check('短いコミットの番号は、40 文字にするよう伝える', strpos(call('restore_official', ['path' => 'index.php', 'ref' => 'c07e298'])['body'], '40') !== false);
+check('親フォルダが無いときは apply_official_fix を案内する', strpos(call('restore_official', ['path' => 'app/config/eccube/routes.yaml', 'ref' => '4.2.0'])['body'], 'apply_official_fix') !== false);
+touch($root . '/.break-when-app-config');
+$r = call('apply_official_fix', ['ref' => '4.2.0', 'paths' => ['src/Eccube/Kernel.php', 'app/config/eccube/routes.yaml'], 'verify' => ['paths' => ['/']]]);
+check('当てたあと店が壊れたら、全部戻してフォルダも消す', !empty($r['json']['ok']) && $r['json']['result']['rolled_back'] === true
+    && !file_exists($root . '/src/Eccube/Kernel.php') && !is_dir($root . '/app/config') && $r['json']['result']['rollback_verify'][0]['status'] === 200, $r['body']);
+unlink($root . '/.break-when-app-config');
+$r = call('apply_official_fix', ['ref' => '4.2.0', 'paths' => ['src/Eccube/Kernel.php', 'app/config/eccube/routes.yaml'], 'verify' => ['paths' => ['/']]]);
+check('全部そろえば、フォルダも作って当てる', !empty($r['json']['ok']) && $r['json']['result']['rolled_back'] === false
+    && strpos(file_get_contents($root . '/src/Eccube/Kernel.php'), 'class Kernel') !== false && is_file($root . '/app/config/eccube/routes.yaml')
+    && $r['json']['result']['created_dirs'] === ['app', 'app/config', 'app/config/eccube'], $r['body']);
+$r = call('restore', ['backup_id' => $r['json']['result']['applied'][0]['backup_id']]);
+check('当てたものは退避から 1 つずつ戻せる(元が無ければ消える)', !empty($r['json']['ok']) && !file_exists($root . '/src/Eccube/Kernel.php'), $r['body']);
+
 echo "隔離\n";
 file_put_contents($root . '/html/sub/odd.php', "<?php echo 'odd';");
 foreach (['self-harden.php', 'var/self-harden/config.php', '.env', 'linkdir/target.txt', '../outside/target.txt', 'html/sub', 'composer.lock'] as $p) {

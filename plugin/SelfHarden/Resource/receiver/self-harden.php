@@ -191,7 +191,7 @@ function sh_safe_path($rel, $must_exist = true)
         $real = realpath($cur);
         $rroot = realpath($root);
         if ($real === false) {
-            throw new ShError('not_found', 'ありません');
+            throw new ShError('not_found', 'ありません: ' . $rel);
         }
         if ($real !== $rroot && strpos($real, $rroot . '/') !== 0) {
             throw new ShError('path_outside', 'root の外です');
@@ -720,7 +720,8 @@ function sh_is_protected($rel)
 }
 
 // 公式の中身で書いてよい本体のファイル: src/ app/ html/ vendor/ の中と、root 直下のファイル
-function sh_code_path($rel)
+// $missing_dirs を渡したときだけ、無い親フォルダを許す(作るのは呼び出し側。公式の修正を置くときだけ)
+function sh_code_path($rel, &$missing_dirs = null)
 {
     if (!is_string($rel) || $rel === '') {
         throw new ShError('bad_path', 'path がありません');
@@ -729,11 +730,33 @@ function sh_code_path($rel)
     $r = sh_rel($abs);
     $top = strpos($r, '/') === false ? '' : substr($r, 0, strpos($r, '/'));
     if (!in_array($top, ['', 'src', 'app', 'html', 'vendor'], true) || sh_is_protected($r)) {
-        throw new ShError('bad_target', 'そのファイルは受け口からは書けません');
+        throw new ShError('bad_target', 'そのファイルは受け口からは書けません: ' . $r);
     }
-    // 親ディレクトリは root の中に実在すること(シンボリックリンクはたどらない)
+    // 親フォルダは root の中に実在すること(シンボリックリンクはたどらない)。
+    // 作ってよいのは src/ app/ html/ vendor/ の中だけ
     $dir = dirname($r);
-    sh_safe_path($dir === '.' ? '' : $dir, true);
+    if ($missing_dirs !== null && $top !== '') {
+        $missing_dirs = [];
+        $cur = '';
+        foreach (explode('/', $dir) as $part) {
+            $cur = $cur === '' ? $part : $cur . '/' . $part;
+            if (!file_exists(sh_root() . '/' . $cur) && !is_link(sh_root() . '/' . $cur)) {
+                $missing_dirs[] = $cur;
+            } elseif ($missing_dirs) {
+                throw new ShError('bad_target', 'フォルダの途中がおかしい: ' . $cur);
+            }
+        }
+        $existing = $missing_dirs ? dirname($missing_dirs[0]) : $dir;
+        sh_safe_path($existing === '.' ? '' : $existing, true);
+        if (!$missing_dirs && !is_dir(sh_root() . '/' . $dir)) {
+            throw new ShError('bad_target', 'フォルダではありません: ' . $dir);
+        }
+    } else {
+        if (!is_dir(sh_root() . '/' . ($dir === '.' ? '' : $dir))) {
+            throw new ShError('no_parent', 'フォルダがありません: ' . $dir . '(公式の修正で新しく置くファイルは apply_official_fix で置く)');
+        }
+        sh_safe_path($dir === '.' ? '' : $dir, true);
+    }
     if (is_link($abs) || (file_exists($abs) && !is_file($abs))) {
         throw new ShError('symlink', '書き先がふつうのファイルではありません');
     }
@@ -785,7 +808,7 @@ function sh_official_url($rel, $ref)
     $installed = sh_eccube_version();
     if (!$sha) {
         if (!preg_match('/^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/', $ref) || $installed === null || version_compare($ref, $installed, '<')) {
-            throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号だけにできます');
+            throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号(40 文字の 16 進数。短い形は不可)だけにできます');
         }
     }
     return SH_OFFICIAL_RAW . SH_ECCUBE_REPO . '/' . $ref . '/' . $rel;
@@ -849,6 +872,104 @@ function op_restore_official(array $cfg, array $args)
             if (function_exists('opcache_invalidate')) {
                 @opcache_invalidate($abs, true);
             }
+            $res['rolled_back'] = true;
+            $res['rollback_verify'] = sh_verify($cfg, $args['verify']);
+        }
+    }
+    return $res;
+}
+
+// 公式の修正を、全部そろえて当てるか、何も置かないか。
+// 先に全部を公式から取ってくる(1 つでも取れなければ何も書かない)→ 全部を退避して書く → 店を開く → 壊れたら全部戻す
+function op_apply_official_fix(array $cfg, array $args)
+{
+    $ref = isset($args['ref']) ? $args['ref'] : null;
+    $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
+    if (!$paths || count($paths) > 30 || count(array_unique($paths)) !== count($paths)) {
+        throw new ShError('bad_request', 'paths は 1〜30 件の重ならないファイルにしてください');
+    }
+    $expected = isset($args['expected_sha256']) && is_array($args['expected_sha256']) ? $args['expected_sha256'] : [];
+    // 1. 場所を確かめ、全部を取ってくる
+    $items = [];
+    $dirs_to_make = [];
+    $t0 = microtime(true);
+    foreach ($paths as $p) {
+        $missing = [];
+        $r = sh_code_path($p, $missing);
+        $url = sh_official_url($r, $ref);
+        if (microtime(true) - $t0 > 14) {
+            throw new ShError('timeout', '公式から取るのに時間がかかりすぎたので、何も置いていません');
+        }
+        try {
+            $content = sh_fetch_official($url);
+        } catch (ShError $e) {
+            throw new ShError('official_fetch_failed', '公式から取れないファイルがあるので、何も置いていません: ' . $r . '(' . $e->getMessage() . ')');
+        }
+        if (isset($expected[$p]) && !hash_equals((string) $expected[$p], hash('sha256', $content))) {
+            throw new ShError('official_mismatch', '公式から取った中身が expected_sha256 と違うので、何も置いていません: ' . $r);
+        }
+        $items[] = ['rel' => $r, 'url' => $url, 'content' => $content];
+        foreach ($missing as $d) {
+            $dirs_to_make[$d] = true;
+        }
+    }
+    $lock = @fopen(sh_var('lock'), 'c');
+    if ($lock) {
+        flock($lock, LOCK_EX);
+    }
+    // 2. フォルダを作り、全部を退避して書く
+    $created = [];
+    $written = [];
+    $rollback = function () use (&$written, &$created) {
+        foreach (array_reverse($written) as $w) {
+            $abs = sh_root() . '/' . $w['rel'];
+            if ($w['existed']) {
+                sh_atomic_write($abs, (string) file_get_contents(sh_var('backups/' . $w['backup_id'] . '.bak')));
+            } else {
+                @unlink($abs);
+            }
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate($abs, true);
+            }
+        }
+        foreach (array_reverse($created) as $d) {
+            @rmdir(sh_root() . '/' . $d);
+        }
+    };
+    try {
+        $make = array_keys($dirs_to_make);
+        usort($make, function ($a, $b) {
+            return substr_count($a, '/') - substr_count($b, '/');
+        });
+        foreach ($make as $d) {
+            if (!@mkdir(sh_root() . '/' . $d, 0755)) {
+                throw new ShError('io', 'フォルダを作れませんでした: ' . $d);
+            }
+            $created[] = $d;
+        }
+        foreach ($items as $it) {
+            $abs = sh_root() . '/' . $it['rel'];
+            $meta = sh_backup($it['rel'], $abs, 'code:' . $it['rel']);
+            $written[] = ['rel' => $it['rel'], 'backup_id' => $meta['backup_id'], 'existed' => $meta['existed']];
+            sh_atomic_write($abs, $it['content']);
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate($abs, true);
+            }
+        }
+    } catch (Throwable $e) {
+        $rollback();
+        throw $e instanceof ShError ? $e : new ShError('io', '書いている途中で失敗したので、全部戻しました');
+    }
+    $res = ['ref' => $ref, 'applied' => [], 'created_dirs' => $created, 'verify' => null, 'rolled_back' => false];
+    foreach ($items as $i => $it) {
+        $res['applied'][] = ['path' => $it['rel'], 'source' => $it['url'], 'backup_id' => $written[$i]['backup_id'],
+            'existed_before' => $written[$i]['existed'], 'sha256_after' => hash('sha256', $it['content'])];
+    }
+    // 3. 店を開いて確かめ、だめなら全部戻す
+    if (isset($args['verify'])) {
+        $res['verify'] = sh_verify($cfg, $args['verify']);
+        if (sh_verify_failed($res['verify'])) {
+            $rollback();
             $res['rolled_back'] = true;
             $res['rollback_verify'] = sh_verify($cfg, $args['verify']);
         }
@@ -1005,6 +1126,9 @@ function sh_audit($op, array $args, $ok, $code, $result)
             break;
         }
     }
+    if ($path === null && isset($args['paths']) && is_array($args['paths'])) {
+        $path = substr(implode(',', array_filter($args['paths'], 'is_string')), 0, 300);
+    }
     $line = ['t' => gmdate('c'), 'op' => $op, 'path' => $path, 'ok' => $ok, 'code' => $code,
         'backup_id' => is_array($result) && isset($result['backup_id']) ? $result['backup_id'] : null,
         'rolled_back' => is_array($result) && !empty($result['rolled_back']) ? true : null];
@@ -1072,6 +1196,7 @@ function sh_main()
             case 'lab_arm': $r = op_lab_arm(); break;
             case 'hash_tree': $r = op_hash_tree($args); break;
             case 'restore_official': $r = op_restore_official($cfg, $args); break;
+            case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
             case 'quarantine': $r = op_quarantine($cfg, $args); break;
             case 'release_quarantine': $r = sh_release(isset($args['quarantine_id']) ? $args['quarantine_id'] : null); break;
             case 'list_quarantine': $r = op_list_quarantine(); break;

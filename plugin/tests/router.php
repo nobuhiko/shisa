@@ -8,6 +8,12 @@ if ($path === '/' && strpos((string) @file_get_contents($root . '/.htaccess'), '
     echo 'broken';
     return true;
 }
+// 目印 .break-when-app-config があり、app/config ができていたら、トップを 500 にする(公式の修正を当てて壊れた場合の代わり)
+if ($path === '/' && file_exists($root . '/.break-when-app-config') && is_dir($root . '/app/config')) {
+    http_response_code(500);
+    echo 'broken';
+    return true;
+}
 if ($path === '/') {
     echo 'shop top';
     return true;

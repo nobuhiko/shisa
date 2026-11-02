@@ -39,6 +39,16 @@ export interface Run {
   budget_hit?: boolean;
 }
 
+export interface AppliedFix {
+  path: string;
+  sha256: string;
+  ref: string;
+  source: string;
+  reason: string;
+  run_id: string;
+  at: number;
+}
+
 export interface Store {
   getShop(id: string): Promise<Shop | null>;
   putShop(shop: Shop): Promise<void>;
@@ -50,6 +60,9 @@ export interface Store {
   // 点検の途中で貼られた通知の受け箱。点検の記録と分けて持つ(1 歩が古い記録で上書きして消さないように)
   addInbox(runId: string, url: string): Promise<void>;
   takeInbox(runId: string): Promise<string[]>;
+  // Agent が当てた公式の修正(店ごと)。次の照らし合わせで「意図した違い」として扱う
+  getApplied(shopId: string): Promise<AppliedFix[]>;
+  addApplied(shopId: string, fixes: AppliedFix[]): Promise<void>;
   // 調べた結果の控え(版・部品・通知ごと。この API につながる店で使い回す)
   getResearch(key: string): Promise<any | null>;
   putResearch(key: string, rec: any): Promise<void>;
@@ -102,6 +115,13 @@ export class FileStore implements Store {
     return (await this.all<Run>("runs")).filter((r) => r.shop_id === shopId).sort((a, b) => b.created_at - a.created_at);
   }
 
+  async getApplied(shopId: string) { return (await this.read<AppliedFix[]>("applied", shopId)) ?? []; }
+  async addApplied(shopId: string, fixes: AppliedFix[]) {
+    const cur = await this.getApplied(shopId);
+    const byPath = new Map(cur.map((f) => [f.path, f]));
+    for (const f of fixes) byPath.set(f.path, f);
+    await this.write("applied", shopId, [...byPath.values()]);
+  }
   getResearch(key: string) { return this.read<any>("intel", key); }
   putResearch(key: string, rec: any) { return this.write("intel", key, rec); }
 

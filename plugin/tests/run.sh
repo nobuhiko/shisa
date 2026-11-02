@@ -8,6 +8,6 @@ VERSIONS="${1:-8.1 7.4}"
 status=0
 for v in $VERSIONS; do
   echo "=== PHP $v"
-  docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=4 "php:$v-cli" php tests/receiver_test.php || status=1
+  docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver_test.php || status=1
 done
 exit $status

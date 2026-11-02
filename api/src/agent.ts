@@ -114,7 +114,7 @@ export function summarize(name: string, content: string, isError?: boolean): str
     case "restore":
       return errOf(d) ?? "戻した";
     case "compare_with_official":
-      return d.error ? `失敗: ${d.error}` : `公式 ${d.official.version} と比べた: 違う ${d.modified.count} 件、公式に無い ${d.added.count} 件、無い ${d.missing.count} 件`;
+      return d.error ? `失敗: ${d.error}` : `公式 ${d.official.version} と比べた: 違う ${d.modified.count} 件、公式に無い ${d.added.count} 件、無い ${d.missing.count} 件${d.intended?.count ? `、当てた修正 ${d.intended.count} 件` : ""}`;
     case "diff_with_official":
       return d.error ? `失敗: ${d.error}` : d.official === null ? "公式には無いファイル" : `${(d.diff.match(/^[-+][^-+]/gm) ?? []).length} 行の違い`;
     case "restore_official": {
@@ -122,6 +122,12 @@ export function summarize(name: string, content: string, isError?: boolean): str
       const r = d.result ?? {};
       const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
       return r.rolled_back ? `店が開けなくなったので戻した(${v})` : `公式の中身に戻した。店を開いて確かめた(${v})`;
+    }
+    case "apply_official_fix": {
+      if (errOf(d)) return `${errOf(d)}(何も置いていない)`;
+      const r = d.result ?? {};
+      const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
+      return r.rolled_back ? `店が開けなくなったので、全部戻した(${v})` : `${r.applied.length} ファイルをそろえて当てた。店を開いて確かめた(${v})`;
     }
     case "quarantine": {
       if (errOf(d)) return errOf(d)!;
