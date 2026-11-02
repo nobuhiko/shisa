@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 260" role="img" aria-label="阿吽のシーサー">
+  <!-- 仮の絵(差し替え前提)。左が阿(口を開けた)、右が吽(口を閉じた) -->
+  <defs>
+    <g id="mane">
+      <circle cx="0" cy="-78" r="22"/><circle cx="40" cy="-68" r="22"/><circle cx="-40" cy="-68" r="22"/>
+      <circle cx="68" cy="-40" r="22"/><circle cx="-68" cy="-40" r="22"/><circle cx="78" cy="0" r="22"/>
+      <circle cx="-78" cy="0" r="22"/><circle cx="68" cy="40" r="22"/><circle cx="-68" cy="40" r="22"/>
+      <circle cx="40" cy="66" r="22"/><circle cx="-40" cy="66" r="22"/><circle cx="0" cy="76" r="22"/>
+    </g>
+    <g id="face">
+      <use href="#mane" fill="#b5532f"/>
+      <circle r="66" fill="#d9774a"/>
+      <!-- 眉 -->
+      <path d="M-44,-30 q14,-16 30,-4" stroke="#7a2f17" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <path d="M44,-30 q-14,-16 -30,-4" stroke="#7a2f17" stroke-width="7" fill="none" stroke-linecap="round"/>
+      <!-- 目 -->
+      <circle cx="-26" cy="-12" r="13" fill="#fff8ec"/><circle cx="26" cy="-12" r="13" fill="#fff8ec"/>
+      <circle cx="-24" cy="-11" r="6" fill="#2b1a12"/><circle cx="24" cy="-11" r="6" fill="#2b1a12"/>
+      <!-- 鼻 -->
+      <ellipse cx="0" cy="12" rx="20" ry="13" fill="#9b3f20"/>
+      <circle cx="-8" cy="13" r="4" fill="#5a2210"/><circle cx="8" cy="13" r="4" fill="#5a2210"/>
+    </g>
+  </defs>
+  <g transform="translate(130,128)">
+    <use href="#face"/>
+    <!-- 阿: 口を開けて、牙 -->
+    <path d="M-36,30 q36,44 72,0 z" fill="#5a1d10"/>
+    <path d="M-26,31 l6,10 l6,-10 M14,31 l6,10 l6,-10" fill="#fff8ec"/>
+    <ellipse cx="0" cy="48" rx="14" ry="6" fill="#e0675a"/>
+  </g>
+  <g transform="translate(390,128)">
+    <use href="#face"/>
+    <!-- 吽: 口を閉じて -->
+    <path d="M-32,36 q32,14 64,0" stroke="#5a1d10" stroke-width="7" fill="none" stroke-linecap="round"/>
+  </g>
+  <text x="130" y="252" text-anchor="middle" font-size="26" font-weight="700" fill="#fbbf24" font-family="Hiragino Sans, Noto Sans JP, sans-serif">阿</text>
+  <text x="390" y="252" text-anchor="middle" font-size="26" font-weight="700" fill="#fbbf24" font-family="Hiragino Sans, Noto Sans JP, sans-serif">吽</text>
+</svg>

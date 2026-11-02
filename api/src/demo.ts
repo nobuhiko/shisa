@@ -36,6 +36,17 @@ export function mountDemo(app: Hono, store: Store) {
     }
   });
 
+  // 名前の 1 枚の絵(demo/ にある .svg だけ)
+  app.get("/demo/asset/:name", async (c) => {
+    const name = c.req.param("name");
+    if (!/^[a-z0-9-]+\.svg$/.test(name)) return c.text("not found", 404);
+    try {
+      return c.body(await readFile(new URL(`../demo/${name}`, import.meta.url)), 200, { "Content-Type": "image/svg+xml" });
+    } catch {
+      return c.text("not found", 404);
+    }
+  });
+
   app.get("/demo", (c) => c.html(PAGE));
 }
 
@@ -102,6 +113,23 @@ const PAGE = String.raw`<!doctype html>
   .namecard b { font-size: clamp(44px, 10vh, 110px); color: #fff; letter-spacing: .04em; opacity: 0; transition: opacity 1s; }
   .namecard p { margin: 0; font-size: clamp(20px, 3.6vh, 38px); color: #cbd5e1; opacity: 0; transition: opacity 1s; }
   .namecard .in { opacity: 1; }
+  .namecard { gap: 2.2vh; }
+  .namecard img.art { height: 26vh; opacity: 0; transition: opacity 1s; }
+  .namecard .pair { display: flex; gap: 6vw; opacity: 0; transition: opacity 1s; }
+  .namecard .pair div { display: flex; align-items: baseline; gap: 12px; font-size: clamp(16px, 2.6vh, 28px); color: #e2e8f0; }
+  .namecard .pair em { font-style: normal; font-weight: 800; color: #fbbf24; font-size: 1.3em; }
+  .namecard img.art.in, .namecard .pair.in { opacity: 1; }
+  .ending { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; padding: 0 8vw; text-align: center; }
+  .ending .vs { display: flex; gap: 6vw; align-items: flex-end; }
+  .ending .vs div { display: flex; flex-direction: column; gap: 6px; }
+  .ending .vs small { font-size: clamp(16px, 2.6vh, 26px); color: #94a3b8; }
+  .ending .vs b { font-size: clamp(36px, 8vh, 88px); color: #64748b; }
+  .ending .vs div:last-child b { color: #fbbf24; }
+  .ending p { margin: 0; font-size: clamp(18px, 3vh, 32px); color: #e2e8f0; }
+  .ending .credit { margin-top: 3vh; font-size: clamp(16px, 2.4vh, 24px); color: #cbd5e1; }
+  .ending .notice { position: fixed; left: 8vw; right: 8vw; bottom: 20px; font-size: 13px; color: #64748b; }
+  .ending > * { opacity: 0; transition: opacity .9s; } .ending > .in { opacity: 1; }
+  .health.side h2.turn { color: #b26a00; animation: flash 2.6s ease-out; }
   .story .nw { white-space: nowrap; }
   .story .src { position: fixed; left: 8vw; bottom: 24px; font-size: 15px; color: #64748b; opacity: 0; transition: opacity .8s; }
   .story .src.in { opacity: 1; }
@@ -133,6 +161,7 @@ const PAGE = String.raw`<!doctype html>
   .htable .item { font-weight: 700; }
   .htable .judge { color: #b26a00; font-weight: 700; transition: color .3s; }
   .htable .judge.ok { color: var(--ok); }
+  .htable .judge.busy { color: #b26a00; }
   .htable .judge.wait { color: var(--muted); font-weight: 400; font-size: 16px; }
   .health.side { background: var(--card); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 12px 16px; min-height: 0; overflow: hidden; }
   .health.side h2 { margin: 0 0 10px; font-size: 20px; }
@@ -178,7 +207,18 @@ const PAGE = String.raw`<!doctype html>
   };
   var PHASES = ['調べる', '照らし合わせる', '試す', '入れる', '確かめる', '報告'];
   var RESEARCH_TOOL = /公開の情報|ファイルを読む|ファイルの一覧|サーバーを調べる|調べた結果の控え|調べた結果を控える|前回の点検|退避の一覧|隔離の一覧/;
-  var T_RESEARCH = 500, T_KEY = 2500, T_WAIT = 1000, T_OTHER = 800;
+  var T_RESEARCH = 500, T_KEY = 2500, T_WAIT = 1000, T_OTHER = 800, T_SOFT = 1100;
+  // 止めどころだけで 2.5 秒止める(承・転)。ほかの字幕は帯に出すが、短く流す
+  var stopOnly = false;
+  var STOPS = [
+    function (s) { return s.kind === 'decision' && /当てはま|該当|影響を受け/.test(s.title); },
+    function (s) { return /小部屋で試す/.test(s.tool || '') && /500|壊れる/.test(s.result || ''); },
+    function (s) { return s.kind === 'decision' && /止めず|止めない|開けたまま|公開.*(続け|止め)/.test(s.title); },
+    function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') && !/当てた修正/.test(s.result || ''); },
+    function (s) { return /公式の修正を当てる/.test(s.tool || '') && /そろえて当てた/.test(s.result || ''); },
+    function (s) { return /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); }
+  ];
+  function isStop(s) { return STOPS.some(function (f) { return f(s); }); }
 
   function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
   function q(k) { return new URLSearchParams(location.search).get(k); }
@@ -201,7 +241,7 @@ const PAGE = String.raw`<!doctype html>
   function captionOf(s, ctx) {
     var t = s.tool || '', r = s.result || '', m;
     if (s.kind === 'decision') return { cls: 'good', text: s.title };
-    if (/照らし合わせる/.test(t) && (m = /違う (\d+) 件、公式に無い (\d+) 件/.exec(r)) && m[1] !== '0')
+    if (/照らし合わせる/.test(t) && !/当てた修正/.test(r) && (m = /違う (\d+) 件、公式に無い (\d+) 件/.exec(r)) && m[1] !== '0')
       return { cls: 'warn', text: '公式の配布物と照らし合わせ: 書き換え ' + m[1] + ' 件' };
     if (/公式の中身に戻す/.test(t) && /公式の中身に戻した/.test(r)) {
       var ref = (/ @ (\S+)$/.exec(t) || [])[1];
@@ -263,7 +303,7 @@ const PAGE = String.raw`<!doctype html>
     return li;
   }
 
-  function delayOf(s, ctx) { return s.research ? T_RESEARCH : waitSec(s) ? T_WAIT : captionOf(s, ctx) ? T_KEY : T_OTHER; }
+  function delayOf(s, ctx) { return s.research ? T_RESEARCH : waitSec(s) ? T_WAIT : captionOf(s, ctx) ? (stopOnly && !isStop(s) ? T_SOFT : T_KEY) : T_OTHER; }
 
   function makeColumn(main, run) {
     var col = el('section', 'col');
@@ -283,7 +323,7 @@ const PAGE = String.raw`<!doctype html>
     (function next() {
       if (i >= list.length) { if (done) setTimeout(done, 1200); return; }
       var s = list[i++], li = stepEl(s), c = captionOf(s, ctx);
-      if (c) li.classList.add('key');
+      if (c && (!stopOnly || isStop(s))) li.classList.add('key');
       view.log.appendChild(li); view.log.scrollTop = view.log.scrollHeight;
       var p = phaseOf(s); if (p) setPhase(view.ph, p);
       if (c) { clearTimeout(hide); showBand(bandCell, c); hide = setTimeout(function () { bandCell.className = ''; }, T_KEY); }
@@ -442,10 +482,14 @@ const PAGE = String.raw`<!doctype html>
     document.body.classList.add('bare'); var d = el('div', 'namecard'); main.appendChild(d);
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
       var n = st.name || {};
+      var img = null, pair = null;
+      if (n.image) { img = el('img', 'art'); img.src = '/demo/asset/' + encodeURIComponent(n.image); img.alt = ''; d.appendChild(img); }
       var t = el('b', null, n.title || ''); var g = el('p', null, n.tagline || '');
       d.appendChild(t); d.appendChild(g);
-      setTimeout(function () { t.classList.add('in'); }, 100);
-      setTimeout(function () { g.classList.add('in'); }, 900);
+      if (n.pair) { pair = el('div', 'pair'); n.pair.forEach(function (x) { var e = el('div'); e.appendChild(el('em', null, x.label)); e.appendChild(el('span', null, x.text)); pair.appendChild(e); }); d.appendChild(pair); }
+      setTimeout(function () { if (img) img.classList.add('in'); t.classList.add('in'); }, 100);
+      setTimeout(function () { g.classList.add('in'); }, 1200);
+      setTimeout(function () { if (pair) pair.classList.add('in'); }, 2600);
       return holdFor((n.hold || 5) * 1000);
     });
   };
@@ -467,8 +511,8 @@ const PAGE = String.raw`<!doctype html>
   var HEALTH = [
     { item: 'PHP(お店を動かす土台)', pick: function (s) { return /小部屋で試す/.test(s.tool || '') && /500|壊れる/.test(s.result || '') || /本番に入れる: root\/\.(user\.ini|htaccess)/.test(s.tool || '') && /応急|暫定|回避|PHP2Shell|公式/.test(s.title); } },
     { item: 'EC-CUBE(お店のソフト)', pick: function (s) { return /公式の修正を当てる: .*@ 4\./.test(s.tool || ''); } },
-    { item: '中の部品(ほかの開発元のプログラム)', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || ''); } },
-    { item: '書き換えられた跡', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
+    { item: '中の部品(ほかの開発元のプログラム)', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || '') || /部品の弱点/.test(s.tool || '') && /件に公表済みの弱点/.test(s.result || ''); } },
+    { item: '書き換えられた跡', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') && !/当てた修正/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
     { item: '外から見えていた情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } }
   ];
   scenes.H = function (ids) {
@@ -529,19 +573,28 @@ const PAGE = String.raw`<!doctype html>
   scenes.S = function (ids, opt) {
     opt = opt || {};
     return Promise.all(ids.map(load)).then(function (rs) {
-      layout(2); setAdv(rs);
+      layout(2); setAdv(rs); stopOnly = true;
       var left = el('section', 'health side'); main.appendChild(left);
       left.appendChild(html('h2', null, 'お店の健康診断'));
       var rows = healthTable(left);
       var cell = el('div'); band.appendChild(cell);
+      // 転: PHP の件が片付いたあとに、お知らせに無い項目の行が来たら、見出しを変える
+      var phpDone = false, turned = false, h2 = left.querySelector('h2');
       function onStep(s, ctx) {
+        if (!turned && opt.turn) {
+          if (/本番に入れる: root\/\.(user\.ini|htaccess)/.test(s.tool || '') && /入れた/.test(s.result || '')) phpDone = true;
+          else if (phpDone && HEALTH.slice(1, 4).some(function (h) { return h.pick(s); })) { turned = true; h2.textContent = opt.turn; h2.classList.add('turn'); }
+        }
         rows.forEach(function (r) {
           if (!r.h.pick(s)) return;
           var c = captionOf(s, ctx);
           r.cells.forEach(function (x) { x.classList.add('row-on'); setTimeout(function () { x.classList.remove('row-on'); }, 1600); });
-          r.cells[1].className = 'judge ok'; r.cells[1].textContent = s_ok(s);
+          var fixed = s.kind !== 'error' && /入れた|戻した|隔離した|そろえて当てた/.test(s.result || '');
+          if (!fixed && /ok/.test(r.cells[1].className)) return; // 処置済みのあとに来た調べの行では戻さない
+          r.cells[1].className = 'judge ' + (fixed ? 'ok' : 'busy'); r.cells[1].textContent = fixed ? '処置済み ✓' : /小部屋/.test(s.tool || '') ? '試している' : '見つけた';
+          var what = (!r.h.useTitle && c) ? c.text : /部品の弱点/.test(s.tool || '') ? (s.result || '') : (function (t) { return t.length > 38 ? t.slice(0, 37) + '…' : t; })(s.title.replace(/。$/, ''));
           r.cells[2].textContent = '';
-          r.cells[2].appendChild(el('div', 'done', (!r.h.useTitle && c) ? c.text : (function (t) { return t.length > 38 ? t.slice(0, 37) + '…' : t; })(s.title.replace(/。$/, ''))));
+          r.cells[2].appendChild(el('div', 'done', what));
           r.cells[2].appendChild(el('div', 'live', hostName(this_run)));
         });
       }
@@ -592,6 +645,36 @@ const PAGE = String.raw`<!doctype html>
     });
   };
 
+  // 結: 対比と、守りの道具のこと。時間は記録から数える
+  scenes.Z = function (ids) {
+    return Promise.all([load(ids[0]), fetch('/demo/story').then(function (r) { return r.json(); })]).then(function (x) {
+      var run = x[0], e = x[1].end || {}, st = run.steps;
+      layout(1); badge(false); document.body.classList.add('bare');
+      var mins = Math.max(1, Math.round((st[st.length - 1].at - st[0].at) / 60000));
+      var d = el('div', 'ending'); main.appendChild(d);
+      var parts = [];
+      if (e.compare) { var vs = el('div', 'vs'); e.compare.forEach(function (c) { var b = el('div'); b.appendChild(el('small', null, c.label)); b.appendChild(el('b', null, String(c.value).replace('{mins}', mins))); vs.appendChild(b); }); d.appendChild(vs); parts.push(vs); }
+      (e.lines || []).forEach(function (l) { var p = el('p', null, l); d.appendChild(p); parts.push(p); });
+      if (e.credit) { var c = el('div', 'credit', e.credit); d.appendChild(c); parts.push(c); }
+      if (e.notice) { var n = el('div', 'notice', e.notice); d.appendChild(n); n.classList.add('in'); }
+      parts.forEach(function (p, i) { setTimeout(function () { p.classList.add('in'); }, 300 + i * 1500); });
+      return holdFor((e.hold || 12) * 1000);
+    });
+  };
+
+  // 通しの 1 本: 起 → 名前 → 承・転(1 本の記録)→ 結果の数字 → 結
+  function story() {
+    var id = q('run'), t0 = Date.now(), times = [];
+    function step(name, f) { var s0 = Date.now(); return f().then(function () { times.push(name + ' ' + Math.round((Date.now() - s0) / 1000) + '秒'); }); }
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      return step('起', scenes.K)
+        .then(function () { return step('名前', scenes.N); })
+        .then(function () { return step('承・転', function () { return scenes.S([id], { turn: st.turn }); }); })
+        .then(function () { return step('数字', function () { return scenes.R([id]); }); })
+        .then(function () { return step('結', function () { return scenes.Z([id]); }); });
+    }).then(function () { console.log('[story] 通し ' + Math.round((Date.now() - t0) / 1000) + ' 秒(' + times.join(' / ') + ')'); document.title = '通し ' + Math.round((Date.now() - t0) / 1000) + ' 秒'; });
+  }
+
   // ---- 通し再生: A → B → C → D → E。場面の間に台本の字幕を見出しとして出す ----
   function titleCard(text, sub, ms) {
     return new Promise(function (res) {
@@ -627,7 +710,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['K', 'N', 'S', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['story', 'K', 'N', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -647,11 +730,15 @@ const PAGE = String.raw`<!doctype html>
   }
 
   if (q('clean') === '1') document.body.classList.add('clean');
+  // 上の帯の名前は story.json の name.short(決まっていなければ self-harden のまま)
+  fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) { if (st.name && st.name.short) document.getElementById('title').textContent = st.name.short; }).catch(function () {});
   fetch('/demo/runs').then(function (r) { return r.json(); }).then(function (runs) {
     controls(runs);
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
+    else if (k === 'story') story();
+    else if (k === 'Z') scenes.Z(ids);
     else if (k === 'K' || k === 'N' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
