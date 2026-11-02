@@ -99,6 +99,21 @@ const PAGE = String.raw`<!doctype html>
   .box p { margin: 8px 0; font-size: 22px; }
   .ok { color: var(--ok); font-weight: 700; } .ng { color: var(--err); font-weight: 700; }
   .diagram .lead { font-size: 24px; text-align: center; color: #374151; }
+  /* 場面 H: お店の健康診断(表を枠に、各行で実際の記録を流す) */
+  .health { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 20px 40px; }
+  .health h2 { margin: 0; font-size: 30px; }
+  .health h2 small { font-size: 15px; color: var(--muted); font-weight: normal; margin-left: 10px; }
+  .htable { display: grid; grid-template-columns: 200px 150px minmax(0, 1fr); gap: 0; background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
+  .htable > div { padding: 12px 16px; border-bottom: 1px solid #eef0f3; font-size: 20px; display: flex; align-items: center; }
+  .htable .hd { background: #f3f4f6; font-size: 15px; color: var(--muted); font-weight: 700; }
+  .htable .item { font-weight: 700; }
+  .htable .judge { color: #b26a00; font-weight: 700; transition: color .3s; }
+  .htable .judge.ok { color: var(--ok); }
+  .htable .act { flex-direction: column; align-items: flex-start; gap: 2px; min-height: 64px; }
+  .htable .act .live { font-size: 14px; color: #52606d; font-variant-numeric: tabular-nums; }
+  .htable .act .done { font-size: 19px; color: var(--ok); font-weight: 700; }
+  .htable .row-on { background: #fffbe8; }
+  .health .foot { font-size: 18px; color: #374151; text-align: center; }
   /* 場面 R: 結果の数字 */
   .result { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 26px; padding: 28px 48px; }
   .result h2 { margin: 0; font-size: 32px; }
@@ -129,7 +144,7 @@ const PAGE = String.raw`<!doctype html>
 <script>
 (function () {
   var NAMES = {
-    'server-a': 'サーバー A(Apache + mod_php)', 'server-b': 'サーバー B(Apache + PHP-FPM)'
+    'server-a': 'サーバー A(Apache + mod_php)', 'server-b': 'サーバー B(Apache + PHP-FPM)', 'server-c': 'サーバー C(Apache + mod_php、EC-CUBE 4.2.3)'
   };
   var PHASES = ['調べる', '照らし合わせる', '試す', '入れる', '確かめる', '報告'];
   var RESEARCH_TOOL = /公開の情報|ファイルを読む|ファイルの一覧|サーバーを調べる|調べた結果の控え|調べた結果を控える|前回の点検|退避の一覧|隔離の一覧/;
@@ -163,7 +178,11 @@ const PAGE = String.raw`<!doctype html>
       if (ref && ctx.version && ref === ctx.version) return { cls: 'good', text: '書き換えられたファイルを、公式の中身に戻した' };
       return { cls: 'good', text: '公式の修正のファイルを置いた' };
     }
-    if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) return { cls: 'good', text: '公式の修正を、全部そろえて当てた' };
+    if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) {
+      var fr = (/ @ (\S+)$/.exec(t) || [])[1] || '';
+      if (/^v/.test(fr)) return { cls: 'good', text: '部品を、公式の修正版 ' + fr + ' に差し替えた' };
+      return { cls: 'good', text: '公式の修正版 ' + fr + ' を、全部そろえて当てた' };
+    }
     if (/公式の修正を当てる/.test(t) && /何も置いていない/.test(r)) return { cls: 'warn', text: '公式の修正がそろわないので、1 つも置かない' };
     if (/隔離する/.test(t) && /隔離した/.test(r)) return { cls: 'good', text: '覚えのないファイルを隔離した(消さずに)' };
     if (s.kind === 'error' && /受け口からは書けません/.test(r)) return { cls: 'warn', text: '危ない書き方は、受け口が断った' };
@@ -389,6 +408,61 @@ const PAGE = String.raw`<!doctype html>
     return holdFor(14000);
   };
 
+  // お店の健康診断: 項目ごとに、実際の記録から当てはまる行を拾って流し、判定を変える
+  var HEALTH = [
+    { item: 'PHP 本体', pick: function (s) { return /小部屋で試す/.test(s.tool || '') && /500|壊れる/.test(s.result || '') || /本番に入れる: root\/\.(user\.ini|htaccess)/.test(s.tool || '') && /応急|暫定|回避|PHP2Shell|公式/.test(s.title); } },
+    { item: 'EC-CUBE 本体', pick: function (s) { return /公式の修正を当てる: .*@ 4\./.test(s.tool || ''); } },
+    { item: '部品', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || ''); } },
+    { item: '改ざん', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
+    { item: '見えている情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } },
+    { item: '危ない書き方', pick: function (s) { return s.kind === 'error' && /受け口からは書けません/.test(s.result || ''); } }
+  ];
+  scenes.H = function (ids) {
+    return Promise.all(ids.map(load)).then(function (rs) {
+      layout(1); setAdv([]);
+      var box = el('div', 'health'); main.appendChild(box);
+      box.appendChild(html('h2', null, 'お店の健康診断 <small>サーバー A・B・C の点検の記録から</small>'));
+      var t = el('div', 'htable'); box.appendChild(t);
+      ['項目', '判定', '処置'].forEach(function (h) { t.appendChild(el('div', 'hd', h)); });
+      var rows = HEALTH.map(function (h) {
+        // 項目に当てはまる行を、記録の中から最大 3 つ拾う(最初に見つかった記録から)
+        var found = null;
+        rs.forEach(function (run) { if (found) return; var ctx = { version: versionOf(run.steps) }; var xs = run.steps.filter(h.pick); if (xs.length) found = { run: run, steps: xs.slice(0, 3), ctx: ctx }; });
+        var a = el('div', 'item', h.item), b = el('div', 'judge', found ? '要対処' : '問題なし'), c = el('div', 'act');
+        t.appendChild(a); t.appendChild(b); t.appendChild(c);
+        return { cells: [a, b, c], found: found, useTitle: h.useTitle };
+      });
+      box.appendChild(el('div', 'foot', 'お知らせが来なくても、定期的に自分で調べて、項目ごとに効く手を選ぶ'));
+      var i = 0;
+      return new Promise(function (res) {
+        (function nextRow() {
+          if (i >= rows.length) { setTimeout(res, 2500); return; }
+          var r = rows[i++];
+          if (!r.found) { setTimeout(nextRow, 300); return; }
+          r.cells.forEach(function (x) { x.classList.add('row-on'); });
+          var k = 0, act = r.cells[2];
+          (function nextLine() {
+            if (k < r.found.steps.length) {
+              var s = r.found.steps[k++];
+              act.appendChild(el('div', 'live', '▸ ' + s.title.slice(0, 46) + (s.result ? ' → ' + s.result.slice(0, 40) : '')));
+              setTimeout(nextLine, 650);
+              return;
+            }
+            // 流し終わったら、判定を変えて、最後の行の字幕を処置として出す
+            var last = r.found.steps[r.found.steps.length - 1], c = captionOf(last, r.found.ctx);
+            act.textContent = '';
+            act.appendChild(el('div', 'done', (!r.useTitle && c) ? c.text : last.title.replace(/。$/, '')));
+            act.appendChild(el('div', 'live', hostName(r.found.run)));
+            r.cells[1].textContent = s_ok(last); r.cells[1].classList.add('ok');
+            r.cells.forEach(function (x) { x.classList.remove('row-on'); });
+            setTimeout(nextRow, 450);
+          })();
+        })();
+      });
+    });
+  };
+  function s_ok(last) { return last.kind === 'error' ? '断った ✓' : '処置済み ✓'; }
+
   // 結果の数字。全部、記録から数える
   scenes.R = function (ids) {
     return load(ids[0]).then(function (run) {
@@ -431,6 +505,7 @@ const PAGE = String.raw`<!doctype html>
       ['X', [], 'レンタルサーバーごとに、正しい手が違う', ''],
       ['B', [q('sBa'), q('sBb')], '同じ点検を、2 台のサーバーで', '「試す」の段階だけを並べる'],
       ['C', [q('sC')], '入られた跡に気づいて戻す', '改ざんはデモ用に入れたもの'],
+      ['H', (q('sH') || '').split(','), 'お店の健康診断', 'PHP2Shell は一例。項目ごとに、効く手を選ぶ'],
       ['E', [q('sE')], '報告', '直したこと / これから自分でやること / 人へのお願い'],
       ['R', [q('sR') || q('sE')], '結果', '']
     ];
@@ -449,7 +524,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'D', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -475,6 +550,7 @@ const PAGE = String.raw`<!doctype html>
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
     else if (k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
   });
