@@ -5,7 +5,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { createPatch } from "diff";
 import { callReceiver } from "./receiver.js";
 import { manifest, officialContent } from "./official.js";
-import type { Shop } from "./store.js";
+import type { Shop, Store } from "./store.js";
+import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 
@@ -47,6 +48,38 @@ export const CLIENT_TOOLS: Tool[] = [
     description:
       "Fetch a path of this shop from the outside, like a visitor would (GET, no redirects followed). Returns status, headers and the first 4KB of the body. Only this shop's origin is allowed.",
     input_schema: obj({ path: { type: "string", description: "Must start with /" } }, ["path"]),
+  },
+  {
+    name: "compare_with_previous",
+    description:
+      "Compare a fingerprint of this shop (PHP version and SAPI, ini values, extensions, EC-CUBE version, packages, all file hashes, .htaccess/.user.ini) with the last completed inspection. Returns which parts changed and the previous summary.",
+    input_schema: obj({}),
+  },
+  {
+    name: "load_research",
+    description:
+      "Load research results saved earlier on this API for the given subjects (e.g. \"php 8.1.10\", \"ec-cube 4.2.0\", \"apache 2.4.54\", \"advisory <url>\"). Each result has its date, sources and whether it is still fresh (saved within 7 days).",
+    input_schema: obj({ subjects: { type: "array", items: { type: "string" } } }, ["subjects"]),
+  },
+  {
+    name: "save_research",
+    description:
+      "Save what you found about one subject (a product and version, or an advisory URL) so later inspections can reuse it for 7 days. Include for each issue whether it is exploited in the wild, whether it is reachable without authentication, official fixes and official workarounds, each with primary sources.",
+    input_schema: obj(
+      {
+        subject: { type: "string" },
+        summary: { type: "string" },
+        findings: { type: "array", items: { type: "object" } },
+        sources: { type: "array", items: { type: "object", properties: { title: { type: "string" }, url: { type: "string" } }, required: ["url"] } },
+      },
+      ["subject", "findings", "sources"],
+    ),
+  },
+  {
+    name: "check_packages",
+    description:
+      "Check every package in the shop's composer.lock against the Packagist security-advisories API (official advisories for Composer packages). Returns the advisories whose affected versions include the installed version, most severe first.",
+    input_schema: obj({}),
   },
   {
     name: "compare_with_official",
@@ -186,8 +219,8 @@ export const CLIENT_TOOLS: Tool[] = [
 ];
 
 export const SERVER_TOOLS: Tool[] = [
-  { type: "web_search_20260209", name: "web_search", max_uses: 20 },
-  { type: "web_fetch_20260209", name: "web_fetch", max_uses: 20 },
+  { type: "web_search_20260209", name: "web_search", max_uses: 10 },
+  { type: "web_fetch_20260209", name: "web_fetch", max_uses: 10 },
 ];
 
 export interface ToolOutcome {
@@ -285,8 +318,36 @@ function verifyPaths(shop: Shop, extra: unknown): string[] {
 
 const j = (v: unknown) => JSON.stringify(v);
 
-export async function runTool(shop: Shop, name: string, input: any): Promise<ToolOutcome> {
+export interface ToolContext {
+  store: Store;
+  runId: string;
+}
+
+export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolContext): Promise<ToolOutcome> {
   switch (name) {
+    case "compare_with_previous": {
+      if (!ctx) return { content: j({ error: "no context" }), isError: true, title: "前回と比べる" };
+      try {
+        return { content: j(await compareWithPrevious(ctx.store, shop, ctx.runId)), title: "前回の点検と比べる" };
+      } catch (e) {
+        return { content: j({ error: (e as Error).message }), isError: true, title: "前回の点検と比べる" };
+      }
+    }
+    case "load_research": {
+      if (!ctx) return { content: j({ error: "no context" }), isError: true, title: "調べた結果の控えを見る" };
+      return { content: j(await loadResearch(ctx.store, Array.isArray(input.subjects) ? input.subjects : [])), title: "調べた結果の控えを見る" };
+    }
+    case "save_research": {
+      if (!ctx) return { content: j({ error: "no context" }), isError: true, title: "調べた結果を控える" };
+      return { content: j(await saveResearch(ctx.store, String(input.subject), input)), title: `調べた結果を控える: ${input.subject}` };
+    }
+    case "check_packages": {
+      try {
+        return { content: j(await checkPackages(shop)), title: "部品の弱点を Packagist で照らし合わせる" };
+      } catch (e) {
+        return { content: j({ error: (e as Error).message }), isError: true, title: "部品の弱点を Packagist で照らし合わせる" };
+      }
+    }
     case "inspect": {
       const r = await callReceiver(shop, "inspect", input?.sections ? { sections: input.sections } : {});
       return { content: j(r), isError: !r.ok, title: "サーバーを調べる" };

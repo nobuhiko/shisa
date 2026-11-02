@@ -67,7 +67,6 @@
           {% for r in runs %}
             <li><a href="#" class="sh-open" data-run="{{ r.run_id }}">{{ (r.created_at // 1000)|date("Y-m-d H:i") }}</a>
               {{ r.status == 'done' ? '完了' : (r.status == 'running' ? '実行中' : '失敗') }}
-              {% if r.usd is defined %}<span class="text-muted">$ {{ r.usd|number_format(2) }}</span>{% endif %}
               {% if r.advisory_url %}<span class="text-muted">({{ r.advisory_url }})</span>{% endif %}</li>
           {% endfor %}
           </ul>
@@ -142,7 +141,7 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
-        statusEl.textContent = (labels[d.status] || d.status) + (d.usage && d.usage.usd != null ? '(費用 $' + d.usage.usd.toFixed(2) + ')' : '');
+        statusEl.textContent = labels[d.status] || d.status;
         d.steps.slice(shown).forEach(function (s) {
           var li = el('li', 'k-' + s.kind);
           li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));

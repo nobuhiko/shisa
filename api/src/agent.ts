@@ -6,11 +6,16 @@ import { SYSTEM_PROMPT, firstUserMessage, advisoryNote } from "./prompt.js";
 import { CLIENT_TOOLS, SERVER_TOOLS, runTool } from "./tools.js";
 import type { Run, Shop, Step, Store } from "./store.js";
 import { usd, LIMITS } from "./cost.js";
+import { fingerprint } from "./research.js";
+
+// 1 回の点検で使う web_search / web_fetch の合計の上限。超えたら、それ以降は公開の情報を調べる道具を渡さない
+const MAX_WEB = Number(process.env.SH_RUN_MAX_WEB ?? 30);
 
 export const MODEL = process.env.SH_MODEL ?? "claude-opus-5-5";
 const MAX_TURNS = Number(process.env.SH_MAX_TURNS ?? 80);
 
 const TOOLS = [...CLIENT_TOOLS, ...SERVER_TOOLS];
+const TOOLS_NO_WEB = [...CLIENT_TOOLS];
 
 const TRIGGER_TITLE = { connect: "店とつながったので、最初の点検を始めた", schedule: "決まった時刻になったので、点検を始めた", manual: "店の人の依頼で点検を始めた", advisory: "" };
 
@@ -174,7 +179,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
       output_config: { effort: "high" },
       cache_control: { type: "ephemeral" },
       system: SYSTEM_PROMPT,
-      tools: TOOLS,
+      tools: (run.usage.web_searches ?? 0) + (run.usage.web_fetches ?? 0) >= MAX_WEB ? TOOLS_NO_WEB : TOOLS,
       messages: run.messages as Anthropic.Beta.BetaMessageParam[],
     });
   } catch (e) {
@@ -197,6 +202,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   run.usage.cache_read += msg.usage.cache_read_input_tokens ?? 0;
   run.usage.cache_write = (run.usage.cache_write ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
   run.usage.web_searches = (run.usage.web_searches ?? 0) + (msg.usage.server_tool_use?.web_search_requests ?? 0);
+  run.usage.web_fetches = (run.usage.web_fetches ?? 0) + (msg.usage.server_tool_use?.web_fetch_requests ?? 0);
   run.usage.usd = usd(run.usage);
   run.messages.push({ role: "assistant", content: msg.content });
 
@@ -247,7 +253,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   for (const u of uses) {
     let out;
     try {
-      out = await runTool(shop, u.name, u.input);
+      out = await runTool(shop, u.name, u.input, { store, runId: run.run_id });
     } catch (e) {
       out = { content: JSON.stringify({ error: (e as Error).message }), isError: true, title: u.name };
     }
@@ -255,6 +261,8 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     push(run, out.isError ? "error" : "tool", note, short(out.content, 3000), summarize(u.name, out.content, out.isError), out.title);
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
     if (out.report) {
+      // 次の点検で「前回から変わったか」を見られるように、終わったときの指紋を残す
+      try { (run as any).fingerprint = await fingerprint(shop); } catch { /* 無くても報告は出す */ }
       run.report = out.report;
       run.status = "done";
       push(run, "report", "報告を出した");

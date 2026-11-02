@@ -35,7 +35,7 @@ export interface Run {
   messages: unknown[];
   steps: Step[];
   report?: unknown;
-  usage: { input: number; output: number; cache_read: number; cache_write?: number; web_searches?: number; haiku_input?: number; haiku_output?: number; usd?: number };
+  usage: { input: number; output: number; cache_read: number; cache_write?: number; web_searches?: number; web_fetches?: number; haiku_input?: number; haiku_output?: number; usd?: number };
   budget_hit?: boolean;
 }
 
@@ -50,6 +50,9 @@ export interface Store {
   // 点検の途中で貼られた通知の受け箱。点検の記録と分けて持つ(1 歩が古い記録で上書きして消さないように)
   addInbox(runId: string, url: string): Promise<void>;
   takeInbox(runId: string): Promise<string[]>;
+  // 調べた結果の控え(版・部品・通知ごと。この API につながる店で使い回す)
+  getResearch(key: string): Promise<any | null>;
+  putResearch(key: string, rec: any): Promise<void>;
   // 使った nonce を記録する。既にあれば false
   useNonce(key: string, ttlSec: number): Promise<boolean>;
 }
@@ -98,6 +101,9 @@ export class FileStore implements Store {
   async listRuns(shopId: string) {
     return (await this.all<Run>("runs")).filter((r) => r.shop_id === shopId).sort((a, b) => b.created_at - a.created_at);
   }
+
+  getResearch(key: string) { return this.read<any>("intel", key); }
+  putResearch(key: string, rec: any) { return this.write("intel", key, rec); }
 
   private inbox = new Map<string, string[]>();
 
