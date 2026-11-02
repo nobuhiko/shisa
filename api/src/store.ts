@@ -34,7 +34,7 @@ export interface Run {
   messages: unknown[];
   steps: Step[];
   report?: unknown;
-  usage: { input: number; output: number; cache_read: number };
+  usage: { input: number; output: number; cache_read: number; cache_write?: number };
 }
 
 export interface Store {

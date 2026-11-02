@@ -135,6 +135,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   run.usage.input += msg.usage.input_tokens;
   run.usage.output += msg.usage.output_tokens;
   run.usage.cache_read += msg.usage.cache_read_input_tokens ?? 0;
+  run.usage.cache_write = (run.usage.cache_write ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
   run.messages.push({ role: "assistant", content: msg.content });
 
   // 経過に出す: Agent の一言、調べものの様子
