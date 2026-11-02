@@ -64,7 +64,7 @@ const PAGE = String.raw`<!doctype html>
   .band { display: grid; gap: 16px; padding: 10px 20px 16px; }
   .band.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .band div { min-height: 64px; background: var(--band); color: #fff; border-radius: 10px; padding: 14px 20px; font-size: 26px; font-weight: 700; line-height: 1.3;
-              opacity: .15; transition: opacity .25s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+              opacity: .15; transition: opacity .25s; }
   .band div.show { opacity: 1; } .band div.warn { color: #ffcc80; } .band div.good { color: #a5d6a7; }
   .band div.fixed { opacity: 1; text-align: center; }
   /* 通し再生: 場面の間の見出し(記録ではなく編集の文字) */
