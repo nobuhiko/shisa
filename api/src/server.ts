@@ -3,6 +3,7 @@
 import { serve } from "@hono/node-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createApp } from "./app.js";
+import { mountDemo } from "./demo.js";
 import { FileStore } from "./store.js";
 import { step, newRun } from "./agent.js";
 import { randomHex } from "./sign.js";
@@ -34,6 +35,7 @@ async function drive(runId: string) {
 }
 
 const app = createApp(store, (id) => void drive(id));
+mountDemo(app, store);
 
 // 時計は API が持つ。店には cron も常駐も無いので、決まった間隔で API が自分で点検を始める
 const INTERVAL_MS = Number(process.env.SH_AUTO_INTERVAL_HOURS ?? 24) * 3600_000;

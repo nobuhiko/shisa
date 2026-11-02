@@ -17,6 +17,11 @@
   .sh-steps .k-report { font-weight: bold; }
   .sh-steps .res { color: #2e7d32; margin-left: 8px; }
   .sh-steps .tool { color: #999; font-size: 12px; margin-left: 8px; }
+  .sh-steps li.key { animation: sh-flash 2.4s ease-out; }
+  .sh-steps li.key .res { font-weight: bold; }
+  @keyframes sh-flash { 0% { background: #fff3c4; } 100% { background: transparent; } }
+  .sh-steps .ff { margin-left: 8px; color: #8a6d00; font-variant-numeric: tabular-nums; }
+  .sh-replay-badge { display: inline-block; margin-left: 8px; font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3949ab; }
   .sh-steps .k-error .res { color: #b00020; }
   .sh-steps details { flex: 1; } .sh-steps summary { cursor: pointer; list-style: none; }
   .sh-steps summary::-webkit-details-marker { display: none; }
@@ -66,6 +71,7 @@
           <ul class="list-unstyled mb-0">
           {% for r in runs %}
             <li><a href="#" class="sh-open" data-run="{{ r.run_id }}">{{ (r.created_at // 1000)|date("Y-m-d H:i") }}</a>
+              {% if r.status != 'running' %}<a href="#" class="sh-replay small ml-1" data-run="{{ r.run_id }}">▶ 再生</a>{% endif %}
               {{ r.status == 'done' ? '完了' : (r.status == 'running' ? '実行中' : '失敗') }}
               {% if r.advisory_url %}<span class="text-muted">({{ r.advisory_url }})</span>{% endif %}</li>
           {% endfor %}
@@ -136,24 +142,73 @@
     });
   }
 
+  function stepEl(s) {
+    var li = el('li', 'k-' + s.kind);
+    li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
+    var body = s.detail ? el('details') : el('span');
+    var head = s.detail ? el('summary') : body;
+    head.appendChild(el('span', null, s.title));
+    if (s.tool) head.appendChild(el('span', 'tool', s.tool));
+    if (s.result) head.appendChild(el('span', 'res', '→ ' + s.result));
+    if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
+    li.appendChild(body);
+    return li;
+  }
+
+  // ---- 記録の再生(動画用)。記録した経過を同じ順番で、時間を縮めて流す。Claude は呼ばない ----
+  var KEY_TOOL = /本番に入れる|公式の中身に戻す|公式の修正を当てる|隔離する|照らし合わせる|小部屋で試す|部品の弱点/;
+  var KEY_RES = /戻した|500|壊れる|隔離した|当てた|入れた|違う [1-9]/;
+  function isKey(s) { return s.kind === 'report' || s.kind === 'error' || KEY_TOOL.test(s.tool || '') || KEY_RES.test(s.result || ''); }
+  function waitSec(s) { var m = /^(\d+) 秒待つ/.exec(s.tool || ''); return m ? Number(m[1]) : 0; }
+  function mmss(n) { return Math.floor(n / 60) + ':' + ('0' + (n % 60)).slice(-2); }
+
+  function replay(runId, targetSec) {
+    clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
+    statusEl.textContent = '';
+    var badge = el('span', 'sh-replay-badge', '記録を早送りで再生');
+    statusEl.appendChild(badge);
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
+        var steps = d.steps, gaps = [], sum = 0;
+        for (var i = 0; i < steps.length; i++) {
+          var real = i === 0 ? 0 : Math.max(0, (steps[i].at - steps[i - 1].at) / 1000);
+          var g = i === 0 ? 0.6 : 0.35 + 1.6 * (1 - Math.exp(-real / 25));
+          if (i > 0 && isKey(steps[i - 1])) g += 1.0;
+          if (i > 0 && waitSec(steps[i - 1])) g += 2.4;
+          gaps.push(g); sum += g;
+        }
+        var k = Math.max(0.5, Math.min(1.5, (targetSec || 75) / Math.max(sum, 1)));
+        var idx = 0;
+        (function next() {
+          if (idx >= steps.length) { setTimeout(function () { renderReport(d.report); badge.textContent = '記録を早送りで再生(終わり)'; }, 1200); return; }
+          var s = steps[idx++];
+          var li = stepEl(s);
+          if (isKey(s)) li.classList.add('key');
+          stepsEl.appendChild(li);
+          stepsEl.scrollTop = stepsEl.scrollHeight;
+          var w = waitSec(s);
+          if (w) {
+            // 長い待ちは、カウントダウンを早送りで見せる
+            var ff = el('span', 'ff', '⏩ ' + mmss(w));
+            li.querySelector('summary, span').appendChild(ff);
+            var t0 = Date.now(), dur = 2200 * k;
+            (function tick() { var p = Math.min(1, (Date.now() - t0) / dur); ff.textContent = '⏩ ' + mmss(Math.round(w * (1 - p))); if (p < 1) requestAnimationFrame(tick); })();
+          }
+          timer = setTimeout(next, (gaps[idx] || 0.6) * k * 1000);
+        })();
+      });
+  }
+
   function poll(runId) {
     fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
         statusEl.textContent = labels[d.status] || d.status;
-        d.steps.slice(shown).forEach(function (s) {
-          var li = el('li', 'k-' + s.kind);
-          li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
-          var body = s.detail ? el('details') : el('span');
-          var head = s.detail ? el('summary') : body;
-          head.appendChild(el('span', null, s.title));
-          if (s.tool) head.appendChild(el('span', 'tool', s.tool));
-          if (s.result) head.appendChild(el('span', 'res', '→ ' + s.result));
-          if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
-          li.appendChild(body);
-          stepsEl.appendChild(li);
-        });
+        d.steps.slice(shown).forEach(function (s) { stepsEl.appendChild(stepEl(s)); });
         shown = d.steps.length;
         stepsEl.scrollTop = stepsEl.scrollHeight;
         if (d.status === 'running') { timer = setTimeout(function () { poll(runId); }, 2500); }
@@ -193,8 +248,12 @@
   if (start) start.addEventListener('click', function () { begin(start, document.getElementById('sh-advisory').value.trim()); });
   var now = document.getElementById('sh-now');
   if (now) now.addEventListener('click', function () { begin(now, null); });
-  {% if connected %}watchNew();{% endif %}
+  {% if connected %}if (!new URLSearchParams(location.search).get('replay')) watchNew();{% endif %}
   document.querySelectorAll('.sh-open').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); open(a.getAttribute('data-run')); }); });
+  document.querySelectorAll('.sh-replay').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); replay(a.getAttribute('data-run')); }); });
+  // ?replay=<run_id>&seconds=<全体の秒数> で開くと、すぐに再生する(撮影用)
+  var q = new URLSearchParams(location.search);
+  if (q.get('replay') && /^run_[0-9a-f]{8,32}$/.test(q.get('replay'))) replay(q.get('replay'), Number(q.get('seconds')) || 75);
 })();
 </script>
 {% endblock %}

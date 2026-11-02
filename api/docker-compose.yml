@@ -6,6 +6,8 @@ services:
     image: self-harden/api:dev
     hostname: api
     env_file: ../.env
+    environment:
+      SH_DEMO: "1"   # 動画用の並べて再生する画面(/demo)。手元だけ。公開するときは外す
     ports: ["127.0.0.1:8787:8787"]
     volumes: ["./data:/data"]
     networks: [self-harden]
