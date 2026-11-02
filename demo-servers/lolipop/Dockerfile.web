@@ -1,0 +1,11 @@
+# ロリポップ風の Web 側: Apache httpd(mod_php なし)。PHP は FPM に渡す
+FROM httpd:2.4.54
+RUN set -eux; \
+    conf=/usr/local/apache2/conf/httpd.conf; \
+    sed -ri 's@^#(LoadModule (proxy_module|proxy_fcgi_module|rewrite_module) )@\1@' "$conf"; \
+    sed -ri 's@/usr/local/apache2/htdocs@/var/www/html@g' "$conf"; \
+    sed -ri '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s@AllowOverride None@AllowOverride All@' "$conf"; \
+    sed -ri 's@DirectoryIndex index.html@DirectoryIndex index.php index.html@' "$conf"; \
+    echo 'ServerName lolipop' >> "$conf"; \
+    echo 'Include conf/extra/php-fpm.conf' >> "$conf"
+COPY lolipop/php-fpm.conf /usr/local/apache2/conf/extra/php-fpm.conf

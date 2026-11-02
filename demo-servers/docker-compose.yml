@@ -30,8 +30,26 @@ services:
     volumes: ["kagoya-docroot:/var/www/html"]
     networks: [self-harden]
 
+  lolipop-php:
+    build: { context: ., dockerfile: lolipop/Dockerfile.php }
+    image: self-harden/lolipop-php:dev
+    hostname: lolipop-php
+    environment: *trusted
+    volumes: ["lolipop-docroot:/var/www/html"]
+    networks: [self-harden]
+
+  lolipop:
+    build: { context: ., dockerfile: lolipop/Dockerfile.web }
+    image: self-harden/lolipop-web:dev
+    hostname: lolipop
+    depends_on: [lolipop-php]
+    ports: ["127.0.0.1:8082:80"]
+    volumes: ["lolipop-docroot:/var/www/html"]
+    networks: [self-harden]
+
 volumes:
   kagoya-docroot:
+  lolipop-docroot:
 
 networks:
   self-harden:
