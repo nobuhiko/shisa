@@ -311,14 +311,22 @@ const PAGE = String.raw`<!doctype html>
     return null;
   }
 
+  // 貼ったお知らせの出どころ(サーバー会社の名前)を画面に出さない(story と mask=1)
+  var MASK = q('scene') === 'story' || q('mask') === '1', maskHosts = [];
+  function maskOf(t) {
+    if (!MASK || !t) return t;
+    t = String(t).replace(/https?:\/\/[^\s)」]+/g, function (u) { try { var h = new URL(u).host; return maskHosts.indexOf(h) >= 0 ? '(お知らせの URL)' : u; } catch (e) { return u; } });
+    maskHosts.forEach(function (h) { var base = h.replace(/^www\./, '').split('.')[0]; if (base) t = t.replace(new RegExp(base, 'ig'), '(サーバー会社)'); });
+    return t;
+  }
   function stepEl(s) {
     var li = el('li', 'k-' + s.kind + (s.research ? ' research' : ''));
     li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
     var b = el('span');
     var w = waitSec(s);
-    b.appendChild(el('span', null, w ? '⏩ ' + Math.round(w / 60) + ' 分待つ(設定が効くまで)' : s.title));
-    if (s.tool && !w) b.appendChild(el('span', 'tool', s.tool));
-    if (s.result && !w) b.appendChild(el('span', 'res', '→ ' + s.result));
+    b.appendChild(el('span', null, w ? '⏩ ' + Math.round(w / 60) + ' 分待つ(設定が効くまで)' : maskOf(s.title)));
+    if (s.tool && !w) b.appendChild(el('span', 'tool', maskOf(s.tool)));
+    if (s.result && !w) b.appendChild(el('span', 'res', '→ ' + maskOf(s.result)));
     li.appendChild(b);
     return li;
   }
@@ -356,7 +364,7 @@ const PAGE = String.raw`<!doctype html>
     for (var k = 0; k < runs.length; k++) {
       var r = runs[k], u = r.advisory_url;
       if (!u) for (var i = 0; i < r.steps.length; i++) { var m = /通知の URL を受け取った: (\S+)/.exec(r.steps[i].title); if (m) { u = m[1]; break; } }
-      if (u) { document.getElementById('adv').textContent = '貼った通知: ' + u; return; }
+      if (u) { try { var hh = new URL(u).host; if (maskHosts.indexOf(hh) < 0) maskHosts.push(hh); } catch (e) {} document.getElementById('adv').textContent = MASK ? '店主がお知らせの URL を貼った' : '貼った通知: ' + u; return; }
     }
   }
 
