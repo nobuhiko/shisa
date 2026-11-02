@@ -10,8 +10,8 @@ import { randomHex, signRequest } from "../src/sign.js";
 
 const API = process.env.SH_API ?? "http://127.0.0.1:8787";
 const HOSTS: Record<string, { container: string; public: string }> = {
-  server-a: { container: "self-harden-demo-server-a-1", public: "http://127.0.0.1:8081" },
-  server-b: { container: "self-harden-demo-server-b-php-1", public: "http://127.0.0.1:8082" },
+  "server-a": { container: "self-harden-demo-server-a-1", public: "http://127.0.0.1:8081" },
+  "server-b": { container: "self-harden-demo-server-b-php-1", public: "http://127.0.0.1:8082" },
 };
 const STATE = new URL("../data/dev-shops.json", import.meta.url);
 const RECEIVER = new URL("../../plugin/SelfHarden/Resource/receiver/self-harden.php", import.meta.url);
