@@ -45,14 +45,15 @@ Agent が自分で調べて手を選ぶところを見せるための舞台で�
 
 ```sh
 cd demo-servers && docker compose up -d kagoya lolipop-php lolipop
-cd ../api && docker compose up -d --build
-npx tsx scripts/dev-shop.ts connect kagoya      # プラグインの代わりに受け口を置いて登録(開発用)
-npx tsx scripts/dev-shop.ts start kagoya [通知の URL]
-npx tsx scripts/dev-shop.ts watch kagoya <run_id>
+cd ../api && docker compose up -d --build        # 鍵は ../.env の ANTHROPIC_API_KEY
+cd ../demo-servers && ./install-plugin.sh all    # プラグインを入れる(受け口が置かれる)
+./connect-plugin.sh kagoya                       # 管理画面の「API とつなぐ」と同じ。つないだら点検が自分で始まる
+open http://127.0.0.1:8081/admin/store/plugin/SelfHarden/config   # 開くだけで経過と結果が流れる
+cd ../api && npx tsx scripts/dev-shop.ts break kagoya            # わざと壊して、同じリクエストの中で戻るかを確かめる
 ```
 
 ## プラグイン(ガワ)
 
 - `plugin/SelfHarden/`(EC-CUBE 4.2、コード `SelfHarden`)。入れると `self-harden.php` を店の直下に置く
-- 管理画面「オーナーズストア → プラグイン → self-harden の設定」: API とつなぐ、点検を始める(通知の URL を貼ってもよい)、経過と報告を見る
+- 管理画面「オーナーズストア → プラグイン → self-harden の設定」: API とつなぐ。つないだら API が自分で点検を始め、そのあとも決まった間隔で点検する。画面は開くだけで、いま動いている点検の経過(Agent の一言・道具・結果の 1 行)と、終わったら報告が流れる。通知の URL を貼ると、動いている点検に渡す(動いていなければ新しく始める)
 - `plugin/build-zip.sh` で管理画面から入れられる zip、`demo-servers/install-plugin.sh` でデモの店に直接入れる
