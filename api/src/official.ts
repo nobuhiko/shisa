@@ -94,3 +94,32 @@ export async function officialContent(version: string, path: string): Promise<Bu
   for (const e of entries(gunzipSync(buf))) if (e.path === path) return Buffer.from(e.data);
   return null;
 }
+
+// ---- 公式の修正の「全部のファイル」を、公式のデータ(GitHub の EC-CUBE 公式リポジトリ)から出す ----
+const GH_API = "https://api.github.com/repos/EC-CUBE/ec-cube";
+const SHA_RE = /^[0-9a-f]{40}$/;
+const TAG_RE = /^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
+
+export interface FixScope {
+  files: string[]; // 店に置く対象(src/ app/ html/ と root 直下のファイル)
+  blockers: string[]; // この手ではやりきれない変更(DB の作り変え、部品の入れ替え)
+  source: string;
+}
+
+function inShopCode(p: string) {
+  return /^(src|app|html)\//.test(p) || (!p.includes("/") && /\.php$/.test(p));
+}
+
+export async function officialFixScope(installed: string, ref: string): Promise<FixScope> {
+  let url: string;
+  if (SHA_RE.test(ref)) url = `${GH_API}/commits/${ref}`;
+  else if (TAG_RE.test(ref) && TAG_RE.test(installed)) url = `${GH_API}/compare/${installed}...${ref}`;
+  else throw new Error(`公式の修正の範囲を出せない版の指定です: ${ref}`);
+  const res = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "self-harden" }, signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`公式の修正の範囲を取れませんでした: HTTP ${res.status}`);
+  const data = (await res.json()) as { files?: { filename: string; status: string }[] };
+  const all = (data.files ?? []).map((f) => f.filename);
+  const blockers = all.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p) || p === "composer.lock" || p === "composer.json");
+  const files = all.filter((p) => inShopCode(p) && !blockers.includes(p) && (data.files ?? []).find((f) => f.filename === p)?.status !== "removed");
+  return { files, blockers, source: url.replace("https://api.github.com/repos/", "https://github.com/") };
+}

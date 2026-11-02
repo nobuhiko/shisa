@@ -4,7 +4,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { createPatch } from "diff";
 import { callReceiver } from "./receiver.js";
-import { manifest, officialContent } from "./official.js";
+import { manifest, officialContent, officialFixScope } from "./official.js";
 import type { Shop, Store } from "./store.js";
 import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
 
@@ -110,7 +110,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "apply_official_fix",
     description:
-      "Apply an official fix as one unit: every file of the fix at the given official ref (an EC-CUBE release tag not older than the installed version or a full 40-character commit hash of the official repository; for vendor/ files, a newer tag of the same major version of that package's official repository). The receiver first fetches all files from the official sources; if any file cannot be fetched, nothing is written. Then it backs up and writes all files (creating missing folders inside src/, app/, html/, vendor/ only), opens the shop pages, and rolls back everything if the shop breaks. List every file the official fix changes or adds.",
+      "Apply an official fix as one unit: every file of the fix at the given official ref. For EC-CUBE itself, the API checks the official repository (the commit's files, or the difference between the installed release and the given release tag) and refuses unless you list all of those files; a release tag of the same line (for example a patch release) therefore updates the installed version as a whole. Changes that need database migrations or Composer package changes are refused. Ref (an EC-CUBE release tag not older than the installed version or a full 40-character commit hash of the official repository; for vendor/ files, a newer tag of the same major version of that package's official repository). The receiver first fetches all files from the official sources; if any file cannot be fetched, nothing is written. Then it backs up and writes all files (creating missing folders inside src/, app/, html/, vendor/ only), opens the shop pages, and rolls back everything if the shop breaks. List every file the official fix changes or adds.",
     input_schema: obj(
       {
         ref: { type: "string" },
@@ -131,6 +131,11 @@ export const CLIENT_TOOLS: Tool[] = [
     name: "release_quarantine",
     description: "Move a quarantined file back to its original place.",
     input_schema: obj({ quarantine_id: { type: "string" } }, ["quarantine_id"]),
+  },
+  {
+    name: "clear_cache",
+    description: "Clear the application's compiled cache (var/cache/prod), as the official instructions often require after replacing program files. The receiver moves the cache aside and deletes it, then opens the shop pages.",
+    input_schema: obj({}),
   },
   {
     name: "list_quarantine",
@@ -471,6 +476,22 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       return { content: j(r), isError: !r.ok, title: `公式の中身に戻す: ${input.path} @ ${input.ref}` };
     }
     case "apply_official_fix": {
+      const paths: string[] = Array.isArray(input.paths) ? input.paths.map(String) : [];
+      // EC-CUBE 本体の修正は、公式のデータで「全部のファイル」がそろっているかを確かめてから当てる(半端に置かない)
+      if (!paths.some((p) => p.startsWith("vendor/"))) {
+        try {
+          const scope = await officialFixScope(await installedVersion(shop), String(input.ref));
+          const missing = scope.files.filter((f) => !paths.includes(f));
+          if (scope.blockers.length) {
+            return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages; it cannot be applied with these tools. Apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          }
+          if (missing.length) {
+            return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          }
+        } catch (e) {
+          return { content: j({ ok: false, error: "scope_unknown", detail: `Could not confirm the full set of files of this official change: ${(e as Error).message}. Nothing was written.` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+        }
+      }
       const r = await callReceiver(shop, "apply_official_fix", {
         ref: input.ref,
         paths: input.paths,
@@ -491,6 +512,10 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     case "release_quarantine": {
       const r = await callReceiver(shop, "release_quarantine", { quarantine_id: input.quarantine_id });
       return { content: j(r), isError: !r.ok, title: `隔離から戻す: ${input.quarantine_id}` };
+    }
+    case "clear_cache": {
+      const r = await callReceiver(shop, "clear_cache", { verify: { paths: verifyPaths(shop, ["/admin/login"]), timeout_sec: 8 } });
+      return { content: j(r), isError: !r.ok, title: "キャッシュを消す" };
     }
     case "list_quarantine": {
       const r = await callReceiver(shop, "list_quarantine", {});

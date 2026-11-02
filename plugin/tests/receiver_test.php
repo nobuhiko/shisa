@@ -411,6 +411,20 @@ check('全部そろえば、フォルダも作って当てる', !empty($r['json'
 $r = call('restore', ['backup_id' => $r['json']['result']['applied'][0]['backup_id']]);
 check('当てたものは退避から 1 つずつ戻せる(元が無ければ消える)', !empty($r['json']['ok']) && !file_exists($root . '/src/Eccube/Kernel.php'), $r['body']);
 
+echo "キャッシュを消す\n";
+@mkdir($root . '/var/cache/prod/twig/ab', 0777, true);
+file_put_contents($root . '/var/cache/prod/twig/ab/x.php', '<?php');
+file_put_contents($root . '/var/cache/prod/Container.php', '<?php');
+$r = call('clear_cache', ['verify' => ['paths' => ['/']]]);
+check('キャッシュを消せる(付け替えて中身も消す)', !empty($r['json']['ok']) && $r['json']['result']['moved'] === true && $r['json']['result']['finished'] === true
+    && !is_dir($root . '/var/cache/prod') && !glob($root . '/var/cache/.sh-old-*'), $r['body']);
+$r = call('clear_cache');
+check('キャッシュが無くても失敗しない', !empty($r['json']['ok']) && $r['json']['result']['moved'] === false, $r['body']);
+symlink($outside, $root . '/var/cache/prod');
+$r = call('clear_cache');
+check('キャッシュの場所がシンボリックリンクなら触らない', err($r) === 'symlink' && is_file($outside . '/target.txt'), $r['body']);
+unlink($root . '/var/cache/prod');
+
 echo "隔離\n";
 file_put_contents($root . '/html/sub/odd.php', "<?php echo 'odd';");
 foreach (['self-harden.php', 'var/self-harden/config.php', '.env', 'linkdir/target.txt', '../outside/target.txt', 'html/sub', 'composer.lock'] as $p) {

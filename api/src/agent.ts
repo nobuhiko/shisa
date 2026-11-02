@@ -125,7 +125,11 @@ export function summarize(name: string, content: string, isError?: boolean): str
       const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
       return r.rolled_back ? `店が開けなくなったので戻した(${v})` : `公式の中身に戻した。店を開いて確かめた(${v})`;
     }
+    case "clear_cache":
+      return errOf(d) ?? `キャッシュを消した。店を開いて確かめた(${((d.result?.verify ?? []) as any[]).map((x) => `${x.path} ${x.status}`).join("、")})`;
     case "apply_official_fix": {
+      if (d.error === "incomplete_fix") return `公式の修正のファイルがそろっていないので、何も置いていない(足りない ${d.missing.length} 件)`;
+      if (d.error === "needs_db_or_vendor_change") return "DB や部品の変更が要る版なので、何も置いていない";
       if (errOf(d)) return `${errOf(d)}(何も置いていない)`;
       const r = d.result ?? {};
       const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");

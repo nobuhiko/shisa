@@ -1022,6 +1022,53 @@ function op_apply_official_fix(array $cfg, array $args)
     return $res;
 }
 
+// アプリのキャッシュ(var/cache/prod)を消す。いったん別の名前に付け替えてから(すぐに効く)、時間の許す範囲で中身を消す
+function op_clear_cache(array $cfg, array $args)
+{
+    $base = sh_root() . '/var/cache';
+    $prod = $base . '/prod';
+    if (is_link($base) || is_link($prod)) {
+        throw new ShError('symlink', 'キャッシュの場所がシンボリックリンクです');
+    }
+    $moved = false;
+    if (is_dir($prod)) {
+        $old = $base . '/.sh-old-' . bin2hex(random_bytes(4));
+        if (!@rename($prod, $old)) {
+            throw new ShError('io', 'キャッシュを付け替えられませんでした');
+        }
+        $moved = true;
+    }
+    // 付け替えた古いキャッシュを消す(前回の残りも)。時間を超えたら次の呼び出しで続きを消す
+    $t0 = microtime(true);
+    $left = 0;
+    foreach ((array) @scandir($base) as $name) {
+        if (strpos($name, '.sh-old-') !== 0 || is_link($base . '/' . $name)) {
+            continue;
+        }
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base . '/' . $name, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($it as $f) {
+            if (microtime(true) - $t0 > 10) {
+                $left++;
+                break 2;
+            }
+            if ($f->isLink() || $f->isFile()) {
+                @unlink($f->getPathname());
+            } elseif ($f->isDir()) {
+                @rmdir($f->getPathname());
+            }
+        }
+        @rmdir($base . '/' . $name);
+    }
+    if (function_exists('opcache_reset')) {
+        @opcache_reset();
+    }
+    $res = ['moved' => $moved, 'finished' => $left === 0, 'verify' => null];
+    if (isset($args['verify'])) {
+        $res['verify'] = sh_verify($cfg, $args['verify']);
+    }
+    return $res;
+}
+
 // 公式に無い不審なファイルを、消さずに Web から読めない場所へ移す
 function op_quarantine(array $cfg, array $args)
 {
@@ -1244,6 +1291,7 @@ function sh_main()
             case 'restore_official': $r = op_restore_official($cfg, $args); break;
             case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
             case 'quarantine': $r = op_quarantine($cfg, $args); break;
+            case 'clear_cache': $r = op_clear_cache($cfg, $args); break;
             case 'release_quarantine': $r = sh_release(isset($args['quarantine_id']) ? $args['quarantine_id'] : null); break;
             case 'list_quarantine': $r = op_list_quarantine(); break;
             case 'audit_tail': $r = op_audit_tail($args); break;
