@@ -1,13 +1,14 @@
 #!/bin/sh
-# 初回だけ EC-CUBE 4.2.0 を展開してインストールする。2 回目以降は何もしない
+# 初回だけ EC-CUBE(既定 4.2.0、ECCUBE_VERSION で変える)を展開してインストールする。2 回目以降は何もしない
 set -eu
 DOCROOT=/var/www/html
 if [ -f "$DOCROOT/.env" ]; then
   echo "[setup] EC-CUBE は既にインストール済み"
   exit 0
 fi
-echo "[setup] EC-CUBE 4.2.0 を展開"
-tar xzf /opt/eccube/eccube-4.2.0.tar.gz -C "$DOCROOT" --strip-components=1
+VER="${ECCUBE_VERSION:-4.2.0}"
+echo "[setup] EC-CUBE $VER を展開"
+tar xzf "/opt/eccube/eccube-$VER.tar.gz" -C "$DOCROOT" --strip-components=1
 cd "$DOCROOT"
 # インストールは CLI で行う。CLI には Web 用の制約(web.d)を読ませない
 export PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d

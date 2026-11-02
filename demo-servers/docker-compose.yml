@@ -2,7 +2,7 @@
 name: self-harden-demo
 
 x-trusted: &trusted
-  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$'
+  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$'
   PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:
@@ -48,9 +48,21 @@ services:
     volumes: ["server-b-docroot:/var/www/html"]
     networks: [self-harden]
 
+  server-c:
+    build: { context: ., dockerfile: server-c/Dockerfile }
+    image: self-harden/server-c:dev
+    hostname: server-c
+    environment:
+      <<: *trusted
+      PLANT_DEMO: "0"   # 照らし合わせの仕込みは入れない(パッチ版への上げを見るための台)
+    ports: ["127.0.0.1:8083:80"]
+    volumes: ["server-c-docroot:/var/www/html"]
+    networks: [self-harden]
+
 volumes:
   server-a-docroot:
   server-b-docroot:
+  server-c-docroot:
 
 networks:
   self-harden:
