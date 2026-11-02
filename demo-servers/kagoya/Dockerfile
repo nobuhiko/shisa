@@ -1,0 +1,11 @@
+# KAGOYA 風: Apache + mod_php。.htaccess の php_value/php_flag が効き、.user.ini は読まれない
+FROM self-harden/php-apache:8.1.10
+RUN set -eux; \
+    a2enmod rewrite headers; \
+    sed -ri 's#AllowOverride None#AllowOverride All#g' /etc/apache2/apache2.conf; \
+    echo 'export PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d:/usr/local/etc/php/web.d' >> /etc/apache2/envvars
+COPY common/web-limits.ini /usr/local/etc/php/web.d/zz-web-limits.ini
+COPY common/setup-eccube.sh /usr/local/bin/setup-eccube
+COPY kagoya/entrypoint.sh /usr/local/bin/kagoya-entrypoint
+ENTRYPOINT ["kagoya-entrypoint"]
+CMD ["apache2-foreground"]

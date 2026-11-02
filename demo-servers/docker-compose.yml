@@ -1,0 +1,38 @@
+# 古い版に固定した検証環境。手元だけで使う(ポートは 127.0.0.1 にだけ開く)
+name: self-harden-demo
+
+x-trusted: &trusted
+  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^kagoya$$,^lolipop$$'
+
+services:
+  php-apache-base:
+    image: self-harden/php-apache:8.1.10
+    build:
+      context: .
+      dockerfile: common/Dockerfile.php
+      args: { BASE: "php:8.1.10-apache" }
+    profiles: ["build-only"]
+
+  php-fpm-base:
+    image: self-harden/php-fpm:8.1.10
+    build:
+      context: .
+      dockerfile: common/Dockerfile.php
+      args: { BASE: "php:8.1.10-fpm" }
+    profiles: ["build-only"]
+
+  kagoya:
+    build: { context: ., dockerfile: kagoya/Dockerfile }
+    image: self-harden/kagoya:dev
+    hostname: kagoya
+    environment: *trusted
+    ports: ["127.0.0.1:8081:80"]
+    volumes: ["kagoya-docroot:/var/www/html"]
+    networks: [self-harden]
+
+volumes:
+  kagoya-docroot:
+
+networks:
+  self-harden:
+    name: self-harden

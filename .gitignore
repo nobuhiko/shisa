@@ -9,3 +9,4 @@ api/data/
 demo-servers/**/data/
 demo-servers/**/src/
 .DS_Store
+demo-servers/.cache/
