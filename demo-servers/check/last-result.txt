@@ -1,0 +1,33 @@
+== kagoya
+sapi                     : apache2handler
+php_version              : 8.1.10
+eccube_version           : 4.2.0
+disable_functions        : exec,shell_exec,system,passthru,proc_open,popen
+exec 系が呼べるか        : {"exec": false, "shell_exec": false, "system": false, "passthru": false, "proc_open": false, "popen": false}
+max_execution_time       : 30
+memory_limit(既定)      : 128M
+user_ini.filename        : .user.ini
+user_ini.cache_ttl       : 300
+allow_url_fopen / curl   : 1 / True
+cron の実行ファイル      : php から=False / コンテナ内=なし
+.htaccess php_value      : HTTP 200, memory_limit=77M (書いた値 77M)
+.htaccess php_flag       : HTTP 200, short_open_tag=0 (既定 1、書いた値 Off)
+.user.ini 新しいディレクトリ : memory_limit=128M (書いた値 88M)
+.user.ini 書き換え直後   : 書く前に 20 回開いて 128M が 20 回、書いた直後に 10 回開いて 99M が 0 回
+== lolipop
+sapi                     : fpm-fcgi
+php_version              : 8.1.10
+eccube_version           : 4.2.0
+disable_functions        : exec,shell_exec,system,passthru,proc_open,popen
+exec 系が呼べるか        : {"exec": false, "shell_exec": false, "system": false, "passthru": false, "proc_open": false, "popen": false}
+max_execution_time       : 30
+memory_limit(既定)      : 128M
+user_ini.filename        : .user.ini
+user_ini.cache_ttl       : 300
+allow_url_fopen / curl   : 1 / True
+cron の実行ファイル      : php から=False / コンテナ内=なし
+.htaccess php_value      : HTTP 500, memory_limit=- (書いた値 77M)
+.htaccess php_flag       : HTTP 500, short_open_tag=- (既定 1、書いた値 Off)
+.user.ini 新しいディレクトリ : memory_limit=88M (書いた値 88M)
+.user.ini 書き換え直後   : 書く前に 20 回開いて 128M が 10 回、書いた直後に 10 回開いて 99M が 5 回
+== .user.ini の書き換えが効くまで待つ(10 秒おき、最大 330 秒)

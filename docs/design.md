@@ -1,0 +1,38 @@
+# 設計
+
+## デモ用サーバー
+
+Agent が自分で調べて手を選ぶところを見せるための舞台です。脆弱性を作り込む環境ではなく、**古い版に固定した検証環境**です。手元の docker だけで動かし、ポートは 127.0.0.1 にだけ開きます。
+
+| | KAGOYA 風 `kagoya` | ロリポップ風 `lolipop` |
+|---|---|---|
+| Web と PHP | Apache 2.4.54 + mod_php(`php:8.1.10-apache`) | httpd 2.4.54 + PHP-FPM(`httpd:2.4.54` と `php:8.1.10-fpm` の 2 つのコンテナ) |
+| 手元の URL | http://127.0.0.1:8081 | http://127.0.0.1:8082 |
+| docker の中の名前 | `http://kagoya` | `http://lolipop` |
+| EC-CUBE | 4.2.0(公式の配布物、sha256 を照合) | 同じ |
+
+- PHP 8.1.10 は EC-CUBE 4.2.0 の公開日(2022-09-27)の時点の 8.1 系
+- DB はコンテナの中の SQLite(`var/eccube.db`)。いちばん部品が少なくて済む
+- 制約(`disable_functions` の exec 系 6 つ、`max_execution_time=30`)は Web から動く PHP にだけ読ませる。CLI に読ませないのは、EC-CUBE のインストールが子プロセスを使うため。レンタルサーバーでも Web とコマンドの PHP は別の設定のことが多い
+- 管理画面は `/admin`、ログインは `admin` / `password`(EC-CUBE の既定のまま)
+
+### 制約の確認(2026-11-02、`demo-servers/check.sh` で外から測った値)
+
+| 項目 | KAGOYA 風 | ロリポップ風 | 期待 |
+|---|---|---|---|
+| SAPI | apache2handler | fpm-fcgi | mod_php / FPM |
+| PHP | 8.1.10 | 8.1.10 | 古いパッチの版 |
+| EC-CUBE | 4.2.0 | 4.2.0 | 4.2.0 |
+| `disable_functions` | exec,shell_exec,system,passthru,proc_open,popen | 同じ | exec 系 6 つ |
+| exec 系を呼べるか | 6 つとも呼べない | 6 つとも呼べない | 呼べない |
+| `max_execution_time` | 30 | 30 | 30 |
+| cron | なし | なし | なし |
+| `.htaccess` の `php_value memory_limit 77M` | 200、77M になる | **500** | 効く / 500 |
+| `.htaccess` の `php_flag short_open_tag Off` | 200、0 になる | **500** | 効く / 500 |
+| `.user.ini` の `memory_limit = 88M`(新しいディレクトリ) | 128M のまま(**読まれない**) | 88M になる | 読まれない / 効く |
+| `user_ini.cache_ttl` | 300 | 300 | 既定の 300 |
+| `allow_url_fopen` / curl | 1 / あり | 1 / あり | 使える |
+
+確かめ方: 店の `_check/` の下にディレクトリごとに確認用の PHP と `.htaccess` / `.user.ini` を置き、外から curl で開いて `ini_get` の値と HTTP の状態を見た。終わったら `_check/` は消している。
+
+測っていないこと: 一度読まれたディレクトリの `.user.ini` を書き換えたあと、効くまでにかかる時間。FPM は worker ごとに読んだ結果をためるので、開くたびに結果が変わる。ここは Agent が自分で調べて気づくところなので、この表では答えを書かない。
