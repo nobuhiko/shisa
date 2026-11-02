@@ -133,6 +133,12 @@ const PAGE = String.raw`<!doctype html>
   .htable .item { font-weight: 700; }
   .htable .judge { color: #b26a00; font-weight: 700; transition: color .3s; }
   .htable .judge.ok { color: var(--ok); }
+  .htable .judge.wait { color: var(--muted); font-weight: 400; font-size: 16px; }
+  .health.side { background: var(--card); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 12px 16px; min-height: 0; overflow: hidden; }
+  .health.side h2 { margin: 0 0 10px; font-size: 20px; }
+  .htable.compact { grid-template-columns: minmax(0, 1.1fr) 110px minmax(0, 1.3fr); box-shadow: none; }
+  .htable.compact > div { font-size: 16px; padding: 10px 10px; }
+  .htable.compact .act { min-height: 52px; font-size: 14px; }
   .htable .act { flex-direction: column; align-items: flex-start; gap: 2px; min-height: 64px; }
   .htable .act .live { font-size: 14px; color: #52606d; font-variant-numeric: tabular-nums; }
   .htable .act .done { font-size: 19px; color: var(--ok); font-weight: 700; }
@@ -272,7 +278,7 @@ const PAGE = String.raw`<!doctype html>
   function showBand(cell, c) { cell.className = c ? 'show ' + (c.cls || '') : ''; cell.textContent = c ? c.text : ''; }
 
   // 1 列を重み付きで流す
-  function play(run, steps, view, bandCell, done) {
+  function play(run, steps, view, bandCell, done, onStep) {
     var ctx = { version: versionOf(run.steps) };
     var list = compact(steps), i = 0, hide = null;
     (function next() {
@@ -282,6 +288,7 @@ const PAGE = String.raw`<!doctype html>
       view.log.appendChild(li); view.log.scrollTop = view.log.scrollHeight;
       var p = phaseOf(s); if (p) setPhase(view.ph, p);
       if (c) { clearTimeout(hide); showBand(bandCell, c); hide = setTimeout(function () { bandCell.className = ''; }, T_KEY); }
+      if (onStep) onStep(s, ctx);
       setTimeout(next, delayOf(s, ctx));
     })();
   }
@@ -510,6 +517,55 @@ const PAGE = String.raw`<!doctype html>
       });
     });
   };
+  // 承・転: 左に健康診断の表、右に経過。経過の行が項目に当てはまるたびに、表の行が変わる。
+  // 1 つ目の記録は全部を重み付きで流す(承)。2 つ目からは、項目に当てはまる行と字幕の付く行だけ(転)
+  function healthTable(parent) {
+    var t = el('div', 'htable compact'); parent.appendChild(t);
+    ['項目', '判定', '処置'].forEach(function (h) { t.appendChild(el('div', 'hd', h)); });
+    return HEALTH.map(function (h) {
+      var a = el('div', 'item', h.item), b = el('div', 'judge wait', 'これから'), c = el('div', 'act');
+      t.appendChild(a); t.appendChild(b); t.appendChild(c);
+      return { h: h, cells: [a, b, c] };
+    });
+  }
+  scenes.S = function (ids, opt) {
+    opt = opt || {};
+    return Promise.all(ids.map(load)).then(function (rs) {
+      layout(2); setAdv(rs);
+      var left = el('section', 'health side'); main.appendChild(left);
+      left.appendChild(html('h2', null, 'お店の健康診断'));
+      var rows = healthTable(left);
+      var cell = el('div'); band.appendChild(cell);
+      function onStep(s, ctx) {
+        rows.forEach(function (r) {
+          if (!r.h.pick(s)) return;
+          var c = captionOf(s, ctx);
+          r.cells.forEach(function (x) { x.classList.add('row-on'); setTimeout(function () { x.classList.remove('row-on'); }, 1600); });
+          r.cells[1].className = 'judge ok'; r.cells[1].textContent = s_ok(s);
+          r.cells[2].textContent = '';
+          r.cells[2].appendChild(el('div', 'done', (!r.h.useTitle && c) ? c.text : (function (t) { return t.length > 38 ? t.slice(0, 37) + '…' : t; })(s.title.replace(/。$/, ''))));
+          r.cells[2].appendChild(el('div', 'live', hostName(this_run)));
+        });
+      }
+      var this_run = null;
+      return rs.reduce(function (p, run, k) {
+        return p.then(function () {
+          this_run = run;
+          var old = main.querySelector('.col'); if (old) old.remove();
+          var v = makeColumn(main, run);
+          var steps = k === 0 && !opt.pickedOnly ? run.steps : run.steps.filter(function (s) {
+            var ctx = { version: versionOf(run.steps) };
+            return HEALTH.some(function (h) { return h.pick(s); }) || !!captionOf(s, ctx);
+          });
+          return new Promise(function (res) { play(run, steps, v, cell, res, onStep); });
+        });
+      }, Promise.resolve()).then(function () {
+        // 見ていない項目は、そのまま「これから」で残す(この回で確かめていないことを「問題なし」とは書かない)
+        return holdFor(3000);
+      });
+    });
+  };
+
   function s_ok(last) { return last.kind === 'error' ? '断った ✓' : '処置済み ✓'; }
 
   // 結果の数字。全部、記録から数える
@@ -573,7 +629,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['K', 'N', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['K', 'N', 'S', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -599,6 +655,7 @@ const PAGE = String.raw`<!doctype html>
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
     else if (k === 'K' || k === 'N' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
