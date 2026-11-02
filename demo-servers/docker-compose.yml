@@ -3,6 +3,7 @@ name: self-harden-demo
 
 x-trusted: &trusted
   TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^kagoya$$,^lolipop$$'
+  PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:
   php-apache-base:
