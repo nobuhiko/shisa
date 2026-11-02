@@ -207,11 +207,16 @@ export const CLIENT_TOOLS: Tool[] = [
             type: "object",
             properties: {
               title: { type: "string" },
+              category: {
+                type: "string",
+                enum: ["php", "eccube", "packages", "tamper", "exposure", "config", "other"],
+                description: "php: the PHP runtime / eccube: EC-CUBE itself / packages: Composer packages / tamper: modified or unknown files / exposure: information visible from outside / config: weak settings / other",
+              },
               severity: { type: "string", enum: ["high", "medium", "low", "info"] },
               evidence: { type: "string" },
               status: { type: "string", enum: ["fixed", "mitigated", "needs_human", "not_affected"] },
             },
-            required: ["title", "severity", "evidence", "status"],
+            required: ["title", "category", "severity", "evidence", "status"],
             additionalProperties: false,
           },
         },

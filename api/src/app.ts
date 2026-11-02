@@ -85,7 +85,7 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     if (!shop) return unauthorized(c);
     const run = await store.getRun(c.req.param("run_id"));
     if (!run || run.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
-    return c.json({ ok: true, run_id: run.run_id, status: run.status, trigger: run.trigger, advisory_url: run.advisory_url, steps: run.steps, report: run.report ?? null, usage: { ...run.usage, usd: Number(usd(run.usage).toFixed(2)) } });
+    return c.json({ ok: true, interval_hours: Number(process.env.SH_AUTO_INTERVAL_HOURS ?? 24), run_id: run.run_id, status: run.status, trigger: run.trigger, advisory_url: run.advisory_url, steps: run.steps, report: run.report ?? null, usage: { ...run.usage, usd: Number(usd(run.usage).toFixed(2)) } });
   });
 
   app.get("/v1/shops/:id/runs", async (c) => {

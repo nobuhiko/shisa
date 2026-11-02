@@ -35,6 +35,13 @@
   .sh-band.show { transform: none; } .sh-band.warn { color: #ffcc80; } .sh-band.good { color: #a5d6a7; }
   .sh-steps li.sh-research { color: #8a8a8a; font-size: 13px; }
   .sh-steps li.key { background: #fff3c4; }
+  .sh-health td, .sh-health th { padding: 10px 16px; vertical-align: middle; }
+  .sh-health th { font-size: 12px; color: #888; font-weight: normal; }
+  .sh-health .item { font-weight: bold; white-space: nowrap; }
+  .sh-health .j { font-weight: bold; white-space: nowrap; }
+  .sh-health .j-ok { color: #2e7d32; } .sh-health .j-fixed { color: #2e7d32; } .sh-health .j-mit { color: #1565c0; } .sh-health .j-human { color: #b26a00; }
+  .sh-health tr { transition: background .4s; } .sh-health tr.in { background: #f1f8e9; }
+  body.sh-big .sh-health td { font-size: 17px; }
   .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
   body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
   body.sh-big .sh-steps .tool { font-size: 13px; } body.sh-big .sh-report { font-size: 17px; }
@@ -46,6 +53,13 @@
 <div class="c-contentsArea__cols">
   <div class="c-contentsArea__primaryCol">
     <div class="c-primaryCol">
+
+      <div class="card rounded border-0 mb-4" id="sh-health-card" hidden>
+        <div class="card-header"><span>お店の健康診断</span> <span id="sh-health-meta" class="ml-2 text-muted small"></span></div>
+        <div class="card-body p-0">
+          <table class="table mb-0 sh-health"><thead><tr><th>項目</th><th>判定</th><th>中身</th></tr></thead><tbody id="sh-health"></tbody></table>
+        </div>
+      </div>
 
       <div class="card rounded border-0 mb-4">
         <div class="card-header"><span>点検</span></div>
@@ -129,6 +143,38 @@
   var stLabels = { fixed: '直した', mitigated: '守りを入れた', needs_human: '人の作業が必要', not_affected: '当てはまらない' };
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  // ---- お店の健康診断(報告の「見つけたこと」の項目から作る) ----
+  var HEALTH_ITEMS = [['php', 'PHP(お店を動かす土台)'], ['eccube', 'EC-CUBE(お店のソフト)'], ['packages', '中の部品(ほかの開発元のプログラム)'],
+    ['tamper', '書き換えられた跡'], ['exposure', '外から見えていた情報'], ['config', '設定の甘さ']];
+  var JUDGE = { needs_human: [4, '人の作業が必要', 'j-human'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
+  function renderHealth(r, meta, animate) {
+    var f = (r && r.findings) || [];
+    if (!f.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
+    var card = document.getElementById('sh-health-card'), body = document.getElementById('sh-health');
+    body.textContent = ''; card.hidden = false;
+    var items = HEALTH_ITEMS.slice();
+    if (f.some(function (x) { return x.category === 'other'; })) items.push(['other', 'その他']);
+    var trs = items.map(function (it) {
+      var xs = f.filter(function (x) { return x.category === it[0]; });
+      var worst = xs.reduce(function (a, x) { var j = JUDGE[x.status] || JUDGE.not_affected; return !a || j[0] > a[0] ? j : a; }, null) || JUDGE.not_affected;
+      var main = xs.filter(function (x) { return x.status !== 'not_affected'; })[0] || xs[0];
+      var tr = el('tr');
+      tr.appendChild(el('td', 'item', it[1]));
+      tr.appendChild(el('td', 'j ' + worst[2], animate ? '要確認' : worst[1]));
+      var td = el('td', null, main ? main.title : '見つかったものはありません');
+      if (xs.length > 1) td.appendChild(el('span', 'text-muted small ml-2', '(ほか ' + (xs.length - 1) + ' 件)'));
+      if (animate) td.style.visibility = 'hidden';
+      tr.appendChild(td); body.appendChild(tr);
+      return { tr: tr, judge: worst, td: td };
+    });
+    var when = meta && meta.at ? new Date(meta.at).toLocaleString('ja-JP') : '';
+    document.getElementById('sh-health-meta').textContent = (when ? '最後の点検: ' + when : '') + (meta && meta.interval_hours ? ' / 次の点検: ' + meta.interval_hours + ' 時間ごとに自分で' : '');
+    if (animate) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      trs.forEach(function (t, i) { setTimeout(function () { t.tr.classList.add('in'); t.tr.children[1].textContent = t.judge[1]; t.td.style.visibility = ''; }, 600 + i * 700); });
+    }
+  }
 
   function renderReport(r) {
     reportEl.textContent = '';
@@ -242,7 +288,16 @@
             // 報告の前に、報告に書かれた「公開を止めることは選ばなかった」判断を出す
             // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
             var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
-            var finish = function () { showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good'); renderReport(r); badge.textContent = '実際の動作(記録の早送り)・終わり'; reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+            var finish = function () {
+              renderReport(r); badge.textContent = '実際の動作(記録の早送り)・終わり';
+              if (r.findings && r.findings.some(function (x) { return x.category; })) {
+                showBand('お店の健康診断: 項目ごとに、効く手を打った', 'good');
+                renderHealth(r, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, true);
+              } else {
+                showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good');
+                reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            };
             if (notStop) { showBand('お知らせにある「公開を止める」は選ばなかった(お店は開けたまま)', 'good'); setTimeout(finish, 2600); } else finish();
             return;
           }
@@ -265,7 +320,7 @@
         shown = d.steps.length;
         stepsEl.scrollTop = stepsEl.scrollHeight;
         if (d.status === 'running') { timer = setTimeout(function () { poll(runId); }, 2500); }
-        else { renderReport(d.report); timer = setTimeout(watchNew, 10000); }
+        else { renderReport(d.report); renderHealth(d.report, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, false); timer = setTimeout(watchNew, 10000); }
       })
       .catch(function () { timer = setTimeout(function () { poll(runId); }, 5000); });
   }
