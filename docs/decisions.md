@@ -39,3 +39,6 @@
 - **デモ用サーバーに無害な仕込みを入れる**(`demo-servers/common/plant-demo.sh`)。本体の 1 ファイルに特定のクエリで見出しを 1 つ足すだけの行、公開ディレクトリに ok と出すだけの PHP。照らし合わせが見つけられるかを確かめるため
 - **鍵は使う人それぞれのもの(BYOK)**。OSS なので、店の人や制作会社が自分の API キーで自分の API を動かす。調べた結果の使い回し(版・部品・通知ごとに 7 日)は、その API の中だけの控えで、ほかの人とは共有しない。費用は点検ごとに API の記録に残すが、管理画面には出さない
 - **鍵が漏れても API を呼び放題にさせない**。1 回の点検の費用の上限(`SH_RUN_BUDGET_USD`、既定 $6。超えたら報告を出して終える)、店ごとの 24 時間の回数と費用の上限(`SH_SHOP_DAILY_RUNS` 6 回、`SH_SHOP_DAILY_USD` $15)。漏れた鍵で使えるのはその店の枠だけ
+- **環境変数で FastCGI に PHP の設定を渡す書き方は断る**(点検の中で見つかった)。ロリポップ風の点検で、Agent が `.htaccess` の `SetEnv PHP_VALUE` / `PHP_ADMIN_VALUE` を使い、FPM でも `.htaccess` から PHP の設定を変えた。受け口の決まりは `php_value` の行しか見ていなかったので、`SetEnv PHP_ADMIN_VALUE "auto_prepend_file=…"` が素通りしていた(鍵が漏れたときにアップロードされたファイルを PHP として読ませる道になる)。`php_value` / `php_flag` の命令以外で PHP_VALUE / PHP_ADMIN_VALUE を含む行は、書き方を問わず断る
+- **ロリポップ風のデモ用サーバーでは、PHP_VALUE / PHP_ADMIN_VALUE を FPM に渡さない**。httpd の既定では `.htaccess` の `SetEnv` がそのまま FastCGI の値として FPM に渡り、利用者が管理者向けの設定まで変えられてしまう。共用のレンタルサーバーはこれを渡さないので、`ProxyFCGISetEnvIf "true" !PHP_VALUE` などで消して本物に合わせた。なお FPM は、一度受け取ったこの値を worker が持ち越すので、直したあとは FPM の再起動が要った
+- **受け口のテストでは、受け口が確かめに開く先を 2 つ目の `php -S` にする**。PHP 7.4 の `php -S` は、複数の worker が試験的で、自分自身への呼び出しで時間切れになることがあった(受け口は正しく戻していた)

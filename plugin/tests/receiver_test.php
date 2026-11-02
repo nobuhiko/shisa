@@ -10,6 +10,9 @@ $root = $work . '/root';
 $outside = $work . '/outside';
 $port = 18000 + (getmypid() % 1000);
 $base = "http://127.0.0.1:$port";
+// 受け口が「店を開いて確かめる」先は、同じ店を出す 2 つ目のサーバー(PHP 7.4 の php -S は自分自身への呼び出しで詰まることがあるため)
+$vport = $port + 1000;
+$vbase = "http://127.0.0.1:$vport";
 $secret = bin2hex(random_bytes(32));
 $shop = 'shp_test0001';
 
@@ -18,7 +21,7 @@ $shop = 'shp_test0001';
 @mkdir($root . '/html/sub', 0777, true);
 copy($receiver, $root . '/self-harden.php');
 file_put_contents($root . '/var/self-harden/config.php', "<?php exit; ?>\n" . json_encode([
-    'shop_id' => $shop, 'secret' => $secret, 'self_base' => $base, 'api_base' => 'http://api.invalid',
+    'shop_id' => $shop, 'secret' => $secret, 'self_base' => $vbase, 'api_base' => 'http://api.invalid',
 ]));
 file_put_contents($root . '/.env', "APP_ENV=prod\nDATABASE_URL=sqlite:///secret/path.db\nECCUBE_AUTH_MAGIC=abcdefghijk\n");
 file_put_contents($root . '/index.php', "<?php echo 'shop';");
@@ -37,12 +40,15 @@ symlink($outside, $root . '/linkdir');
 
 $srv = proc_open(['php', '-S', "127.0.0.1:$port", '-t', $root, __DIR__ . '/router.php'],
     [0 => ['pipe', 'r'], 1 => ['file', $work . '/server.log', 'a'], 2 => ['file', $work . '/server.log', 'a']], $pipes);
-register_shutdown_function(function () use ($srv, $work) {
+$vsrv = proc_open(['php', '-S', "127.0.0.1:$vport", '-t', $root, __DIR__ . '/router.php'],
+    [0 => ['pipe', 'r'], 1 => ['file', $work . '/server.log', 'a'], 2 => ['file', $work . '/server.log', 'a']], $vpipes);
+register_shutdown_function(function () use ($srv, $vsrv, $work) {
     proc_terminate($srv);
+    proc_terminate($vsrv);
     exec('rm -rf ' . escapeshellarg($work));
 });
 for ($i = 0; $i < 50; $i++) {
-    if (@file_get_contents($base . '/self-harden.php') !== false) {
+    if (@file_get_contents($base . '/self-harden.php') !== false && @file_get_contents($vbase . '/self-harden.php') !== false) {
         break;
     }
     usleep(100000);
@@ -221,6 +227,12 @@ $bad_contents = [
     ['root/.user.ini', "[PATH=/var/www]\nmemory_limit=1G\n"],
     ['root/.user.ini', "opcache.file_cache=/var/www/html\n"],
     ['lab/.user.ini', "extension=/tmp/evil.so\n"],
+    ['root/.htaccess', "SetEnv PHP_ADMIN_VALUE \"auto_prepend_file=/var/www/html/html/upload/x.jpg\"\n"],
+    ['root/.htaccess', "SetEnv PHP_VALUE \"session.upload_progress.enabled=0\"\n"],
+    ['root/.htaccess', "SetEnvIf Request_URI . PHP_VALUE=auto_prepend_file=/tmp/x\n"],
+    ['root/.htaccess', "SetEnvIfNoCase Host .* php_admin_value=open_basedir=none\n"],
+    ['root/.htaccess', "RewriteEngine On\nRewriteRule .* - [E=PHP_VALUE:auto_append_file=/tmp/x]\n"],
+    ['root/.htaccess', "<IfModule mod_proxy_fcgi.c>\nSetEnv PHP_ADMIN_VALUE \"disable_functions=\"\n</IfModule>\n"],
     ['root/.htaccess', "a\0b"],
     ['root/.htaccess', str_repeat('#', 70000)],
 ];

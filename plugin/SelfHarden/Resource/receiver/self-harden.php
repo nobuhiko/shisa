@@ -352,6 +352,11 @@ function sh_check_content($kind, $content, $existing = '')
         }
         if ($kind === 'htaccess') {
             $l = preg_replace('/^<[^>]*>\s*/', '', $l); // 1 行に書いたブロックの開始を外す
+            // FastCGI に PHP の設定を渡す環境変数(PHP_VALUE / PHP_ADMIN_VALUE)は、どの書き方でも書かせない。
+            // SetEnv・SetEnvIf・RewriteRule の E= などから FPM に渡ると、php_value の決まりを素通りしてしまう
+            if (preg_match('/php_(admin_)?value|php_(admin_)?flag/', $l) && !preg_match('/^php_(value|flag)\s/', $l)) {
+                throw new ShError('forbidden_directive', 'PHP_VALUE / PHP_ADMIN_VALUE を環境変数などで渡す書き方は受け口からは書けません');
+            }
             if (preg_match('/^(php_admin_value|php_admin_flag)\b/', $l)) {
                 throw new ShError('forbidden_directive', 'php_admin_* は書けません');
             }

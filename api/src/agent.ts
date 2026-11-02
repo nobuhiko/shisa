@@ -113,6 +113,8 @@ export function summarize(name: string, content: string, isError?: boolean): str
     }
     case "restore":
       return errOf(d) ?? "戻した";
+    case "check_packages":
+      return d.error ? `失敗: ${d.error}` : `${d.checked_packages} 個の部品のうち ${d.affected_count} 件に公表済みの弱点`;
     case "compare_with_official":
       return d.error ? `失敗: ${d.error}` : `公式 ${d.official.version} と比べた: 違う ${d.modified.count} 件、公式に無い ${d.added.count} 件、無い ${d.missing.count} 件${d.intended?.count ? `、当てた修正 ${d.intended.count} 件` : ""}`;
     case "diff_with_official":

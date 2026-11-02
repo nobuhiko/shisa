@@ -29,6 +29,7 @@ Agent が自分で調べて手を選ぶところを見せるための舞台で�
 | cron | なし | なし | なし |
 | `.htaccess` の `php_value memory_limit 77M` | 200、77M になる | **500** | 効く / 500 |
 | `.htaccess` の `php_flag short_open_tag Off` | 200、0 になる | **500** | 効く / 500 |
+| `.htaccess` の `SetEnv PHP_VALUE` / `PHP_ADMIN_VALUE` | (mod_php では FastCGI を使わない) | 渡らない(httpd の `ProxyFCGISetEnvIf` で消す) | 渡らない |
 | `.user.ini` の `memory_limit = 88M`(新しいディレクトリ) | 128M のまま(**読まれない**) | 88M になる | 読まれない / 効く |
 | `user_ini.cache_ttl` | 300 | 300 | 既定の 300 |
 | `allow_url_fopen` / curl | 1 / あり | 1 / あり | 使える |
