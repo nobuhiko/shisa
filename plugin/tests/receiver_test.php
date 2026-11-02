@@ -22,6 +22,16 @@ file_put_contents($root . '/var/self-harden/config.php', "<?php exit; ?>\n" . js
 ]));
 file_put_contents($root . '/.env', "APP_ENV=prod\nDATABASE_URL=sqlite:///secret/path.db\nECCUBE_AUTH_MAGIC=abcdefghijk\n");
 file_put_contents($root . '/index.php', "<?php echo 'shop';");
+@mkdir($root . '/src/Eccube/Common', 0777, true);
+file_put_contents($root . '/src/Eccube/Common/Constant.php', "<?php\nnamespace Eccube\\Common;\nclass Constant { const VERSION = '4.2.0'; }\n");
+@mkdir($root . '/vendor/twig/twig/src', 0777, true);
+file_put_contents($root . '/vendor/twig/twig/src/Environment.php', "<?php // tampered\n");
+file_put_contents($root . '/composer.lock', json_encode(['packages' => [
+    ['name' => 'twig/twig', 'version' => 'v2.15.2', 'source' => ['type' => 'git', 'url' => 'https://github.com/twigphp/Twig.git', 'reference' => str_repeat('a', 40)]],
+    ['name' => 'local/nogithub', 'version' => '1.0.0', 'source' => ['type' => 'git', 'url' => 'https://evil.example/x.git', 'reference' => str_repeat('b', 40)]],
+]]));
+@mkdir($root . '/bin', 0777, true);
+file_put_contents($root . '/bin/console', "#!/usr/bin/env php\n");
 file_put_contents($outside . '/target.txt', 'outside');
 symlink($outside, $root . '/linkdir');
 
@@ -152,7 +162,7 @@ check('ping が通る', !empty($r['json']['ok']) && isset($r['json']['result']['
 check('返事に正しい署名が付く', isset($r['headers']['x-sh-signature']) && hash_equals($expect, $r['headers']['x-sh-signature']));
 check('知らない操作は unknown_op', err(call('eval', ['code' => 'phpinfo();'])) === 'unknown_op');
 $r = call('inspect', ['sections' => ['app', 'php']]);
-check('inspect が EC-CUBE なしでも動く', !empty($r['json']['ok']) && $r['json']['result']['app']['eccube_version'] === null);
+check('inspect が EC-CUBE の版を include せずに読む', !empty($r['json']['ok']) && $r['json']['result']['app']['eccube_version'] === '4.2.0');
 $env = $r['json']['result']['app']['env'];
 check('.env の秘密は伏せる', $env['APP_ENV'] === 'prod' && strpos($env['DATABASE_URL'], '<redacted') === 0 && strpos($env['ECCUBE_AUTH_MAGIC'], '<redacted') === 0);
 check('返事に .env の秘密が入らない', strpos($r['body'], 'abcdefghijk') === false && strpos($r['body'], 'secret/path') === false);
@@ -183,7 +193,7 @@ foreach (['../', '/etc', 'html/../../', 'linkdir', 'linkdir/', "html\0"] as $p) 
 $r = call('list_dir', ['path' => '', 'depth' => 1]);
 $names = array_column($r['json']['result']['entries'], 'type', 'name');
 check('一覧ではリンクを辿らない', isset($names['linkdir']) && $names['linkdir'] === 'link' && !isset($names['linkdir/target.txt']));
-foreach (['index.php', '.env', 'self-harden.php', 'var/self-harden/config.php', 'linkdir/target.txt', '../outside/target.txt', '/etc/passwd'] as $p) {
+foreach (['.env', 'self-harden.php', 'var/self-harden/config.php', 'var/self-harden/nonces', 'linkdir/target.txt', '../outside/target.txt', '/etc/passwd', 'bin/console'] as $p) {
     $r = call('read_file', ['path' => $p]);
     check('読めない: ' . $p, isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
 }
@@ -297,6 +307,92 @@ check('小部屋の .user.ini は書ける', !empty($r['json']['ok']));
 file_put_contents($root . '/self-harden-lab/probe.php', '<?php echo "tampered";');
 call('lab_arm');
 check('lab_arm で probe.php が固定の中身に戻る', strpos(file_get_contents($root . '/self-harden-lab/probe.php'), 'tampered') === false);
+
+
+// ---- 公式と照らし合わせる ----
+echo "ファイルの一覧と SHA-256\n";
+$r = call('hash_tree', ['limit' => 2]);
+check('hash_tree は件数の上限で切り、続きの印を返す', !empty($r['json']['ok']) && count($r['json']['result']['files']) === 2 && $r['json']['result']['next_cursor'] !== null, $r['body']);
+$all = [];
+$cursor = '';
+for ($i = 0; $i < 50; $i++) {
+    $r = call('hash_tree', ['limit' => 2, 'cursor' => $cursor]);
+    foreach ($r['json']['result']['files'] as $f) {
+        $all[$f[0]] = $f[1];
+    }
+    if ($r['json']['result']['next_cursor'] === null) {
+        break;
+    }
+    $cursor = $r['json']['result']['next_cursor'];
+}
+check('続きから取ると全部そろう', count($all) === $r['json']['result']['total'] && isset($all['src/Eccube/Common/Constant.php']) && $all['index.php'] === hash_file('sha256', $root . '/index.php'));
+check('一覧に .env・var・受け口自身は出ない', !isset($all['.env']) && !isset($all['self-harden.php']) && !preg_grep('#^var/#', array_keys($all)));
+check('roots に決まり以外は渡せない', err(call('hash_tree', ['roots' => ['../']])) === 'bad_root');
+$r = call('read_file', ['path' => 'src/Eccube/Common/Constant.php']);
+check('本体のファイルは読める', !empty($r['json']['ok']) && strpos($r['json']['result']['content'], '4.2.0') !== false);
+
+echo "公式の中身に戻す\n";
+$bad_official = [
+    ['path' => 'var/self-harden/config.php', 'ref' => '4.2.0'],
+    ['path' => 'self-harden.php', 'ref' => '4.2.0'],
+    ['path' => '.env', 'ref' => '4.2.0'],
+    ['path' => 'composer.lock', 'ref' => '4.2.0'],
+    ['path' => 'bin/console', 'ref' => '4.2.0'],
+    ['path' => '../outside/target.txt', 'ref' => '4.2.0'],
+    ['path' => 'linkdir/target.txt', 'ref' => '4.2.0'],
+    ['path' => 'self-harden-lab/probe.php', 'ref' => '4.2.0'],
+    ['path' => 'index.php', 'ref' => 'main'],
+    ['path' => 'index.php', 'ref' => '4.1.2'],
+    ['path' => 'index.php', 'ref' => '../../evil/repo/main'],
+    ['path' => 'index.php', 'ref' => 'https://evil.example/x.php'],
+    ['path' => 'vendor/twig/twig/src/Environment.php', 'ref' => 'v3.0.0'],
+    ['path' => 'vendor/twig/twig/src/Environment.php', 'ref' => 'v2.15.1'],
+    ['path' => 'vendor/local/nogithub/x.php', 'ref' => str_repeat('b', 40)],
+    ['path' => 'vendor/unknown/pkg/x.php', 'ref' => 'v1.0.0'],
+];
+foreach ($bad_official as $b) {
+    $r = call('restore_official', $b);
+    check('断る: ' . $b['path'] . ' @ ' . $b['ref'], isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+check('断ったあと、受け口も鍵も変わっていない', file_get_contents($root . '/self-harden.php') === file_get_contents($receiver) && strpos(file_get_contents($root . '/var/self-harden/config.php'), $secret) !== false);
+check('API から URL や中身は渡せない(渡しても使わない)', err(call('restore_official', ['path' => 'index.php', 'ref' => '4.2.0', 'url' => 'https://evil.example/x', 'content' => '<?php evil();', 'expected_sha256' => str_repeat('0', 64)])) === 'official_mismatch');
+check('取ってきた中身が違えば書かない', file_get_contents($root . '/index.php') === "<?php echo 'shop';");
+$r = call('restore_official', ['path' => 'index.php', 'ref' => '4.2.0', 'verify' => ['paths' => ['/self-harden.php']]]);
+check('公式(GitHub の EC-CUBE 4.2.0)から取ってきて戻せる', !empty($r['json']['ok']) && strpos($r['json']['result']['source'], 'https://raw.githubusercontent.com/EC-CUBE/ec-cube/4.2.0/index.php') === 0
+    && strpos(file_get_contents($root . '/index.php'), 'Kernel') !== false, $r['body']);
+$r = call('restore', ['backup_id' => $r['json']['result']['backup_id']]);
+check('公式に戻したものも退避から戻せる', !empty($r['json']['ok']) && file_get_contents($root . '/index.php') === "<?php echo 'shop';", $r['body']);
+
+echo "隔離\n";
+file_put_contents($root . '/html/sub/odd.php', "<?php echo 'odd';");
+foreach (['self-harden.php', 'var/self-harden/config.php', '.env', 'linkdir/target.txt', '../outside/target.txt', 'html/sub', 'composer.lock'] as $p) {
+    $r = call('quarantine', ['path' => $p]);
+    check('隔離できない: ' . $p, isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+$r = call('quarantine', ['path' => 'html/sub/odd.php', 'verify' => ['paths' => ['/']]]);
+$qid = isset($r['json']['result']['quarantine_id']) ? $r['json']['result']['quarantine_id'] : null;
+check('不審なファイルを隔離できる', !empty($r['json']['ok']) && !file_exists($root . '/html/sub/odd.php') && is_file($root . '/var/self-harden/quarantine/' . $qid . '.q'), $r['body']);
+$r = call('list_quarantine');
+check('隔離の一覧に出る', !empty($r['json']['ok']) && $r['json']['result']['quarantine'][0]['rel'] === 'html/sub/odd.php');
+file_put_contents($root . '/html/sub/odd.php', 'new');
+check('元の場所に別のファイルがあれば戻さない', err(call('release_quarantine', ['quarantine_id' => $qid])) === 'conflict');
+unlink($root . '/html/sub/odd.php');
+$r = call('release_quarantine', ['quarantine_id' => $qid]);
+check('隔離から元の場所に戻せる', !empty($r['json']['ok']) && file_get_contents($root . '/html/sub/odd.php') === "<?php echo 'odd';", $r['body']);
+check('変な quarantine_id は断る', err(call('release_quarantine', ['quarantine_id' => '../../x'])) === 'bad_quarantine');
+file_put_contents($root . '/var/self-harden/quarantine/20990101000000-deadbeef.json', json_encode(['rel' => 'self-harden.php']));
+file_put_contents($root . '/var/self-harden/quarantine/20990101000000-deadbeef.q', '<?php evil();');
+check('隔離の記録に書かれた戻し先が決まりの外なら戻さない', err(call('release_quarantine', ['quarantine_id' => '20990101000000-deadbeef'])) === 'bad_target'
+    && file_get_contents($root . '/self-harden.php') === file_get_contents($receiver));
+
+echo "記録\n";
+$r = call('audit_tail', ['lines' => 500]);
+$entries = isset($r['json']['result']['entries']) ? $r['json']['result']['entries'] : [];
+$ops = array_column($entries, 'op');
+check('署名が通った操作が 1 行ずつ残る', !empty($r['json']['ok']) && in_array('write_file', $ops, true) && in_array('quarantine', $ops, true) && in_array('restore_official', $ops, true));
+$log = file_get_contents($root . '/var/self-harden/audit.log');
+check('記録に鍵や中身は書かない', strpos($log, $secret) === false && strpos($log, 'BREAK-ME') === false && strpos($log, 'auto_prepend') === false);
+check('署名が通らなかった呼び出しは記録しない(知らない操作は記録する)', strpos($log, '"op":"eval"') !== false && substr_count($log, '"op":"ping"') < 10);
 
 // ---- 受け口に危ない関数が無いこと ----
 echo "受け口のコード\n";
