@@ -2,7 +2,7 @@
 name: self-harden-demo
 
 x-trusted: &trusted
-  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$'
+  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$,^server-d$$'
   PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:
@@ -12,6 +12,14 @@ services:
       context: .
       dockerfile: common/Dockerfile.php
       args: { BASE: "php:8.1.10-apache" }
+    profiles: ["build-only"]
+
+  php-apache74-base:
+    image: self-harden/php-apache:7.4
+    build:
+      context: .
+      dockerfile: common/Dockerfile.php
+      args: { BASE: "php:7.4-apache" }
     profiles: ["build-only"]
 
   php-fpm-base:
@@ -59,10 +67,22 @@ services:
     volumes: ["server-c-docroot:/var/www/html"]
     networks: [self-harden]
 
+  server-d:
+    build: { context: ., dockerfile: server-d/Dockerfile }
+    image: self-harden/server-d:dev
+    hostname: server-d
+    environment:
+      <<: *trusted
+      PLANT_DEMO: "0"
+    ports: ["127.0.0.1:8084:80"]
+    volumes: ["server-d-docroot:/var/www/html"]
+    networks: [self-harden]
+
 volumes:
   server-a-docroot:
   server-b-docroot:
   server-c-docroot:
+  server-d-docroot:
 
 networks:
   self-harden:

@@ -3,7 +3,7 @@
 #   ./connect-plugin.sh server-a|server-b|server-c
 set -eu
 cd "$(dirname "$0")"
-case "$1" in server-a) P=8081;; server-b) P=8082;; server-c) P=8083;; *) echo "server-a|server-b|server-c"; exit 1;; esac
+case "$1" in server-a) P=8081;; server-b) P=8082;; server-c) P=8083;; server-d) P=8084;; *) echo "server-a|server-b|server-c|server-d"; exit 1;; esac
 B=http://127.0.0.1:$P
 mkdir -p .cache/curl && J=.cache/curl/$1.jar && rm -f "$J"
 t=$(curl -s -c "$J" -b "$J" "$B/admin/login" | grep -o 'name="_csrf_token" value="[^"]*"' | sed 's/.*value="//;s/"//')
