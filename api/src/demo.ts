@@ -110,6 +110,14 @@ const PAGE = String.raw`<!doctype html>
   .story p.last { font-size: clamp(28px, 5vh, 52px); font-weight: 800; color: #fbbf24; margin-top: 1.5vh; }
   .story p.in { opacity: 1; transform: none; }
   .story p.past { color: #94a3b8; }
+  .story p { word-break: auto-phrase; }
+  .story .notice-card { align-self: flex-start; max-width: 70vw; background: #f8fafc; color: #1f2933; border-left: 6px solid #c62828; border-radius: 6px; padding: 2vh 2vw; display: flex; flex-direction: column; gap: 1vh; opacity: 0; transform: translateY(8px); transition: opacity .8s, transform .8s; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+  .story .notice-card small { font-size: clamp(13px, 1.9vh, 18px); color: #6b7280; }
+  .story .notice-card b { font-size: clamp(18px, 3vh, 32px); line-height: 1.45; word-break: auto-phrase; }
+  .story .notice-card.in { opacity: 1; transform: none; }
+  .story .notice-card.past { opacity: .75; }
+  .opening { flex: 1; display: grid; place-items: center; }
+  .opening b { font-size: clamp(32px, 6vh, 64px); color: #fff; letter-spacing: .02em; opacity: 0; transition: opacity .8s; } .opening b.in { opacity: 1; }
   body.bare header { visibility: hidden; }
   .namecard { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vh; padding: 0 8vw; text-align: center; }
   .namecard b { font-size: clamp(44px, 10vh, 110px); color: #fff; letter-spacing: .04em; opacity: 0; transition: opacity 1s; }
@@ -207,7 +215,7 @@ const PAGE = String.raw`<!doctype html>
   .card ul { list-style: none; padding: 0; margin: 0; }
   .card li { font-size: 22px; line-height: 1.45; padding: 6px 0; }
   .card li small { display: block; font-size: 15px; color: var(--muted); }
-</style><script>if (/[?&]scene=(story|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
+</style><script>if (/[?&]scene=(story|O|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
 <header><h1 id="title">self-harden</h1><span class="badge">実際の動作(記録の早送り)</span><span class="adv" id="adv"></span></header>
 <div class="controls" id="controls"></div>
 <main id="main"></main>
@@ -477,12 +485,23 @@ const PAGE = String.raw`<!doctype html>
     return holdFor(2600 * 6 + 3000);
   };
 
+  // 冒頭: 応募先の名前
+  scenes.O = function () {
+    layout(1); badge(false); document.body.classList.add('bare');
+    var d = el('div', 'opening'); main.appendChild(d);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var o = st.opening || {}; var b = el('b', null, o.title || ''); d.appendChild(b);
+      setTimeout(function () { b.classList.add('in'); }, 50);
+      return holdFor((o.hold || 2.5) * 1000).then(function () { b.classList.remove('in'); return holdFor(700); });
+    });
+  };
+
   // 起: 暗い背景に、本人が書いた文を 1 行ずつ
   scenes.K = function () {
     layout(1); badge(false);
     document.body.classList.add('bare'); var d = el('div', 'story'); main.appendChild(d);
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
-      var lines = (st.lines || []).map(function (x) { var p = el('p', x.last ? 'last' : null); x.text.split(/(EC-CUBE)/).forEach(function (t) { p.appendChild(t === 'EC-CUBE' ? el('span', 'nw', t) : document.createTextNode(t)); }); d.appendChild(p); return { p: p, ms: (x.hold || 3) * 1000 }; });
+      var lines = (st.lines || []).map(function (x) { if (x.notice) { var nb = el('div', 'notice-card'); nb.appendChild(el('small', null, x.label || 'お知らせ')); nb.appendChild(el('b', null, x.text)); d.appendChild(nb); return { p: nb, ms: (x.hold || 3) * 1000 }; } var p = el('p', x.last ? 'last' : null); x.text.split(/(EC-CUBE)/).forEach(function (t) { p.appendChild(t === 'EC-CUBE' ? el('span', 'nw', t) : document.createTextNode(t)); }); d.appendChild(p); return { p: p, ms: (x.hold || 3) * 1000 }; });
       if (st.source) { var src = el('small', 'src', st.source); d.appendChild(src); lines[0] && (lines[0].src = src); }
       return lines.reduce(function (pr, x) { return pr.then(function () { lines.forEach(function (y) { if (y.p.classList.contains('in')) y.p.classList.add('past'); }); x.p.classList.add('in'); if (x.src) x.src.classList.add('in'); return holdFor(x.ms); }); }, Promise.resolve());
     });
@@ -698,7 +717,8 @@ const PAGE = String.raw`<!doctype html>
     var id = q('run'), t0 = Date.now(), times = [];
     function step(name, f) { var s0 = Date.now(); return f().then(function () { times.push(name + ' ' + Math.round((Date.now() - s0) / 1000) + '秒'); }); }
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
-      return step('起', scenes.K)
+      return step('冒頭', scenes.O)
+        .then(function () { return step('起', scenes.K); })
         .then(function () { return step('名前', scenes.N); })
         .then(function () { return step('導入', scenes.I); })
         .then(function () { return step('承・転', function () { return scenes.S([id], { turn: st.turn }); }); })
@@ -742,7 +762,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['story', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['story', 'O', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -771,7 +791,7 @@ const PAGE = String.raw`<!doctype html>
     if (k === 'all') all();
     else if (k === 'story') story();
     else if (k === 'Z') scenes.Z(ids);
-    else if (k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'O' || k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
