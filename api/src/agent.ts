@@ -11,29 +11,86 @@ const MAX_TURNS = Number(process.env.SH_MAX_TURNS ?? 80);
 
 const TOOLS = [...CLIENT_TOOLS, ...SERVER_TOOLS];
 
-export function newRun(runId: string, shop: Shop, advisoryUrl: string | null): Run {
+const TRIGGER_TITLE = { connect: "店とつながったので、最初の点検を始めた", schedule: "決まった時刻になったので、点検を始めた", manual: "店の人の依頼で点検を始めた", advisory: "" };
+
+export function newRun(runId: string, shop: Shop, advisoryUrl: string | null, trigger: Run["trigger"]): Run {
   const now = Date.now();
   return {
     run_id: runId,
     shop_id: shop.shop_id,
     status: "running",
+    trigger: advisoryUrl ? "advisory" : trigger,
     advisory_url: advisoryUrl,
     created_at: now,
     updated_at: now,
     wake_at: 0,
     turns: 0,
     messages: [{ role: "user", content: firstUserMessage(advisoryUrl, shop.shop_url) }],
-    steps: [{ at: now, kind: "info", title: advisoryUrl ? `通知の URL を受け取った: ${advisoryUrl}` : "点検を始めた" }],
+    steps: [{ at: now, kind: "info", title: advisoryUrl ? `通知の URL を受け取った: ${advisoryUrl}` : TRIGGER_TITLE[trigger] }],
     usage: { input: 0, output: 0, cache_read: 0 },
   };
 }
 
-function push(run: Run, kind: Step["kind"], title: string, detail?: string) {
-  run.steps.push({ at: Date.now(), kind, title, detail: detail?.slice(0, 4000) });
+function push(run: Run, kind: Step["kind"], title: string, detail?: string, result?: string) {
+  run.steps.push({ at: Date.now(), kind, title, result, detail: detail?.slice(0, 4000) });
 }
 
 function short(s: string, n = 600) {
   return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+// 道具の結果を店の人が読める 1 行にする
+export function summarize(name: string, content: string, isError?: boolean): string {
+  let d: any;
+  try { d = JSON.parse(content); } catch { return isError ? "失敗" : ""; }
+  const errOf = (x: any) => (x && x.ok === false ? `失敗: ${x.detail ?? x.error}` : null);
+  const iniPick = (ini: Record<string, unknown> | undefined) => {
+    if (!ini) return "";
+    const ks = Object.keys(ini);
+    return ks.length <= 6 ? ks.map((k) => `${k}=${ini[k] === "" ? "(空)" : ini[k]}`).join("、") : `${ks.length} 個の設定`;
+  };
+  switch (name) {
+    case "inspect": {
+      if (errOf(d)) return errOf(d)!;
+      const r = d.result ?? {};
+      const parts = [];
+      if (r.php) parts.push(`PHP ${r.php.version}(${r.php.sapi})`);
+      if (r.app?.eccube_version) parts.push(`EC-CUBE ${r.app.eccube_version}`);
+      if (r.app?.packages) parts.push(`部品 ${r.app.packages.length} 個`);
+      if (r.ini) parts.push(`設定 ${Object.keys(r.ini).length} 個`);
+      if (r.extensions) parts.push(`拡張 ${Object.keys(r.extensions).length} 個`);
+      return parts.join("、") || "読めた";
+    }
+    case "list_dir":
+      return errOf(d) ?? `${d.result?.entries?.length ?? 0} 件`;
+    case "read_file":
+      return errOf(d) ?? (d.result?.exists === false ? "ファイルは無い" : `${d.result?.size ?? 0} バイト`);
+    case "http_get":
+      return d.error ? `失敗: ${d.error}` : `HTTP ${d.status}${d.status >= 200 && d.status < 300 ? "(見える)" : d.status === 403 || d.status === 404 ? "(見えない)" : ""}`;
+    case "lab_test":
+    case "probe_lab": {
+      if (d.write && d.write.ok === false) return `書けなかった: ${d.write.detail ?? d.write.error}`;
+      const p = d.probe ?? d;
+      if (p.error) return errOf(p.error) ?? "失敗";
+      return `小部屋: HTTP ${p.status}${p.status >= 500 ? "(壊れる)" : ""}${p.ini ? "、" + iniPick(p.ini) : ""}`;
+    }
+    case "write_file": {
+      if (errOf(d)) return errOf(d)!;
+      const r = d.result ?? {};
+      const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
+      return r.rolled_back ? `店が開けなくなったので、同じリクエストの中で戻した(${v})` : `入れた。店を開いて確かめた(${v})`;
+    }
+    case "restore":
+      return errOf(d) ?? "戻した";
+    case "list_backups":
+      return errOf(d) ?? `${d.result?.backups?.length ?? 0} 件`;
+    case "wait":
+      return `${d.waited_seconds} 秒待った`;
+    case "report":
+      return "";
+    default:
+      return isError ? "失敗" : "";
+  }
 }
 
 export async function step(client: Anthropic, store: Store, run: Run, shop: Shop): Promise<Run> {
@@ -130,7 +187,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     } catch (e) {
       out = { content: JSON.stringify({ error: (e as Error).message }), isError: true, title: u.name };
     }
-    push(run, out.isError ? "error" : "tool", out.title, short(out.content));
+    push(run, out.isError ? "error" : "tool", out.title, short(out.content, 3000), summarize(u.name, out.content, out.isError));
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
     if (out.report) {
       run.report = out.report;

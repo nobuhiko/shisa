@@ -4,7 +4,8 @@ import { serve } from "@hono/node-server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createApp } from "./app.js";
 import { FileStore } from "./store.js";
-import { step } from "./agent.js";
+import { step, newRun } from "./agent.js";
+import { randomHex } from "./sign.js";
 
 const store = new FileStore(process.env.SH_DATA_DIR ?? "./data");
 const client = new Anthropic(); // ANTHROPIC_API_KEY は env_file(.env)から入る
@@ -32,6 +33,24 @@ async function drive(runId: string) {
 }
 
 const app = createApp(store, (id) => void drive(id));
+
+// 時計は API が持つ。店には cron も常駐も無いので、決まった間隔で API が自分で点検を始める
+const INTERVAL_MS = Number(process.env.SH_AUTO_INTERVAL_HOURS ?? 24) * 3600_000;
+async function tick() {
+  for (const shop of await store.listShops()) {
+    if (shop.status !== "connected") continue;
+    const runs = await store.listRuns(shop.shop_id);
+    if (runs.some((r) => r.status === "running")) continue;
+    const last = runs[0]?.created_at ?? 0;
+    if (Date.now() - last < INTERVAL_MS) continue;
+    const run = newRun(`run_${randomHex(8)}`, shop, null, "schedule");
+    await store.putRun(run);
+    void drive(run.run_id);
+  }
+}
+// 起動したら、途中だった点検を続きから回す
+for (const r of await store.listRunning()) void drive(r.run_id);
+setInterval(() => void tick().catch((e) => console.error("[tick]", e)), 60_000);
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port }, () => {
   console.log(`self-harden api on :${port} (api key: ${process.env.ANTHROPIC_API_KEY ? "present" : "missing"})`);

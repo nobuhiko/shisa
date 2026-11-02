@@ -1,0 +1,198 @@
+{# SPDX-License-Identifier: GPL-2.0-or-later #}
+{% extends '@admin/default_frame.twig' %}
+
+{% set menus = ['store', 'plugin', 'plugin_list'] %}
+
+{% block title %}self-harden{% endblock %}
+{% block sub_title %}自分で考えて守りを固める{% endblock %}
+
+{% block stylesheet %}
+<style>
+  .sh-steps { list-style: none; padding: 0; margin: 0; max-height: 480px; overflow-y: auto; font-size: 14px; }
+  .sh-steps li { padding: 6px 0; border-bottom: 1px solid #eee; display: flex; gap: 10px; }
+  .sh-steps time { color: #888; flex: none; font-variant-numeric: tabular-nums; }
+  .sh-steps .k-think { color: #333; }
+  .sh-steps .k-tool, .sh-steps .k-result { color: #0b5394; }
+  .sh-steps .k-error { color: #b00020; }
+  .sh-steps .k-report { font-weight: bold; }
+  .sh-steps .res { color: #2e7d32; margin-left: 8px; }
+  .sh-steps .k-error .res { color: #b00020; }
+  .sh-steps details { flex: 1; } .sh-steps summary { cursor: pointer; list-style: none; }
+  .sh-steps summary::-webkit-details-marker { display: none; }
+  .sh-steps pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #f7f7f7; padding: 6px; margin: 4px 0 0; max-height: 240px; overflow: auto; }
+  .sh-report h3 { font-size: 16px; margin-top: 18px; }
+  .sh-report .sev { display: inline-block; min-width: 3.5em; font-size: 12px; padding: 1px 6px; border-radius: 3px; background: #eee; margin-right: 6px; }
+  .sh-report .sev-high { background: #fde0e0; } .sh-report .sev-medium { background: #fff1d6; }
+  .sh-report .summary { white-space: pre-wrap; font-size: 15px; }
+</style>
+{% endblock %}
+
+{% block main %}
+<div class="c-contentsArea__cols">
+  <div class="c-contentsArea__primaryCol">
+    <div class="c-primaryCol">
+
+      <div class="card rounded border-0 mb-4">
+        <div class="card-header"><span>点検</span></div>
+        <div class="card-body">
+          {% if connected %}
+            <p>Agent は決まった間隔で、自分でこのサーバーを調べ、弱いところを見つけて守りを固めます。この画面を開いておくと、その経過と結果がここに流れます。何もしなくて大丈夫です。</p>
+            <p class="mb-1">気になるセキュリティの通知があれば、URL を貼ってください。その通知がこの店に当てはまるかを調べて対応します。</p>
+            <div class="form-row align-items-center">
+              <div class="col-8"><input type="url" id="sh-advisory" class="form-control" placeholder="通知の URL https://..."></div>
+              <div class="col-auto"><button type="button" id="sh-start" class="btn btn-ec-conversion">通知を渡す</button></div>
+              <div class="col-auto"><button type="button" id="sh-now" class="btn btn-ec-regular">今すぐ点検する</button></div>
+            </div>
+            <p id="sh-error" class="text-danger mt-2" hidden></p>
+          {% else %}
+            <p>まだ API とつながっていません。下の「API とつなぐ」から始めてください。</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card rounded border-0 mb-4" id="sh-progress-card" hidden>
+        <div class="card-header"><span>経過</span> <span id="sh-status" class="ml-2 text-muted"></span></div>
+        <div class="card-body">
+          <ul class="sh-steps" id="sh-steps"></ul>
+          <div class="sh-report" id="sh-report" hidden></div>
+        </div>
+      </div>
+
+      {% if runs|length > 0 %}
+      <div class="card rounded border-0 mb-4">
+        <div class="card-header"><span>これまでの点検</span></div>
+        <div class="card-body">
+          <ul class="list-unstyled mb-0">
+          {% for r in runs %}
+            <li><a href="#" class="sh-open" data-run="{{ r.run_id }}">{{ (r.created_at // 1000)|date("Y-m-d H:i") }}</a>
+              {{ r.status == 'done' ? '完了' : (r.status == 'running' ? '実行中' : '失敗') }}
+              {% if r.advisory_url %}<span class="text-muted">({{ r.advisory_url }})</span>{% endif %}</li>
+          {% endfor %}
+          </ul>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="card rounded border-0 mb-4">
+        <div class="card-header"><span>API とつなぐ</span></div>
+        <div class="card-body">
+          {% if connected %}<p>つながっています。店の ID: <code>{{ shop_id }}</code>。つなぎ直すと鍵を新しくします。</p>{% endif %}
+          <form method="post" action="{{ url('self_harden_admin_connect') }}">
+            <input type="hidden" name="{{ constant('Eccube\\Common\\Constant::TOKEN_NAME') }}" value="{{ csrf_token(constant('Eccube\\Common\\Constant::TOKEN_NAME')) }}">
+            <div class="form-group row"><label class="col-3 col-form-label">API の URL</label>
+              <div class="col"><input name="api_base" class="form-control" value="{{ api_base }}"></div></div>
+            <div class="form-group row"><label class="col-3 col-form-label">API から見た店の URL</label>
+              <div class="col"><input name="self_base" class="form-control" value="{{ self_base }}"></div></div>
+            <div class="form-group row"><label class="col-3 col-form-label">外から見た店の URL</label>
+              <div class="col"><input name="public_base" class="form-control" value="{{ public_base }}"></div></div>
+            <button type="submit" class="btn btn-ec-regular">{{ connected ? 'つなぎ直す' : 'API とつなぐ' }}</button>
+          </form>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+<script>
+(function () {
+  var token = document.querySelector('meta[name="eccube-csrf-token"]').getAttribute('content');
+  var startUrl = '{{ url('self_harden_admin_run') }}';
+  var runsUrl = '{{ url('self_harden_admin_runs') }}';
+  var current = null;
+  var statusBase = '{{ url('self_harden_admin_config') }}'.replace(/config$/, 'run/');
+  var stepsEl = document.getElementById('sh-steps');
+  var reportEl = document.getElementById('sh-report');
+  var statusEl = document.getElementById('sh-status');
+  var card = document.getElementById('sh-progress-card');
+  var timer = null, shown = 0;
+  var labels = { running: '実行中…', done: '完了', failed: '止まりました' };
+  var sevLabels = { high: '高', medium: '中', low: '低', info: '情報' };
+  var stLabels = { fixed: '直した', mitigated: '守りを入れた', needs_human: '人の作業が必要', not_affected: '当てはまらない' };
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function renderReport(r) {
+    reportEl.textContent = '';
+    if (!r) return;
+    reportEl.hidden = false;
+    reportEl.appendChild(el('h3', null, 'まとめ'));
+    reportEl.appendChild(el('p', 'summary', r.summary));
+    var sections = [
+      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + (stLabels[f.status] || f.status) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
+      ['したこと', r.actions, function (a) { var li = el('li', null, a.title + ' — ' + a.target); li.appendChild(el('div', 'text-muted small', '確かめ方: ' + a.verified + (a.backup_id ? '(退避: ' + a.backup_id + ')' : ''))); return li; }],
+      ['まだ残っていること', r.remaining, function (x) { var li = el('li', null, x.title + '(' + x.who + ')'); li.appendChild(el('div', 'text-muted small', x.why)); return li; }],
+      ['参考にした情報', r.sources, function (s) { var li = el('li'); var a = el('a', null, s.title); if (/^https?:\/\//.test(s.url)) { a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; } li.appendChild(a); return li; }]
+    ];
+    sections.forEach(function (s) {
+      if (!s[1] || !s[1].length) return;
+      reportEl.appendChild(el('h3', null, s[0]));
+      var ul = el('ul');
+      s[1].forEach(function (x) { ul.appendChild(s[2](x)); });
+      reportEl.appendChild(ul);
+    });
+  }
+
+  function poll(runId) {
+    fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
+        statusEl.textContent = labels[d.status] || d.status;
+        d.steps.slice(shown).forEach(function (s) {
+          var li = el('li', 'k-' + s.kind);
+          li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
+          var body = s.detail ? el('details') : el('span');
+          var head = s.detail ? el('summary') : body;
+          head.appendChild(el('span', null, s.title));
+          if (s.result) head.appendChild(el('span', 'res', '→ ' + s.result));
+          if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
+          li.appendChild(body);
+          stepsEl.appendChild(li);
+        });
+        shown = d.steps.length;
+        stepsEl.scrollTop = stepsEl.scrollHeight;
+        if (d.status === 'running') { timer = setTimeout(function () { poll(runId); }, 2500); }
+        else { renderReport(d.report); timer = setTimeout(watchNew, 10000); }
+      })
+      .catch(function () { timer = setTimeout(function () { poll(runId); }, 5000); });
+  }
+
+  function open(runId) {
+    clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
+    poll(runId);
+  }
+
+  // 画面を開いたら最新の点検を出す。API が新しい点検を始めたら、それに切り替えて流す
+  function watchNew() {
+    fetch(runsUrl, { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var latest = d.ok && d.runs && d.runs[0];
+        if (latest && latest.run_id !== current) open(latest.run_id);
+        else timer = setTimeout(watchNew, 10000);
+      })
+      .catch(function () { timer = setTimeout(watchNew, 15000); });
+  }
+
+  function begin(btn, advisory) {
+    var err = document.getElementById('sh-error'); err.hidden = true;
+    if (advisory === '') { err.textContent = '通知の URL を貼ってください'; err.hidden = false; return; }
+    btn.disabled = true;
+    var body = new URLSearchParams({ advisory_url: advisory || '', _token: token });
+    fetch(startUrl, { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { btn.disabled = false; if (d.ok) open(d.run_id); else { err.textContent = d.error || d.detail || '始められませんでした'; err.hidden = false; } })
+      .catch(function () { btn.disabled = false; err.textContent = '始められませんでした'; err.hidden = false; });
+  }
+  var start = document.getElementById('sh-start');
+  if (start) start.addEventListener('click', function () { begin(start, document.getElementById('sh-advisory').value.trim()); });
+  var now = document.getElementById('sh-now');
+  if (now) now.addEventListener('click', function () { begin(now, null); });
+  {% if connected %}watchNew();{% endif %}
+  document.querySelectorAll('.sh-open').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); open(a.getAttribute('data-run')); }); });
+})();
+</script>
+{% endblock %}

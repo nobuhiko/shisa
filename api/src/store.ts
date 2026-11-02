@@ -17,6 +17,7 @@ export interface Step {
   at: number;
   kind: "think" | "tool" | "result" | "error" | "report" | "info";
   title: string;
+  result?: string; // 結果の 1 行(店の人向け)
   detail?: string;
 }
 
@@ -24,6 +25,7 @@ export interface Run {
   run_id: string;
   shop_id: string;
   status: "running" | "done" | "failed";
+  trigger: "connect" | "schedule" | "manual" | "advisory";
   advisory_url: string | null;
   created_at: number;
   updated_at: number;
@@ -38,6 +40,8 @@ export interface Run {
 export interface Store {
   getShop(id: string): Promise<Shop | null>;
   putShop(shop: Shop): Promise<void>;
+  listShops(): Promise<Shop[]>;
+  listRunning(): Promise<Run[]>;
   getRun(id: string): Promise<Run | null>;
   putRun(run: Run): Promise<void>;
   listRuns(shopId: string): Promise<Run[]>;
@@ -70,16 +74,24 @@ export class FileStore implements Store {
   getRun(id: string) { return this.read<Run>("runs", id); }
   putRun(r: Run) { return this.write("runs", r.run_id, r); }
 
-  async listRuns(shopId: string) {
+  private async all<T>(kind: string): Promise<T[]> {
     let files: string[] = [];
-    try { files = await readdir(join(this.dir, "runs")); } catch { return []; }
-    const out: Run[] = [];
+    try { files = await readdir(join(this.dir, kind)); } catch { return []; }
+    const out: T[] = [];
     for (const f of files) {
       if (!f.endsWith(".json")) continue;
-      const r = await this.read<Run>("runs", f.slice(0, -5));
-      if (r && r.shop_id === shopId) out.push(r);
+      const v = await this.read<T>(kind, f.slice(0, -5));
+      if (v) out.push(v);
     }
-    return out.sort((a, b) => b.created_at - a.created_at);
+    return out;
+  }
+
+  listShops() { return this.all<Shop>("shops"); }
+
+  async listRunning() { return (await this.all<Run>("runs")).filter((r) => r.status === "running"); }
+
+  async listRuns(shopId: string) {
+    return (await this.all<Run>("runs")).filter((r) => r.shop_id === shopId).sort((a, b) => b.created_at - a.created_at);
   }
 
   async useNonce(key: string, ttlSec: number) {

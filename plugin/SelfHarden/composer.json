@@ -1,0 +1,10 @@
+{
+  "name": "ec-cube/selfharden",
+  "version": "0.1.0",
+  "description": "self-harden: 自分で考えて守りを固める Agent の受け口",
+  "license": "GPL-2.0-or-later",
+  "authors": [{ "name": "うみうしラボ", "homepage": "https://umiushi-lab.com" }],
+  "type": "eccube-plugin",
+  "require": { "ec-cube/plugin-installer": "^2.0" },
+  "extra": { "code": "SelfHarden" }
+}

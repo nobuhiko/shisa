@@ -199,6 +199,9 @@ $bad_contents = [
     ['root/.htaccess', "<FilesMatch \"\\.txt$\">\nSetHandler application/x-httpd-php\n</FilesMatch>\n"],
     ['root/.htaccess', "<Files x.txt> SetHandler php-script </Files>\n"],
     ['root/.htaccess', "AddHandler cgi-script .txt\nOptions +ExecCGI\n"],
+    ['root/.htaccess', "<FilesMatch x> SetHandler \"proxy:fcgi://127.0.0.1:9000\" </FilesMatch>\n"],
+    ['root/.htaccess', "AddOutputFilter INCLUDES .html\n"],
+    ['root/.htaccess', "Action my-handler /x.cgi\n"],
     ['root/.htaccess', "php_admin_value open_basedir none\n"],
     ['root/.htaccess', "RewriteEngine On\nRewriteRule ^x$ - [H=application/x-httpd-php]\n"],
     ['root/.htaccess', "php_value error_log /var/www/html/x.php\n"],
@@ -217,6 +220,27 @@ foreach ($bad_contents as $i => $bc) {
         in_array(err($r), ['forbidden_directive', 'bad_content'], true), $r['body']);
 }
 check('断ったあと root/.htaccess は作られていない', !file_exists($root . '/.htaccess'));
+
+// PHP と関係のない種類の指定は通す(EC-CUBE がもともと書いている webp の行など)
+$ok_contents = [
+    "AddType image/webp .webp\n",
+    "RewriteEngine On\nRewriteCond %{HTTP_ACCEPT} image/webp\nRewriteRule (.+)\\.(jpe?g|png)$ $1.webp [T=image/webp,E=REQUEST_image]\n",
+    "RemoveHandler .phtml\n",
+];
+foreach ($ok_contents as $i => $oc) {
+    $cur = is_file($root . '/.htaccess') ? hash_file('sha256', $root . '/.htaccess') : null;
+    $r = call('write_file', ['target' => 'root/.htaccess', 'content' => $oc, 'expected_sha256' => $cur]);
+    check('通す ' . $i . ': ' . substr(str_replace("\n", '⏎', $oc), 0, 50), !empty($r['json']['ok']), $r['body']);
+}
+// もともとある行は、決まりに当たっても残せる。新しく足した行は断る
+file_put_contents($root . '/.htaccess', "AddType application/x-httpd-php .php5\n");
+$cur = hash_file('sha256', $root . '/.htaccess');
+$r = call('write_file', ['target' => 'root/.htaccess', 'content' => "AddType application/x-httpd-php .php5\nHeader always set X-Frame-Options SAMEORIGIN\n", 'expected_sha256' => $cur]);
+check('もともとある行は残したまま書ける', !empty($r['json']['ok']), $r['body']);
+$cur = hash_file('sha256', $root . '/.htaccess');
+$r = call('write_file', ['target' => 'root/.htaccess', 'content' => "AddType application/x-httpd-php .php5\nAddType application/x-httpd-php .jpg\n", 'expected_sha256' => $cur]);
+check('同じ種類でも新しく足した行は断る', err($r) === 'forbidden_directive', $r['body']);
+unlink($root . '/.htaccess');
 
 // ---- 退避して書く・戻す ----
 echo "退避と戻し\n";

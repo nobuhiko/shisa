@@ -36,3 +36,23 @@ Agent が自分で調べて手を選ぶところを見せるための舞台で�
 確かめ方: 店の `_check/` の下にディレクトリごとに確認用の PHP と `.htaccess` / `.user.ini` を置き、外から curl で開いて `ini_get` の値と HTTP の状態を見た。終わったら `_check/` は消している。
 
 測っていないこと: 一度読まれたディレクトリの `.user.ini` を書き換えたあと、効くまでにかかる時間。FPM は worker ごとに読んだ結果をためるので、開くたびに結果が変わる。ここは Agent が自分で調べて気づくところなので、この表では答えを書かない。
+
+## API(頭)
+
+- `api/src/agent.ts` の `step()` が 1 歩。Claude を 1 回呼び、出てきた道具を実行して保存する。`api/src/server.ts` が、点検が終わるまで `step()` を回す(`wait` があればその分あけて)
+- 道具(`api/src/tools.ts`): `inspect` `list_dir` `read_file` `write_file` `restore` `list_backups` は受け口の操作そのまま。`http_get` は API から店を外から開く(同じ origin だけ)。`lab_test` / `probe_lab` は小部屋に書いて外から probe を開く。`wait` と `report`。公開の情報は Anthropic の `web_search` / `web_fetch`
+- 鍵: Claude の API キーはリポジトリ直下の `.env`(コミットしない)から docker compose の `env_file` で読む。店には置かない
+
+```sh
+cd demo-servers && docker compose up -d kagoya lolipop-php lolipop
+cd ../api && docker compose up -d --build
+npx tsx scripts/dev-shop.ts connect kagoya      # プラグインの代わりに受け口を置いて登録(開発用)
+npx tsx scripts/dev-shop.ts start kagoya [通知の URL]
+npx tsx scripts/dev-shop.ts watch kagoya <run_id>
+```
+
+## プラグイン(ガワ)
+
+- `plugin/SelfHarden/`(EC-CUBE 4.2、コード `SelfHarden`)。入れると `self-harden.php` を店の直下に置く
+- 管理画面「オーナーズストア → プラグイン → self-harden の設定」: API とつなぐ、点検を始める(通知の URL を貼ってもよい)、経過と報告を見る
+- `plugin/build-zip.sh` で管理画面から入れられる zip、`demo-servers/install-plugin.sh` でデモの店に直接入れる

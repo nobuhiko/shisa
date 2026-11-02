@@ -315,16 +315,32 @@ function sh_ini_key_forbidden($key)
     return strpos($key, 'opcache.') === 0 || strpos($key, 'phar.') === 0;
 }
 
-function sh_check_content($kind, $content)
+// 行の継続をつなぎ、小文字にして、空行とコメントを除いた行の一覧にする
+function sh_content_lines($content)
+{
+    $out = [];
+    $text = preg_replace("/\\\\\r?\n/", ' ', (string) $content);
+    foreach (preg_split("/\r\n|\r|\n/", $text) as $line) {
+        $l = strtolower(preg_replace('/\s+/', ' ', trim($line)));
+        if ($l !== '' && $l[0] !== '#' && $l[0] !== ';') {
+            $out[] = $l;
+        }
+    }
+    return $out;
+}
+
+// PHP や CGI として動かす・サーバー側で取り込む、に当たる言葉
+const SH_EXEC_WORDS = '/php|phtml|phar|cgi|fcgi|proxy:|x-httpd|server-parsed|includes|script/';
+
+// $existing は今のファイルの中身。もともとある行(店の人や EC-CUBE が書いたもの)はそのまま残せるように、決まりは新しく足す行にだけ当てる
+function sh_check_content($kind, $content, $existing = '')
 {
     if (!is_string($content) || strlen($content) > SH_MAX_WRITE || strpos($content, "\0") !== false) {
         throw new ShError('bad_content', '中身は 64KB までの文字列にしてください');
     }
-    // 行の継続をつないでから 1 行ずつ見る
-    $text = preg_replace("/\\\\\r?\n/", ' ', $content);
-    foreach (preg_split("/\r\n|\r|\n/", $text) as $line) {
-        $l = strtolower(trim($line));
-        if ($l === '' || $l[0] === '#' || $l[0] === ';') {
+    $keep = array_flip(sh_content_lines($existing));
+    foreach (sh_content_lines($content) as $l) {
+        if (isset($keep[$l])) {
             continue;
         }
         if ($kind === 'htaccess') {
@@ -335,14 +351,20 @@ function sh_check_content($kind, $content)
             if (preg_match('/^(php_value|php_flag)\s+("?[^\s"]+"?)/', $l, $m) && sh_ini_key_forbidden($m[2])) {
                 throw new ShError('forbidden_directive', $m[2] . ' は受け口からは書けません');
             }
-            if (preg_match('/^(sethandler|addhandler|removehandler|addtype|removetype|forcetype|action|addoutputfilter|setoutputfilter|addinputfilter|setinputfilter|addoutputfilterbytype|scriptalias|scriptaliasmatch)\b/', $l, $m)) {
+            if (preg_match('/^(action|scriptalias|scriptaliasmatch)\b/', $l, $m)) {
                 throw new ShError('forbidden_directive', $m[1] . ' は受け口からは書けません');
+            }
+            // 種類やハンドラの指定は、PHP や CGI として動かすものだけを断る(画像の種類の指定などは通す)
+            if (preg_match('/^(sethandler|addhandler|addtype|forcetype|addoutputfilter|setoutputfilter|addinputfilter|setinputfilter|addoutputfilterbytype)\b/', $l, $m)
+                && preg_match(SH_EXEC_WORDS, substr($l, strlen($m[1])))) {
+                throw new ShError('forbidden_directive', $m[1] . ' で PHP や CGI として動かす指定は受け口からは書けません');
             }
             if (preg_match('/^options\b.*\b(execcgi|includes)\b/', $l)) {
                 throw new ShError('forbidden_directive', 'Options の ExecCGI / Includes は書けません');
             }
-            if (preg_match('/^rewriterule\b.*\[[^\]]*\b(h|handler|t|type)\s*=/', $l)) {
-                throw new ShError('forbidden_directive', 'RewriteRule の handler / type の指定は書けません');
+            if (preg_match('/^rewriterule\b.*\[([^\]]*)\]/', $l, $m) && preg_match('/\b(h|handler|t|type)\s*=\s*([^,\]]*)/', $m[1], $f)
+                && ($f[1] === 'h' || $f[1] === 'handler' || preg_match(SH_EXEC_WORDS, $f[2]))) {
+                throw new ShError('forbidden_directive', 'RewriteRule で PHP や CGI として動かす指定は書けません');
             }
         } else {
             if ($l[0] === '[') {
@@ -633,7 +655,7 @@ function op_write_file(array $cfg, array $args)
     list($rel, $abs) = sh_resolve_target($target);
     $kind = substr($rel, -9) === '.htaccess' ? 'htaccess' : 'userini';
     $content = isset($args['content']) ? $args['content'] : null;
-    sh_check_content($kind, $content);
+    sh_check_content($kind, $content, is_file($abs) ? (string) @file_get_contents($abs) : '');
 
     $lock = @fopen(sh_var('lock'), 'c');
     if ($lock) {
