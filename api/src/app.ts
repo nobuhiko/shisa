@@ -5,16 +5,21 @@ import { verifyRequest, randomHex, NONCE_TTL_SEC } from "./sign.js";
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store } from "./store.js";
+import { dailyQuotaExceeded, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
   // 店ごとに同時に回す点検は 1 つだけ
-  async function startRun(shop: Shop, advisoryUrl: string | null, trigger: "connect" | "manual") {
-    const running = (await store.listRuns(shop.shop_id)).find((r) => r.status === "running");
+  async function startRun(shop: Shop, advisoryUrl: string | null, trigger: "connect" | "manual"): Promise<string | { refused: string }> {
+    const runs = await store.listRuns(shop.shop_id);
+    const running = runs.find((r) => r.status === "running");
     if (running) {
       // 同じ店で 2 つの点検が同時に書き換えないように、通知は動いている点検に渡す
       if (advisoryUrl) await store.addInbox(running.run_id, advisoryUrl);
       return running.run_id;
     }
+    // 鍵が漏れても呼び放題にさせない: 店ごとの 1 日の回数と費用の上限
+    const over = dailyQuotaExceeded(runs);
+    if (over) return { refused: over };
     const run = newRun(`run_${randomHex(8)}`, shop, advisoryUrl, trigger);
     await store.putRun(run);
     kick(run.run_id);
@@ -56,7 +61,8 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     shop.status = ping.ok ? "connected" : "error";
     await store.putShop(shop);
     // つながったら、押されるのを待たずに最初の点検を始める
-    const runId = ping.ok ? await startRun(shop, null, "connect") : null;
+    const started = ping.ok ? await startRun(shop, null, "connect") : null;
+    const runId = typeof started === "string" ? started : null;
     return c.json({ ok: ping.ok, shop_id: shopId, status: shop.status, run_id: runId, ping: ping.ok ? ping.result : ping });
   });
 
@@ -68,7 +74,9 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     try { req = body ? JSON.parse(body) : {}; } catch { return c.json({ ok: false, error: "bad_request" }, 400); }
     const adv = req.advisory_url;
     if (adv != null && (typeof adv !== "string" || !/^https?:\/\/[^\s]{1,2000}$/.test(adv))) return c.json({ ok: false, error: "bad_advisory_url" }, 400);
-    return c.json({ ok: true, run_id: await startRun(shop, adv ?? null, "manual") });
+    const started = await startRun(shop, adv ?? null, "manual");
+    if (typeof started !== "string") return c.json({ ok: false, error: "quota", detail: started.refused }, 429);
+    return c.json({ ok: true, run_id: started });
   });
 
   app.get("/v1/shops/:id/runs/:run_id", async (c) => {
@@ -76,14 +84,14 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     if (!shop) return unauthorized(c);
     const run = await store.getRun(c.req.param("run_id"));
     if (!run || run.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
-    return c.json({ ok: true, run_id: run.run_id, status: run.status, trigger: run.trigger, advisory_url: run.advisory_url, steps: run.steps, report: run.report ?? null, usage: run.usage });
+    return c.json({ ok: true, run_id: run.run_id, status: run.status, trigger: run.trigger, advisory_url: run.advisory_url, steps: run.steps, report: run.report ?? null, usage: { ...run.usage, usd: Number(usd(run.usage).toFixed(2)) } });
   });
 
   app.get("/v1/shops/:id/runs", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");
     if (!shop) return unauthorized(c);
     const runs = await store.listRuns(shop.shop_id);
-    return c.json({ ok: true, runs: runs.slice(0, 20).map((r) => ({ run_id: r.run_id, status: r.status, trigger: r.trigger, advisory_url: r.advisory_url, created_at: r.created_at })) });
+    return c.json({ ok: true, runs: runs.slice(0, 20).map((r) => ({ run_id: r.run_id, status: r.status, trigger: r.trigger, advisory_url: r.advisory_url, created_at: r.created_at, usd: Number(usd(r.usage).toFixed(2)) })) });
   });
 
   return app;

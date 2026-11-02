@@ -35,7 +35,8 @@ export interface Run {
   messages: unknown[];
   steps: Step[];
   report?: unknown;
-  usage: { input: number; output: number; cache_read: number; cache_write?: number };
+  usage: { input: number; output: number; cache_read: number; cache_write?: number; web_searches?: number; haiku_input?: number; haiku_output?: number; usd?: number };
+  budget_hit?: boolean;
 }
 
 export interface Store {

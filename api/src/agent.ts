@@ -5,6 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT, firstUserMessage, advisoryNote } from "./prompt.js";
 import { CLIENT_TOOLS, SERVER_TOOLS, runTool } from "./tools.js";
 import type { Run, Shop, Step, Store } from "./store.js";
+import { usd, LIMITS } from "./cost.js";
 
 export const MODEL = process.env.SH_MODEL ?? "claude-opus-5-5";
 const MAX_TURNS = Number(process.env.SH_MAX_TURNS ?? 80);
@@ -39,7 +40,7 @@ const KANA = /[\u3040-\u30ff]/;
 const HAIKU = process.env.SH_TRANSLATE_MODEL ?? "claude-haiku-5-5";
 
 // 店の人に出す一言に、かなが無ければ(英語などになっていたら)日本語にしてから出す
-export async function toJapanese(client: Anthropic, text: string): Promise<string> {
+export async function toJapanese(client: Anthropic, text: string, run?: Run): Promise<string> {
   if (!text || KANA.test(text)) return text;
   try {
     const r = await client.messages.create({
@@ -47,6 +48,10 @@ export async function toJapanese(client: Anthropic, text: string): Promise<strin
       max_tokens: 1024,
       messages: [{ role: "user", content: `次の文を、ネットショップの店主向けの自然な日本語にしてください。訳文だけを出してください。\n\n${text}` }],
     });
+    if (run && r.usage) {
+      run.usage.haiku_input = (run.usage.haiku_input ?? 0) + r.usage.input_tokens;
+      run.usage.haiku_output = (run.usage.haiku_output ?? 0) + r.usage.output_tokens;
+    }
     const out = r.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
     return out || text;
   } catch {
@@ -142,6 +147,21 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     return run;
   }
   run.turns++;
+  run.usage.usd = usd(run.usage);
+  if (run.usage.usd >= LIMITS.run_usd && !run.budget_hit) {
+    // 上限に達したら、それ以上は調べずに報告を出してもらう
+    run.budget_hit = true;
+    push(run, "info", `この点検の費用が上限($${LIMITS.run_usd})に達したので、報告をまとめて終える`);
+    const last = run.messages.at(-1) as any;
+    const note = { type: "text", text: "この点検の費用の上限に達しました。これ以上調べたり変更したりせず、ここまでの結果で report を呼んで終えてください。" };
+    if (last?.role === "user" && Array.isArray(last.content)) last.content.push(note);
+    else run.messages.push({ role: "user", content: [note] });
+  } else if (run.budget_hit && run.usage.usd >= LIMITS.run_usd * 1.2) {
+    run.status = "failed";
+    push(run, "error", "費用の上限を超えたので止めた");
+    await store.putRun(run);
+    return run;
+  }
 
   let msg: Anthropic.Beta.BetaMessage;
   try {
@@ -176,12 +196,14 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   run.usage.output += msg.usage.output_tokens;
   run.usage.cache_read += msg.usage.cache_read_input_tokens ?? 0;
   run.usage.cache_write = (run.usage.cache_write ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
+  run.usage.web_searches = (run.usage.web_searches ?? 0) + (msg.usage.server_tool_use?.web_search_requests ?? 0);
+  run.usage.usd = usd(run.usage);
   run.messages.push({ role: "assistant", content: msg.content });
 
   // 経過に出す: 道具を呼ばない発言(最後の言葉など)と、調べものの様子。道具を呼ぶときの一言は note で出す
   const callsTools = msg.content.some((b) => b.type === "tool_use");
   for (const b of msg.content) {
-    if (b.type === "text" && b.text.trim() && !callsTools) push(run, "think", await toJapanese(client, short(b.text.trim(), 1000)));
+    if (b.type === "text" && b.text.trim() && !callsTools) push(run, "think", await toJapanese(client, short(b.text.trim(), 1000), run));
     if (b.type === "server_tool_use" && (b.name === "web_search" || b.name === "web_fetch")) {
       const q = (b.input as any)?.query ?? (b.input as any)?.url ?? "";
       if (q) push(run, "tool", b.name === "web_search" ? `公開の情報を探す: ${q}` : `公開の情報を読む: ${q}`);
@@ -229,7 +251,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     } catch (e) {
       out = { content: JSON.stringify({ error: (e as Error).message }), isError: true, title: u.name };
     }
-    const note = typeof (u.input as any)?.note === "string" && (u.input as any).note.trim() ? await toJapanese(client, (u.input as any).note.trim()) : out.title;
+    const note = typeof (u.input as any)?.note === "string" && (u.input as any).note.trim() ? await toJapanese(client, (u.input as any).note.trim(), run) : out.title;
     push(run, out.isError ? "error" : "tool", note, short(out.content, 3000), summarize(u.name, out.content, out.isError), out.title);
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
     if (out.report) {
