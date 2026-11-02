@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.zip
+.wrangler/
+api/data/
+demo-servers/**/data/
+demo-servers/**/src/
+.DS_Store
