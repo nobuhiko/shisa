@@ -8,8 +8,9 @@ one() {
   docker exec "$C" rm -rf /var/www/html/app/Plugin/SelfHarden
   docker cp ../plugin/SelfHarden "$C:/var/www/html/app/Plugin/SelfHarden"
   docker exec "$C" chown -R www-data:www-data /var/www/html/app/Plugin/SelfHarden
-  # CLI には Web 用の制約を読ませない(docs/design.md)
-  docker exec -u www-data -e PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d "$C" sh -c 'cd /var/www/html && C="php -d memory_limit=-1 bin/console" && ($C eccube:plugin:install --code=SelfHarden || true) && ($C eccube:plugin:enable --code=SelfHarden || true) && $C cache:clear'
+  # CLI には Web 用の制約を読ませない(docs/design.md)。
+  # 入れた直後の 1 回目の有効化では管理画面の経路が読まれないことがあるので、有効化を 2 回流す(何度流しても同じ)
+  docker exec -u www-data -e PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d "$C" sh -c 'cd /var/www/html && C="php -d memory_limit=-1 bin/console" && ($C eccube:plugin:install --code=SelfHarden || true) && ($C eccube:plugin:enable --code=SelfHarden || true) && $C eccube:plugin:enable --code=SelfHarden'
   echo "[$1] SelfHarden を入れた"
 }
 if [ "$1" = all ]; then one kagoya; one lolipop; else one "$1"; fi

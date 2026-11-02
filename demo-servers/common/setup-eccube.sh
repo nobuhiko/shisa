@@ -37,4 +37,6 @@ TRUSTED_HOSTS=$TRUSTED_HOSTS
 ENV
 php bin/console cache:clear --no-warmup >/dev/null
 chown -R www-data:www-data "$DOCROOT"
+# 照らし合わせを確かめるための無害な仕込み(docs/design.md)
+[ "${PLANT_DEMO:-1}" = 1 ] && plant-demo
 echo "[setup] 完了"

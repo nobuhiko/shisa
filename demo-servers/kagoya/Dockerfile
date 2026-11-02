@@ -6,6 +6,7 @@ RUN set -eux; \
     echo 'export PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d:/usr/local/etc/php/web.d' >> /etc/apache2/envvars
 COPY common/web-limits.ini /usr/local/etc/php/web.d/zz-web-limits.ini
 COPY common/setup-eccube.sh /usr/local/bin/setup-eccube
+COPY common/plant-demo.sh /usr/local/bin/plant-demo
 COPY kagoya/entrypoint.sh /usr/local/bin/kagoya-entrypoint
 ENTRYPOINT ["kagoya-entrypoint"]
 CMD ["apache2-foreground"]
