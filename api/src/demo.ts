@@ -44,7 +44,7 @@ const PAGE = String.raw`<!doctype html>
   .col { background: var(--card); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; flex-direction: column; min-height: 0; }
   .col h2 { margin: 0; padding: 12px 16px; font-size: 17px; border-bottom: 1px solid #eef0f3; }
   .col h2 small { color: var(--muted); font-weight: normal; margin-left: 8px; font-size: 13px; }
-  ul { list-style: none; margin: 0; padding: 0 16px; height: 62vh; overflow-y: auto; }
+  ul { list-style: none; margin: 0; padding: 0 16px; height: 54vh; overflow-y: auto; }
   li { padding: 7px 0; border-bottom: 1px solid #f0f2f5; display: flex; gap: 10px; font-size: 14px; }
   li time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
   li .tool { color: var(--muted); font-size: 12px; margin-left: 6px; }
@@ -53,18 +53,20 @@ const PAGE = String.raw`<!doctype html>
   li.key { animation: flash 2.4s ease-out; } li.key .res { font-weight: 700; }
   @keyframes flash { 0% { background: var(--key); } 100% { background: transparent; } }
   .ff { color: #8a6d00; margin-left: 6px; font-variant-numeric: tabular-nums; }
-  .report { padding: 12px 16px; border-top: 1px solid #eef0f3; font-size: 14px; display: none; }
-  .report h3 { font-size: 14px; margin: 8px 0 4px; }
-  .report p { margin: 0; white-space: pre-wrap; }
-  .report li { display: block; border: 0; padding: 2px 0; }
+  .report { padding: 4px 18px 16px; display: none; height: 62vh; overflow-y: auto; }
+  .report h3 { font-size: 19px; margin: 14px 0 6px; }
+  .report h3.fix { color: var(--ok); } .report h3.ask { color: #b26a00; }
+  .report ul { list-style: none; padding: 0; margin: 0; height: auto; }
+  .report li { display: block; border: 0; padding: 4px 0; font-size: 17px; line-height: 1.45; }
+  .report li small { display: block; color: var(--muted); font-size: 13px; }
   .col { position: relative; }
   .phases { display: flex; gap: 4px; padding: 8px 16px; border-bottom: 1px solid #eef0f3; }
   .phases span { flex: 1; text-align: center; font-size: 12px; padding: 3px 0; border-radius: 4px; background: #f0f2f5; color: var(--muted); transition: all .3s; }
   .phases span.on { background: var(--accent); color: #fff; font-weight: 700; }
   .phases span.done { background: #c5cae9; color: #283593; }
-  .cap { position: absolute; left: 16px; right: 16px; bottom: 16px; background: rgba(31,41,51,.94); color: #fff; border-radius: 10px; padding: 14px 18px;
-         opacity: 0; transform: translateY(10px); transition: opacity .3s, transform .3s; pointer-events: none; }
-  .cap.show { opacity: 1; transform: none; }
+  .cap { margin: 8px 16px 4px; min-height: 84px; background: #1f2933; color: #fff; border-radius: 10px; padding: 12px 18px;
+         opacity: .12; transition: opacity .3s; }
+  .cap.show { opacity: 1; }
   .cap b { display: block; font-size: 22px; line-height: 1.35; }
   .cap small { display: block; margin-top: 4px; font-size: 13px; color: #cbd2d9; }
   .cap.warn b { color: #ffcc80; } .cap.good b { color: #a5d6a7; }
@@ -72,6 +74,7 @@ const PAGE = String.raw`<!doctype html>
   .compare h3 { margin: 0 0 10px; font-size: 18px; }
   .compare .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 17px; }
   .compare .row div b { color: #a5d6a7; }
+  .compare .row div small { display: block; color: #cbd2d9; font-size: 14px; margin-top: 2px; }
   @media (max-width: 800px) { main, .compare .row { grid-template-columns: 1fr; } }
 </style></head><body>
 <header><h1>self-harden — 同じ店のソフト、違うサーバー</h1><span class="badge">記録を早送りで再生</span><span class="adv" id="adv"></span></header>
@@ -81,8 +84,8 @@ const PAGE = String.raw`<!doctype html>
   <button id="go">再生</button>
 </div>
 <main>
-  <section class="col"><h2 id="ha">左</h2><div class="phases" id="pa"></div><ul id="la"></ul><div class="report" id="ra"></div><div class="cap" id="ca"></div></section>
-  <section class="col"><h2 id="hb">右</h2><div class="phases" id="pb"></div><ul id="lb"></ul><div class="report" id="rb"></div><div class="cap" id="cb"></div></section>
+  <section class="col"><h2 id="ha">左</h2><div class="phases" id="pa"></div><div class="cap" id="ca"></div><ul id="la"></ul><div class="report" id="ra"></div></section>
+  <section class="col"><h2 id="hb">右</h2><div class="phases" id="pb"></div><div class="cap" id="cb"></div><ul id="lb"></ul><div class="report" id="rb"></div></section>
 </main>
 <section class="compare" id="cmp"><h3>同じ弱点に、それぞれのサーバーで効く手を選んだ</h3><div class="row"><div id="xa"></div><div id="xb"></div></div></section>
 <script>
@@ -109,20 +112,32 @@ const PAGE = String.raw`<!doctype html>
   function renderPhases(box) { box.textContent = ''; PHASES.forEach(function (p) { box.appendChild(el('span', null, p)); }); }
   function setPhase(box, i) { var xs = box.children; for (var j = 0; j < xs.length; j++) xs[j].className = j < i ? 'done' : j === i ? 'on' : ''; }
 
-  // 見せ場の字幕。記録の中身(道具・結果)から作る。台本は書かない
-  function captionOf(s) {
+  // 見せ場の字幕。記録の中身(道具・版・結果)から作る。台本は書かない
+  function captionOf(s, ctx) {
     var t = s.tool || '', r = s.result || '', m;
     if (/照らし合わせる/.test(t) && (m = /違う (\d+) 件、公式に無い (\d+) 件/.exec(r)) && (m[1] !== '0' || m[2] !== '0'))
       return { cls: 'warn', text: '公式の配布物と照らし合わせ: 書き換え ' + m[1] + ' 件・覚えのないファイル ' + m[2] + ' 件' };
-    if (/公式の中身に戻す/.test(t) && /公式の中身に戻した/.test(r)) return { cls: 'good', text: '書き換えられたファイルを、公式の中身に戻した' };
+    if (/公式の中身に戻す/.test(t) && /公式の中身に戻した/.test(r)) {
+      var ref = (/ @ (\S+)$/.exec(t) || [])[1];
+      // 入っている版と同じ版に戻したら改ざんの戻し、別の版(修正のコミットやタグ)なら修正のファイルを置いた
+      if (ref && ctx.version && ref === ctx.version) return { cls: 'good', text: '書き換えられたファイルを、公式 ' + ref + ' の中身に戻した' };
+      return { cls: 'good', text: '公式の修正のファイルを置いた(' + (ref ? ref.slice(0, 12) : '') + ')' };
+    }
     if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) return { cls: 'good', text: '公式の修正を、全部そろえて当てた' };
+    if (/公式の修正を当てる/.test(t) && /何も置いていない/.test(r)) return { cls: 'warn', text: '公式の修正がそろわないので、1 つも置かずに報告へ' };
     if (/隔離する/.test(t) && /隔離した/.test(r)) return { cls: 'good', text: '覚えのないファイルを隔離した(消さずに)' };
-    if (/部品の弱点/.test(t) && (m = /(\d+) 件/.exec(r))) return { cls: 'warn', text: '部品の弱点を公式の一覧で照らし合わせ' };
-    if (/小部屋/.test(t) && /500|壊れる/.test(r)) return { cls: 'warn', text: '試験場では 500 で壊れる → この方法は本番に入れない' };
-    if (/小部屋で試す/.test(t)) return { cls: '', text: '本番に入れる前に、試験場で効くか試す' };
+    if (/部品の弱点/.test(t) && /件/.test(r)) return { cls: 'warn', text: '部品の弱点を Packagist の公式の一覧で照らし合わせ' };
+    if (/小部屋で試す/.test(t)) {
+      var f = (/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      if (/500|壊れる/.test(r)) return { cls: 'warn', text: '試験場で ' + f + ' を試す → 500 で壊れる。この方法は使わない' };
+      return { cls: '', text: '試験場で ' + f + ' を試す' };
+    }
     if ((m = /^(\d+) 秒待つ/.exec(t)) && Number(m[1]) >= 60) return { cls: '', text: '⏩ ' + Math.round(Number(m[1]) / 60) + ' 分待って、効いたかを確かめる' };
     if (/本番に入れる|公式の中身に戻す|公式の修正を当てる/.test(t) && /戻した/.test(r) && /開けなく/.test(r)) return { cls: 'warn', text: '店が開けなくなったので、同じリクエストの中で戻した' };
-    if (/本番に入れる/.test(t) && /入れた/.test(r)) return { cls: 'good', text: '本番に入れた → 店を開いて確かめた' };
+    if (/本番に入れる/.test(t) && /入れた/.test(r)) {
+      var g = (/root\/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      return { cls: 'good', text: '本番の ' + g + ' に入れた → 店を開いて確かめた' };
+    }
     if (s.kind === 'info' && /通知の URL/.test(s.title)) return { cls: '', text: '店の人が通知の URL を貼った' };
     if (s.kind === 'report') return { cls: 'good', text: '報告を出した' };
     return null;
@@ -134,14 +149,22 @@ const PAGE = String.raw`<!doctype html>
     clearTimeout(box._t); box._t = setTimeout(function () { box.classList.remove('show'); }, ms);
   }
 
-  // どの仕組みで本番に入れたか(記録から数える)
-  function mechanisms(steps) {
-    var out = {};
+  // PHP の設定をどのファイルで入れたか(本番に入れたときの「足した行」の記録から判定する)
+  function mechanism(steps) {
+    var phpIn = {}, other = {}, labHt500 = false;
     steps.forEach(function (s) {
-      if (!/本番に入れる/.test(s.tool || '') || !/入れた/.test(s.result || '')) return;
-      var m = /root\/(\.htaccess|\.user\.ini)/.exec(s.tool); if (m) out[m[1]] = true;
+      var t = s.tool || '';
+      if (/小部屋で試す: \.htaccess/.test(t) && /500|壊れる/.test(s.result || '')) labHt500 = true;
+      if (!/本番に入れる/.test(t) || !/入れた/.test(s.result || '')) return;
+      var f = (/root\/(\.htaccess|\.user\.ini)/.exec(t) || [])[1]; if (!f) return;
+      var added = [];
+      try { added = JSON.parse(s.detail).added_lines || []; } catch (e) { /* 記録が切れていれば分からない */ }
+      if (f === '.user.ini' || added.some(function (l) { return /^php_(value|flag)\b/i.test(l); })) phpIn[f] = true; else other[f] = true;
     });
-    return Object.keys(out);
+    var files = Object.keys(phpIn);
+    if (!files.length) return { main: Object.keys(other).length ? Object.keys(other).join(' と ') + ' で守りを入れた' : '設定ファイルは書かなかった', why: '' };
+    var how = files.map(function (f) { return f === '.htaccess' ? '.htaccess(php_value / php_flag)' : '.user.ini'; }).join(' と ');
+    return { main: 'PHP の設定は ' + how + ' で入れた', why: files.indexOf('.user.ini') >= 0 && labHt500 ? '試験場で .htaccess の php_value が 500 になったため' : '' };
   }
 
   function stepEl(s) {
@@ -153,13 +176,19 @@ const PAGE = String.raw`<!doctype html>
     li.appendChild(b); return li;
   }
 
+  // 最後のまとめ: 直したこと / 人に頼むこと を大きく
   function report(box, r) {
     if (!r) return; box.textContent = ''; box.style.display = 'block';
-    box.appendChild(el('h3', null, 'まとめ')); box.appendChild(el('p', null, r.summary));
-    if (r.actions && r.actions.length) {
-      box.appendChild(el('h3', null, 'したこと')); var ul = el('ul');
-      ul.style.height = 'auto'; ul.style.padding = '0';
-      r.actions.forEach(function (a) { ul.appendChild(el('li', null, '・' + a.title + ' — ' + a.target)); }); box.appendChild(ul);
+    var fixed = (r.findings || []).filter(function (f) { return f.status === 'fixed' || f.status === 'mitigated'; });
+    box.appendChild(el('h3', 'fix', '直したこと'));
+    var ul = el('ul');
+    (fixed.length ? fixed : (r.actions || [])).slice(0, 5).forEach(function (x) { ul.appendChild(el('li', null, '✓ ' + x.title)); });
+    box.appendChild(ul);
+    if (r.remaining && r.remaining.length) {
+      box.appendChild(el('h3', 'ask', '人に頼むこと'));
+      var ul2 = el('ul');
+      r.remaining.slice(0, 3).forEach(function (x) { var li = el('li', null, '→ ' + x.title); li.appendChild(el('small', null, x.who)); ul2.appendChild(li); });
+      box.appendChild(ul2);
     }
   }
 
@@ -183,22 +212,24 @@ const PAGE = String.raw`<!doctype html>
     list.textContent = ''; box.style.display = 'none'; renderPhases(phases); setPhase(phases, 0);
     var host = run.shop.split(':')[0];
     head.textContent = NAMES[host] || run.shop;
-    var steps = compact(run.steps), gaps = [], sum = 0;
+    var steps = compact(run.steps), gaps = [], sum = 0, ctx = { version: null };
+    steps.forEach(function (x) { var m = /EC-CUBE ([0-9][0-9.]*[0-9](-p[0-9]+)?)/.exec(x.result || ''); if (m && !ctx.version) ctx.version = m[1]; });
+    list.style.display = ''; cap.style.display = '';
     for (var i = 0; i < steps.length; i++) {
       var real = i === 0 ? 0 : Math.max(0, (steps[i].at - steps[i - 1].at) / 1000);
       var g = i === 0 ? 0.6 : 0.35 + 1.6 * (1 - Math.exp(-real / 25));
       if (i > 0 && isKey(steps[i - 1])) g += 1.0;
       if (i > 0 && waitSec(steps[i - 1])) g += 2.4;
-      if (i > 0 && captionOf(steps[i - 1])) g += 1.2;
+      if (i > 0 && captionOf(steps[i - 1], ctx)) g += 1.2;
       gaps.push(g); sum += g;
     }
     var k = target / Math.max(sum, 1), idx = 0;
     (function next() {
-      if (idx >= steps.length) { setTimeout(function () { report(box, run.report); setPhase(phases, 6); if (done) done(); }, 800); return; }
+      if (idx >= steps.length) { setTimeout(function () { list.style.display = 'none'; cap.style.display = 'none'; report(box, run.report); setPhase(phases, 6); if (done) done(); }, 1500); return; }
       var s = steps[idx++], li = stepEl(s);
       if (isKey(s)) li.classList.add('key');
       var ph = phaseOf(s); if (ph) setPhase(phases, ph);
-      var c = captionOf(s);
+      var c = captionOf(s, ctx);
       if (c) showCap(cap, c, s.title, Math.max(1800, 2600 * k));
       list.appendChild(li); list.scrollTop = list.scrollHeight;
       var w = waitSec(s);
@@ -229,9 +260,10 @@ const PAGE = String.raw`<!doctype html>
         if (--left) return;
         var names = [document.getElementById('ha').textContent, document.getElementById('hb').textContent];
         [0, 1].forEach(function (i) {
-          var ms = mechanisms(rs[i].steps), box = document.getElementById(i ? 'xb' : 'xa');
+          var m = mechanism(rs[i].steps), box = document.getElementById(i ? 'xb' : 'xa');
           box.textContent = ''; box.appendChild(document.createTextNode(names[i] + ': '));
-          box.appendChild(el('b', null, ms.length ? ms.join(' と ') + ' で守りを入れた' : '設定ファイルは書かなかった'));
+          box.appendChild(el('b', null, m.main));
+          if (m.why) box.appendChild(el('small', null, '(' + m.why + ')'));
         });
         cmp.style.display = 'block'; cmp.scrollIntoView({ behavior: 'smooth' });
       }
