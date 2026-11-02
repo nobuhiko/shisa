@@ -71,11 +71,24 @@ const PAGE = String.raw`<!doctype html>
   .title-card { position: fixed; inset: 0; background: #111827; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 10; text-align: center; padding: 40px; }
   .title-card b { font-size: 44px; line-height: 1.35; }
   .title-card small { font-size: 18px; color: #9ca3af; }
+  /* 説明の場面は暗い背景と大きな字。実際の画面の場面は枠と「実際の動作(早送り)」の印 */
+  body.explain { background: #0f172a; color: #f1f5f9; }
+  body.explain header { background: #0f172a; }
+  body.explain .diagram h2 { color: #fff; }
+  body.explain .chain .row { color: #e2e8f0; } body.explain .chain .row b { color: #fbbf24; }
+  body.explain .chain .last { color: #93c5fd; } body.explain .chain small, body.explain .chain .arrow { color: #64748b; }
+  body.explain .box { background: #1e293b; color: #e2e8f0; box-shadow: none; } body.explain .box h3 { color: #fff; }
+  body.explain .diagram .lead { color: #cbd5e1; }
+  body.explain .ok { color: #4ade80; } body.explain .ng { color: #f87171; }
+  body.real main { outline: 4px solid #3949ab; outline-offset: -2px; border-radius: 8px; margin: 0 12px; }
+  .chain .row { opacity: 0; transform: translateY(6px); transition: opacity .5s, transform .5s; }
+  .chain .row.in, .chain .arrow.in, .chain .last.in { opacity: 1; transform: none; }
+  .chain .arrow, .chain .last { opacity: 0; transition: opacity .5s; }
   /* 前提・説明のカード(図) */
   .diagram { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 28px 48px; }
   .diagram h2 { margin: 0; font-size: 34px; }
   .chain { display: flex; flex-direction: column; gap: 10px; }
-  .chain .row { display: flex; align-items: center; gap: 14px; font-size: 24px; line-height: 1.4; }
+  .chain .row { display: block; font-size: 24px; line-height: 1.5; }
   .chain .arrow { color: var(--muted); font-size: 22px; padding-left: 14px; }
   .chain .row b { color: #b26a00; }
   .chain .last { font-size: 30px; font-weight: 800; color: var(--accent); margin-top: 8px; }
@@ -101,7 +114,7 @@ const PAGE = String.raw`<!doctype html>
   .card li { font-size: 22px; line-height: 1.45; padding: 6px 0; }
   .card li small { display: block; font-size: 15px; color: var(--muted); }
 </style></head><body>
-<header><h1 id="title">self-harden</h1><span class="badge">記録を早送りで再生</span><span class="adv" id="adv"></span></header>
+<header><h1 id="title">self-harden</h1><span class="badge">実際の動作(記録の早送り)</span><span class="adv" id="adv"></span></header>
 <div class="controls" id="controls"></div>
 <main id="main"></main>
 <div class="band" id="band"></div>
@@ -231,7 +244,7 @@ const PAGE = String.raw`<!doctype html>
   }
 
   var main = document.getElementById('main'), band = document.getElementById('band');
-  function layout(n) { var b = document.querySelector('header .badge'); if (b) b.style.visibility = ''; main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
+  function layout(n) { var b = document.querySelector('header .badge'); if (b) b.style.visibility = ''; document.body.classList.remove('explain'); document.body.classList.add('real'); main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
 
   // ---- 場面 ----
   var scenes = {
@@ -332,7 +345,7 @@ const PAGE = String.raw`<!doctype html>
   function holdFor(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
 
   // 前提のカード: なぜ PHP を上げないのか(サーバー会社の名前は出さない)
-  function badge(on) { document.querySelector('header .badge').style.visibility = on ? '' : 'hidden'; }
+  function badge(on) { document.querySelector('header .badge').style.visibility = on ? '' : 'hidden'; document.body.classList.toggle('explain', !on); document.body.classList.toggle('real', on); }
   scenes.P = function () {
     layout(1); badge(false);
     var d = el('div', 'diagram'); main.appendChild(d);
@@ -343,12 +356,16 @@ const PAGE = String.raw`<!doctype html>
       '直すには PHP を修正版に。でも PHP を替えられるのは<b>サーバー会社だけ</b>',
       '修正を当てた会社も、サービスを止めた会社も、「公開の停止を検討して」と<b>店に任せた会社</b>もあった',
       '店が自分で PHP 8.2 以上に上げたくても、<b>EC-CUBE 4.2 が動くのは PHP 7.4〜8.1</b> まで',
-      '先に EC-CUBE を 4.3 に = 開発の案件、プラグインの買い直し。<b>数週間〜数か月</b>、費用も店の負担'
+      'EC-CUBE を上げるのは<b>作り直しに近い大仕事</b>。開発の案件、プラグインの買い直し、数週間〜数か月、費用も店の負担'
     ];
-    rows.forEach(function (r, i) { if (i) c.appendChild(el('div', 'arrow', '↓')); c.appendChild(html('div', 'row', r)); });
-    c.appendChild(el('div', 'last', 'だから、上げるまでのあいだ守るものが要る'));
-    c.appendChild(html('small', null, '出典: EC-CUBE 公式の動作環境 https://doc4.ec-cube.net/quickstart/requirement(4.3 は PHP 8.1〜8.3)'));
-    return holdFor(15000);
+    var els = [];
+    rows.forEach(function (r, i) { if (i) { var a = el('div', 'arrow', '↓'); c.appendChild(a); els.push(a); } var e = html('div', 'row', r); c.appendChild(e); els.push(e); });
+    var last = html('div', 'last', 'つまり、上げたくても上げられない。<br>だから、上げられないまま守るものが要る'); c.appendChild(last); els.push(last);
+    c.appendChild(html('small', null, '出典: EC-CUBE 公式の動作環境 https://doc4.ec-cube.net/quickstart/requirement'));
+    // 行を 1 つずつ出す(ナレーションに合わせる)
+    var k = 0;
+    (function show() { if (k >= els.length) return; els[k].classList.add('in'); if (els[k].classList.contains('row') || els[k].classList.contains('last')) { k++; setTimeout(show, 2600); } else { k++; show(); } })();
+    return holdFor(2600 * 6 + 3000);
   };
 
   // 説明のカード: レンタルサーバーごとに、正しい手が違う

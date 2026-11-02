@@ -228,7 +228,7 @@
   function replay(runId) {
     clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
     statusEl.textContent = '';
-    var badge = el('span', 'sh-replay-badge', '記録を早送りで再生');
+    var badge = el('span', 'sh-replay-badge', '実際の動作(記録の早送り)');
     statusEl.appendChild(badge);
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
@@ -242,7 +242,7 @@
             // 報告の前に、報告に書かれた「公開を止めることは選ばなかった」判断を出す
             // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
             var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
-            var finish = function () { showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good'); renderReport(r); badge.textContent = '記録を早送りで再生(終わり)'; reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+            var finish = function () { showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good'); renderReport(r); badge.textContent = '実際の動作(記録の早送り)・終わり'; reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
             if (notStop) { showBand('お知らせにある「公開を止める」は選ばなかった(お店は開けたまま)', 'good'); setTimeout(finish, 2600); } else finish();
             return;
           }
