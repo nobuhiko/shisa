@@ -97,6 +97,11 @@ const PAGE = String.raw`<!doctype html>
   .story p { margin: 0; font-size: clamp(20px, 3.4vh, 36px); line-height: 1.5; color: #e2e8f0; opacity: 0; transform: translateY(8px); transition: opacity .8s, transform .8s; }
   .story p.last { font-size: clamp(28px, 5vh, 52px); font-weight: 800; color: #fbbf24; margin-top: 1.5vh; }
   .story p.in { opacity: 1; transform: none; }
+  body.bare header { visibility: hidden; }
+  .namecard { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vh; padding: 0 8vw; text-align: center; }
+  .namecard b { font-size: clamp(44px, 10vh, 110px); color: #fff; letter-spacing: .04em; opacity: 0; transition: opacity 1s; }
+  .namecard p { margin: 0; font-size: clamp(20px, 3.6vh, 38px); color: #cbd5e1; opacity: 0; transition: opacity 1s; }
+  .namecard .in { opacity: 1; }
   .story .nw { white-space: nowrap; }
   .story .src { position: fixed; left: 8vw; bottom: 24px; font-size: 15px; color: #64748b; opacity: 0; transition: opacity .8s; }
   .story .src.in { opacity: 1; }
@@ -290,7 +295,7 @@ const PAGE = String.raw`<!doctype html>
   }
 
   var main = document.getElementById('main'), band = document.getElementById('band');
-  function layout(n) { var b = document.querySelector('header .badge'); if (b) b.style.visibility = ''; document.body.classList.remove('explain'); document.body.classList.add('real'); main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
+  function layout(n) { document.body.classList.remove('bare'); var b = document.querySelector('header .badge'); if (b) b.style.visibility = ''; document.body.classList.remove('explain'); document.body.classList.add('real'); main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
 
   // ---- 場面 ----
   var scenes = {
@@ -417,11 +422,25 @@ const PAGE = String.raw`<!doctype html>
   // 起: 暗い背景に、本人が書いた文を 1 行ずつ
   scenes.K = function () {
     layout(1); badge(false);
-    var d = el('div', 'story'); main.appendChild(d);
+    document.body.classList.add('bare'); var d = el('div', 'story'); main.appendChild(d);
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
       var lines = (st.lines || []).map(function (x) { var p = el('p', x.last ? 'last' : null); x.text.split(/(EC-CUBE)/).forEach(function (t) { p.appendChild(t === 'EC-CUBE' ? el('span', 'nw', t) : document.createTextNode(t)); }); d.appendChild(p); return { p: p, ms: (x.hold || 3) * 1000 }; });
       if (st.source) { var src = el('small', 'src', st.source); d.appendChild(src); lines[0] && (lines[0].src = src); }
       return lines.reduce(function (pr, x) { return pr.then(function () { x.p.classList.add('in'); if (x.src) x.src.classList.add('in'); return holdFor(x.ms); }); }, Promise.resolve());
+    });
+  };
+
+  // 名前の 1 枚: 名前と一言(story.json の name)
+  scenes.N = function () {
+    layout(1); badge(false);
+    document.body.classList.add('bare'); var d = el('div', 'namecard'); main.appendChild(d);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var n = st.name || {};
+      var t = el('b', null, n.title || ''); var g = el('p', null, n.tagline || '');
+      d.appendChild(t); d.appendChild(g);
+      setTimeout(function () { t.classList.add('in'); }, 100);
+      setTimeout(function () { g.classList.add('in'); }, 900);
+      return holdFor((n.hold || 5) * 1000);
     });
   };
 
@@ -554,7 +573,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['K', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['K', 'N', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -579,7 +598,7 @@ const PAGE = String.raw`<!doctype html>
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
-    else if (k === 'K' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'K' || k === 'N' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
