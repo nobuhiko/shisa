@@ -5,7 +5,7 @@ import { verifyRequest, randomHex, NONCE_TTL_SEC } from "./sign.js";
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store } from "./store.js";
-import { dailyQuotaExceeded, usd } from "./cost.js";
+import { dailyQuotaExceeded, isFirstRun, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
   // 店ごとに同時に回す点検は 1 つだけ
@@ -20,7 +20,7 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     // 鍵が漏れても呼び放題にさせない: 店ごとの 1 日の回数と費用の上限
     const over = dailyQuotaExceeded(runs);
     if (over) return { refused: over };
-    const run = newRun(`run_${randomHex(8)}`, shop, advisoryUrl, trigger);
+    const run = newRun(`run_${randomHex(8)}`, shop, advisoryUrl, trigger, isFirstRun(runs));
     await store.putRun(run);
     kick(run.run_id);
     return run.run_id;

@@ -16,3 +16,14 @@ describe("費用と上限", () => {
     expect(dailyQuotaExceeded([run(60_000, { output: 1_000_000 })])).toMatch(/費用/);
   });
 });
+
+describe("初回の上限", () => {
+  it("終わった点検が無ければ初回で、上限が高い", async () => {
+    const { isFirstRun, runBudget, LIMITS } = await import("../src/cost.js");
+    expect(isFirstRun([])).toBe(true);
+    expect(isFirstRun([{ status: "failed" }])).toBe(true);
+    expect(isFirstRun([{ status: "done" }])).toBe(false);
+    expect(runBudget({ first: true })).toBe(LIMITS.first_run_usd);
+    expect(runBudget({ first: false })).toBe(LIMITS.run_usd);
+  });
+});

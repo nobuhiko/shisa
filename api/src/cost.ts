@@ -16,6 +16,7 @@ export const PRICE = {
 
 export const LIMITS = {
   run_usd: num("SH_RUN_BUDGET_USD", 6), // 1 回の点検の上限。超えたら報告を出して終える
+  first_run_usd: num("SH_FIRST_RUN_BUDGET_USD", 12), // 初回の点検の上限。初回は全部を診るので高くする。2 回目からは前回との違いだけ
   shop_daily_usd: num("SH_SHOP_DAILY_USD", 15), // 店ごとの 1 日の上限
   shop_daily_runs: num("SH_SHOP_DAILY_RUNS", 6), // 店ごとの 1 日の点検の回数
 };
@@ -36,6 +37,18 @@ export function dailyQuotaExceeded(runs: Run[], now = Date.now()): string | null
   const today = runs.filter((r) => now - r.created_at < 24 * 3600_000);
   if (today.length >= LIMITS.shop_daily_runs) return `この 24 時間の点検が上限(${LIMITS.shop_daily_runs} 回)に達しました`;
   const spent = today.reduce((a, r) => a + usd(r.usage), 0);
-  if (spent >= LIMITS.shop_daily_usd) return `この 24 時間の費用が上限($${LIMITS.shop_daily_usd})に達しました`;
+  // 初回の点検があった日は、その分だけ 1 日の上限を広げる(初回のあとに 1 回は通常の点検ができるように)
+  const cap = LIMITS.shop_daily_usd + (today.some((r) => r.first) ? Math.max(0, LIMITS.first_run_usd - LIMITS.run_usd) : 0);
+  if (spent >= cap) return `この 24 時間の費用が上限($${cap})に達しました`;
   return null;
+}
+
+// この点検の費用の上限。初回(その店で終わった点検がまだ無い)は高い
+export function runBudget(run: Pick<Run, "first">): number {
+  return run.first ? LIMITS.first_run_usd : LIMITS.run_usd;
+}
+
+// その店で、終わった点検がまだ 1 つも無ければ初回
+export function isFirstRun(runs: Pick<Run, "status">[]): boolean {
+  return !runs.some((r) => r.status === "done");
 }

@@ -7,7 +7,7 @@ import { mountDemo } from "./demo.js";
 import { FileStore } from "./store.js";
 import { step, newRun } from "./agent.js";
 import { randomHex } from "./sign.js";
-import { dailyQuotaExceeded } from "./cost.js";
+import { dailyQuotaExceeded, isFirstRun } from "./cost.js";
 
 const store = new FileStore(process.env.SH_DATA_DIR ?? "./data");
 const client = new Anthropic(); // ANTHROPIC_API_KEY は env_file(.env)から入る
@@ -47,7 +47,7 @@ async function tick() {
     const last = runs[0]?.created_at ?? 0;
     if (Date.now() - last < INTERVAL_MS) continue;
     if (dailyQuotaExceeded(runs)) continue;
-    const run = newRun(`run_${randomHex(8)}`, shop, null, "schedule");
+    const run = newRun(`run_${randomHex(8)}`, shop, null, "schedule", isFirstRun(runs));
     await store.putRun(run);
     void drive(run.run_id);
   }

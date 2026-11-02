@@ -37,6 +37,7 @@ export interface Run {
   report?: unknown;
   usage: { input: number; output: number; cache_read: number; cache_write?: number; web_searches?: number; web_fetches?: number; haiku_input?: number; haiku_output?: number; usd?: number };
   budget_hit?: boolean;
+  first?: boolean; // その店の初回の点検(費用の上限が高い)
 }
 
 export interface AppliedFix {

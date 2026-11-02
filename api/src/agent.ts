@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT, firstUserMessage, advisoryNote } from "./prompt.js";
 import { CLIENT_TOOLS, SERVER_TOOLS, runTool } from "./tools.js";
 import type { Run, Shop, Step, Store } from "./store.js";
-import { usd, LIMITS } from "./cost.js";
+import { usd, runBudget } from "./cost.js";
 import { fingerprint } from "./research.js";
 
 // 1 回の点検で使う web_search / web_fetch の合計の上限。超えたら、それ以降は公開の情報を調べる道具を渡さない
@@ -19,7 +19,7 @@ const TOOLS = [...CLIENT_TOOLS, ...SERVER_TOOLS];
 
 const TRIGGER_TITLE = { connect: "店とつながったので、最初の点検を始めた", schedule: "決まった時刻になったので、点検を始めた", manual: "店の人の依頼で点検を始めた", advisory: "" };
 
-export function newRun(runId: string, shop: Shop, advisoryUrl: string | null, trigger: Run["trigger"]): Run {
+export function newRun(runId: string, shop: Shop, advisoryUrl: string | null, trigger: Run["trigger"], first = false): Run {
   const now = Date.now();
   return {
     run_id: runId,
@@ -34,6 +34,7 @@ export function newRun(runId: string, shop: Shop, advisoryUrl: string | null, tr
     messages: [{ role: "user", content: firstUserMessage(advisoryUrl, shop.shop_url) }],
     steps: [{ at: now, kind: "info", title: advisoryUrl ? `通知の URL を受け取った: ${advisoryUrl}` : TRIGGER_TITLE[trigger] }],
     usage: { input: 0, output: 0, cache_read: 0 },
+    first,
   };
 }
 
@@ -166,15 +167,16 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   }
   run.turns++;
   run.usage.usd = usd(run.usage);
-  if (run.usage.usd >= LIMITS.run_usd && !run.budget_hit) {
+  const budget = runBudget(run);
+  if (run.usage.usd >= budget && !run.budget_hit) {
     // 上限に達したら、それ以上は調べずに報告を出してもらう
     run.budget_hit = true;
-    push(run, "info", `この点検の費用が上限($${LIMITS.run_usd})に達したので、報告をまとめて終える`);
+    push(run, "info", `この点検の費用が上限($${budget}${run.first ? "、初回" : ""})に達したので、報告をまとめて終える`);
     const last = run.messages.at(-1) as any;
     const note = { type: "text", text: "この点検の費用の上限に達しました。これ以上調べたり変更したりせず、ここまでの結果で report を呼んで終えてください。" };
     if (last?.role === "user" && Array.isArray(last.content)) last.content.push(note);
     else run.messages.push({ role: "user", content: [note] });
-  } else if (run.budget_hit && run.usage.usd >= LIMITS.run_usd * 1.2) {
+  } else if (run.budget_hit && run.usage.usd >= budget * 1.2) {
     run.status = "failed";
     push(run, "error", "費用の上限を超えたので止めた");
     await store.putRun(run);
