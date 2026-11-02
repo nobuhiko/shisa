@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@types/diff": "^7.0.2"
+  }
+}

@@ -17,6 +17,7 @@ export interface Step {
   at: number;
   kind: "think" | "tool" | "result" | "error" | "report" | "info";
   title: string;
+  tool?: string; // 道具の名前(画面では小さく出す)
   result?: string; // 結果の 1 行(店の人向け)
   detail?: string;
 }
@@ -27,7 +28,6 @@ export interface Run {
   status: "running" | "done" | "failed";
   trigger: "connect" | "schedule" | "manual" | "advisory";
   advisory_url: string | null;
-  pending_advisories?: string[]; // 点検の途中で貼られた通知。次の 1 歩で渡す
   created_at: number;
   updated_at: number;
   wake_at: number;
@@ -46,6 +46,9 @@ export interface Store {
   getRun(id: string): Promise<Run | null>;
   putRun(run: Run): Promise<void>;
   listRuns(shopId: string): Promise<Run[]>;
+  // 点検の途中で貼られた通知の受け箱。点検の記録と分けて持つ(1 歩が古い記録で上書きして消さないように)
+  addInbox(runId: string, url: string): Promise<void>;
+  takeInbox(runId: string): Promise<string[]>;
   // 使った nonce を記録する。既にあれば false
   useNonce(key: string, ttlSec: number): Promise<boolean>;
 }
@@ -93,6 +96,21 @@ export class FileStore implements Store {
 
   async listRuns(shopId: string) {
     return (await this.all<Run>("runs")).filter((r) => r.shop_id === shopId).sort((a, b) => b.created_at - a.created_at);
+  }
+
+  private inbox = new Map<string, string[]>();
+
+  async addInbox(runId: string, url: string) {
+    const list = [...(this.inbox.get(runId) ?? (await this.read<string[]>("inbox", runId)) ?? []), url];
+    this.inbox.set(runId, list);
+    await this.write("inbox", runId, list);
+  }
+
+  async takeInbox(runId: string) {
+    const list = this.inbox.get(runId) ?? (await this.read<string[]>("inbox", runId)) ?? [];
+    this.inbox.set(runId, []);
+    if (list.length) await this.write("inbox", runId, []);
+    return list;
   }
 
   async useNonce(key: string, ttlSec: number) {

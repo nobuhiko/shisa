@@ -499,7 +499,7 @@ function sh_verify(array $cfg, $verify)
     }
     $timeout = isset($verify['timeout_sec']) ? max(1, min(8, (int) $verify['timeout_sec'])) : 8;
     $out = [];
-    foreach (array_slice($verify['paths'], 0, 4) as $p) {
+    foreach (array_slice($verify['paths'], 0, 6) as $p) {
         if (!is_string($p) || strlen($p) > 512 || !preg_match('#^/[A-Za-z0-9._~\-/%?=&]*$#', $p)) {
             throw new ShError('bad_verify', 'verify.paths は / で始まるパスにしてください');
         }

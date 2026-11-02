@@ -16,6 +16,7 @@
   .sh-steps .k-error { color: #b00020; }
   .sh-steps .k-report { font-weight: bold; }
   .sh-steps .res { color: #2e7d32; margin-left: 8px; }
+  .sh-steps .tool { color: #999; font-size: 12px; margin-left: 8px; }
   .sh-steps .k-error .res { color: #b00020; }
   .sh-steps details { flex: 1; } .sh-steps summary { cursor: pointer; list-style: none; }
   .sh-steps summary::-webkit-details-marker { display: none; }
@@ -147,6 +148,7 @@
           var body = s.detail ? el('details') : el('span');
           var head = s.detail ? el('summary') : body;
           head.appendChild(el('span', null, s.title));
+          if (s.tool) head.appendChild(el('span', 'tool', s.tool));
           if (s.result) head.appendChild(el('span', 'res', '→ ' + s.result));
           if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
           li.appendChild(body);

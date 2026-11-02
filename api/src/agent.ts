@@ -31,8 +31,27 @@ export function newRun(runId: string, shop: Shop, advisoryUrl: string | null, tr
   };
 }
 
-function push(run: Run, kind: Step["kind"], title: string, detail?: string, result?: string) {
-  run.steps.push({ at: Date.now(), kind, title, result, detail: detail?.slice(0, 4000) });
+function push(run: Run, kind: Step["kind"], title: string, detail?: string, result?: string, tool?: string) {
+  run.steps.push({ at: Date.now(), kind, title, tool, result, detail: detail?.slice(0, 4000) });
+}
+
+const KANA = /[\u3040-\u30ff]/;
+const HAIKU = process.env.SH_TRANSLATE_MODEL ?? "claude-haiku-5-5";
+
+// 店の人に出す一言に、かなが無ければ(英語などになっていたら)日本語にしてから出す
+export async function toJapanese(client: Anthropic, text: string): Promise<string> {
+  if (!text || KANA.test(text)) return text;
+  try {
+    const r = await client.messages.create({
+      model: HAIKU,
+      max_tokens: 1024,
+      messages: [{ role: "user", content: `次の文を、ネットショップの店主向けの自然な日本語にしてください。訳文だけを出してください。\n\n${text}` }],
+    });
+    const out = r.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+    return out || text;
+  } catch {
+    return text;
+  }
 }
 
 function short(s: string, n = 600) {
@@ -75,13 +94,34 @@ export function summarize(name: string, content: string, isError?: boolean): str
       return `小部屋: HTTP ${p.status}${p.status >= 500 ? "(壊れる)" : ""}${p.ini ? "、" + iniPick(p.ini) : ""}`;
     }
     case "write_file": {
+      if (d.error === "would_remove_lines") return `元の行を ${d.removed_lines.length} 行消すことになるので、書かなかった`;
       if (errOf(d)) return errOf(d)!;
       const r = d.result ?? {};
       const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
-      return r.rolled_back ? `店が開けなくなったので、同じリクエストの中で戻した(${v})` : `入れた。店を開いて確かめた(${v})`;
+      const lines = `${d.added_lines?.length ? `${d.added_lines.length} 行足した` : ""}${d.removed_lines?.length ? `、元の行を ${d.removed_lines.length} 行消した` : ""}`;
+      return r.rolled_back ? `店が開けなくなったので、同じリクエストの中で戻した(${v})` : `入れた${lines ? `(${lines})` : ""}。店を開いて確かめた(${v})`;
     }
     case "restore":
       return errOf(d) ?? "戻した";
+    case "compare_with_official":
+      return d.error ? `失敗: ${d.error}` : `公式 ${d.official.version} と比べた: 違う ${d.modified.count} 件、公式に無い ${d.added.count} 件、無い ${d.missing.count} 件`;
+    case "diff_with_official":
+      return d.error ? `失敗: ${d.error}` : d.official === null ? "公式には無いファイル" : `${(d.diff.match(/^[-+][^-+]/gm) ?? []).length} 行の違い`;
+    case "restore_official": {
+      if (errOf(d)) return errOf(d)!;
+      const r = d.result ?? {};
+      const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
+      return r.rolled_back ? `店が開けなくなったので戻した(${v})` : `公式の中身に戻した。店を開いて確かめた(${v})`;
+    }
+    case "quarantine": {
+      if (errOf(d)) return errOf(d)!;
+      const r = d.result ?? {};
+      return r.released ? "店が開けなくなったので元に戻した" : `隔離した(${r.quarantine_id})`;
+    }
+    case "release_quarantine":
+      return errOf(d) ?? "元の場所に戻した";
+    case "list_quarantine":
+      return errOf(d) ?? `${d.result?.quarantine?.length ?? 0} 件`;
     case "list_backups":
       return errOf(d) ?? `${d.result?.backups?.length ?? 0} 件`;
     case "wait":
@@ -138,9 +178,10 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
   run.usage.cache_write = (run.usage.cache_write ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
   run.messages.push({ role: "assistant", content: msg.content });
 
-  // 経過に出す: Agent の一言、調べものの様子
+  // 経過に出す: 道具を呼ばない発言(最後の言葉など)と、調べものの様子。道具を呼ぶときの一言は note で出す
+  const callsTools = msg.content.some((b) => b.type === "tool_use");
   for (const b of msg.content) {
-    if (b.type === "text" && b.text.trim()) push(run, "think", short(b.text.trim(), 1000));
+    if (b.type === "text" && b.text.trim() && !callsTools) push(run, "think", await toJapanese(client, short(b.text.trim(), 1000)));
     if (b.type === "server_tool_use" && (b.name === "web_search" || b.name === "web_fetch")) {
       const q = (b.input as any)?.query ?? (b.input as any)?.url ?? "";
       if (q) push(run, "tool", b.name === "web_search" ? `公開の情報を探す: ${q}` : `公開の情報を読む: ${q}`);
@@ -188,7 +229,8 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     } catch (e) {
       out = { content: JSON.stringify({ error: (e as Error).message }), isError: true, title: u.name };
     }
-    push(run, out.isError ? "error" : "tool", out.title, short(out.content, 3000), summarize(u.name, out.content, out.isError));
+    const note = typeof (u.input as any)?.note === "string" && (u.input as any).note.trim() ? await toJapanese(client, (u.input as any).note.trim()) : out.title;
+    push(run, out.isError ? "error" : "tool", note, short(out.content, 3000), summarize(u.name, out.content, out.isError), out.title);
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
     if (out.report) {
       run.report = out.report;
@@ -198,11 +240,10 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     results.push({ type: "tool_result", tool_use_id: u.id, content: out.content, is_error: out.isError || undefined });
   }
   const content: Anthropic.Beta.BetaContentBlockParam[] = [...results];
-  for (const url of run.pending_advisories ?? []) {
+  for (const url of await store.takeInbox(run.run_id)) {
     content.push({ type: "text", text: advisoryNote(url) });
     push(run, "info", `通知の URL を受け取った: ${url}`);
   }
-  run.pending_advisories = [];
   run.messages.push({ role: "user", content });
   if (waitSec) run.wake_at = Date.now() + waitSec * 1000;
   await store.putRun(run);
