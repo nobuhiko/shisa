@@ -99,6 +99,14 @@ const PAGE = String.raw`<!doctype html>
   .box p { margin: 8px 0; font-size: 22px; }
   .ok { color: var(--ok); font-weight: 700; } .ng { color: var(--err); font-weight: 700; }
   .diagram .lead { font-size: 24px; text-align: center; color: #374151; }
+  /* 場面 R: 結果の数字 */
+  .result { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 26px; padding: 28px 48px; }
+  .result h2 { margin: 0; font-size: 32px; }
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+  .tile { background: var(--card); border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 22px 28px; }
+  .tile .num { font-size: 52px; font-weight: 800; color: var(--ok); line-height: 1.1; }
+  .tile .label { font-size: 22px; color: #374151; margin-top: 6px; }
+  .tile small { display: block; font-size: 15px; color: var(--muted); margin-top: 6px; }
   /* 場面 D: 見せ場を 1 つずつ大きく */
   .spot { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 20px 60px; text-align: center; }
   .spot .cap { font-size: 40px; font-weight: 800; line-height: 1.3; }
@@ -381,6 +389,32 @@ const PAGE = String.raw`<!doctype html>
     return holdFor(14000);
   };
 
+  // 結果の数字。全部、記録から数える
+  scenes.R = function (ids) {
+    return load(ids[0]).then(function (run) {
+      layout(1); setAdv([run]);
+      var st = run.steps, r = run.report || {};
+      var changes = st.filter(function (s) { return /本番に入れる|公式の中身に戻す|公式の修正を当てる|隔離する|キャッシュを消す/.test(s.tool || '') && /確かめた|隔離した/.test(s.result || ''); });
+      var checks = 0, bad = 0;
+      changes.forEach(function (s) { var m = (s.result || '').match(/ (\d{3})/g) || []; checks += m.length; m.forEach(function (x) { if (Number(x) >= 500) bad++; }); });
+      var rolled = st.some(function (s) { return /開けなく/.test(s.result || ''); });
+      var byAdvisory = st.some(function (s) { return s.kind === 'info' && /通知の URL/.test(s.title); });
+      var fixed = (r.findings || []).filter(function (f) { return f.status === 'fixed'; }).length;
+      var guarded = (r.findings || []).filter(function (f) { return f.status === 'fixed' || f.status === 'mitigated'; }).length;
+      var mins = Math.max(1, Math.round((st[st.length - 1].at - st[0].at) / 60000));
+      var asks = (r.requests || []).length;
+      var box = el('div', 'result'); main.appendChild(box);
+      box.appendChild(el('h2', null, '結果'));
+      var t = el('div', 'tiles'); box.appendChild(t);
+      function tile(num, label, sub) { var e = el('div', 'tile'); e.appendChild(el('div', 'num', num)); e.appendChild(el('div', 'label', label)); if (sub) e.appendChild(el('small', null, sub)); t.appendChild(e); }
+      tile(rolled || bad ? '止まりかけて、すぐ戻した' : '0 分', 'お店を止めた時間', '手を入れるたびにお店を開いて確かめた ' + checks + ' 回、' + (bad ? '異常 ' + bad + ' 回' : '全部 正常'));
+      tile(byAdvisory ? 'URL を貼っただけ' : '何もしていない', '店主の作業', asks ? 'あとは、用意された依頼文 ' + asks + ' 通を送るだけ' : '');
+      tile(guarded + ' 件', '守りを入れた弱点', '(うち直した ' + fixed + ' 件)');
+      tile(mins + ' 分', 'かかった時間', '調べる・試す・入れる・確かめる まで');
+      return holdFor(12000);
+    });
+  };
+
   // ---- 通し再生: A → B → C → D → E。場面の間に台本の字幕を見出しとして出す ----
   function titleCard(text, sub, ms) {
     return new Promise(function (res) {
@@ -397,7 +431,8 @@ const PAGE = String.raw`<!doctype html>
       ['X', [], 'レンタルサーバーごとに、正しい手が違う', ''],
       ['B', [q('sBa'), q('sBb')], '同じ点検を、2 台のサーバーで', '「試す」の段階だけを並べる'],
       ['C', [q('sC')], '入られた跡に気づいて戻す', '改ざんはデモ用に入れたもの'],
-      ['E', [q('sE')], '報告', '直したこと / これから自分でやること / 人へのお願い']
+      ['E', [q('sE')], '報告', '直したこと / これから自分でやること / 人へのお願い'],
+      ['R', [q('sR') || q('sE')], '結果', '']
     ];
     var times = [];
     return plan.reduce(function (p, step) {
@@ -414,7 +449,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'D', 'E'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'D', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');

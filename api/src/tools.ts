@@ -187,7 +187,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "decide",
     description:
-      "Record a decision the shop owner should see, as one plain Japanese sentence in note (for example whether a pasted advisory applies to this shop, whether to keep the shop open, or which mechanism you chose and why). It changes nothing on the shop; it is shown on the admin screen as a decision.",
+      "Record a decision the shop owner should see, as one short plain Japanese sentence in note (about 40 characters; the reason can be short too) (for example whether a pasted advisory applies to this shop, whether to keep the shop open, or which mechanism you chose and why). It changes nothing on the shop; it is shown on the admin screen as a decision.",
     input_schema: obj({ topic: { type: "string", enum: ["advisory_applies", "advisory_not_applicable", "keep_shop_open", "mechanism", "other"] } }, ["topic"]),
   },
   {
