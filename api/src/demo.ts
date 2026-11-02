@@ -261,7 +261,11 @@ const PAGE = String.raw`<!doctype html>
         var items = [];
         rs.forEach(function (run) {
           var ctx = { version: versionOf(run.steps) };
-          run.steps.forEach(function (s) { var c = captionOf(s, ctx); if (c && s.kind !== 'report' && s.kind !== 'info') items.push({ run: run, s: s, c: c }); });
+          // 見せ場の中でも「やったこと」の行だけ(試す・待つ・通知の受け取り・報告は除く)
+          run.steps.forEach(function (s) {
+            var c = captionOf(s, ctx);
+            if (c && s.kind !== 'report' && s.kind !== 'info' && !/小部屋/.test(s.tool || '') && !waitSec(s)) items.push({ run: run, s: s, c: c });
+          });
         });
         var box = el('div', 'spot'); main.appendChild(box);
         var i = 0;
@@ -284,8 +288,9 @@ const PAGE = String.raw`<!doctype html>
         var card = el('div', 'card'); main.appendChild(card);
         var a = el('section'), b = el('section'); card.appendChild(a); card.appendChild(b);
         a.appendChild(el('h3', 'fix', '直したこと'));
-        var fixed = (r.findings || []).filter(function (f) { return f.status === 'fixed' || f.status === 'mitigated'; });
-        var ul = el('ul'); (fixed.length ? fixed : (r.actions || [])).slice(0, 5).forEach(function (x) { ul.appendChild(el('li', null, '✓ ' + x.title)); }); a.appendChild(ul);
+        // 報告の「したこと」(実際にやった手)を出す。無い古い報告だけ、直した・守りを入れた見つけたことで代える
+        var done = (r.actions && r.actions.length) ? r.actions : (r.findings || []).filter(function (f) { return f.status === 'fixed' || f.status === 'mitigated'; });
+        var ul = el('ul'); done.slice(0, 5).forEach(function (x) { ul.appendChild(el('li', null, '✓ ' + x.title)); }); a.appendChild(ul);
         b.appendChild(el('h3', 'next', 'これから自分でやること'));
         var ul2 = el('ul'); (r.next_by_self_harden || []).slice(0, 4).forEach(function (x) { ul2.appendChild(el('li', null, '↻ ' + x.title)); }); b.appendChild(ul2);
         var asks = r.requests || r.remaining || [];
