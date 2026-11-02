@@ -215,7 +215,6 @@ const PAGE = String.raw`<!doctype html>
     }
     if (/公式の修正を当てる/.test(t) && /何も置いていない/.test(r)) return { cls: 'warn', text: '公式の修正がそろわないので、1 つも置かない' };
     if (/隔離する/.test(t) && /隔離した/.test(r)) return { cls: 'good', text: '覚えのないファイルを隔離した(消さずに)' };
-    if (s.kind === 'error' && /受け口からは書けません/.test(r)) return { cls: 'warn', text: '乗っ取りに使える書き方は、お店に置いた窓口が断った' };
     if (/小部屋で試す/.test(t) && /空に|片付け/.test(s.title)) return null;
     if (/小部屋で試す/.test(t)) {
       var f = (/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
@@ -470,8 +469,7 @@ const PAGE = String.raw`<!doctype html>
     { item: 'EC-CUBE(お店のソフト)', pick: function (s) { return /公式の修正を当てる: .*@ 4\./.test(s.tool || ''); } },
     { item: '中の部品(ほかの開発元のプログラム)', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || ''); } },
     { item: '書き換えられた跡', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
-    { item: '外から見えていた情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } },
-    { item: '乗っ取りに使える設定', pick: function (s) { return s.kind === 'error' && /受け口からは書けません/.test(s.result || ''); } }
+    { item: '外から見えていた情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } }
   ];
   scenes.H = function (ids) {
     return Promise.all(ids.map(load)).then(function (rs) {
