@@ -15,7 +15,7 @@ export const MODEL = process.env.SH_MODEL ?? "claude-opus-5-5";
 const MAX_TURNS = Number(process.env.SH_MAX_TURNS ?? 80);
 
 const TOOLS = [...CLIENT_TOOLS, ...SERVER_TOOLS];
-const TOOLS_NO_WEB = [...CLIENT_TOOLS];
+
 
 const TRIGGER_TITLE = { connect: "店とつながったので、最初の点検を始めた", schedule: "決まった時刻になったので、点検を始めた", manual: "店の人の依頼で点検を始めた", advisory: "" };
 
@@ -191,7 +191,8 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
       output_config: { effort: "high" },
       cache_control: { type: "ephemeral" },
       system: SYSTEM_PROMPT,
-      tools: (run.usage.web_searches ?? 0) + (run.usage.web_fetches ?? 0) >= MAX_WEB ? TOOLS_NO_WEB : TOOLS,
+      // 道具の一覧は途中で変えない(web 検索は裏で code_execution を使い、その呼び出しが会話に残るため。キャッシュにも効く)
+      tools: TOOLS,
       messages: run.messages as Anthropic.Beta.BetaMessageParam[],
     });
   } catch (e) {
@@ -289,6 +290,11 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     results.push({ type: "tool_result", tool_use_id: u.id, content: out.content, is_error: out.isError || undefined });
   }
   const content: Anthropic.Beta.BetaContentBlockParam[] = [...results];
+  // 1 回の点検の公開の情報の上限に達したら、一度だけ伝える
+  if (!(run as any).web_cap_noted && (run.usage.web_searches ?? 0) + (run.usage.web_fetches ?? 0) >= MAX_WEB) {
+    (run as any).web_cap_noted = true;
+    content.push({ type: "text", text: "この点検で公開の情報を調べる回数の上限に達しました。これ以上 web_search / web_fetch は使わず、ここまでの情報と保存した調べた結果で進めてください。" });
+  }
   for (const url of await store.takeInbox(run.run_id)) {
     content.push({ type: "text", text: advisoryNote(url) });
     push(run, "info", `通知の URL を受け取った: ${url}`);
