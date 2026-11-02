@@ -96,6 +96,7 @@ const PAGE = String.raw`<!doctype html>
   .title-card small { font-size: 18px; color: #9ca3af; }
   /* 説明の場面は暗い背景と大きな字。実際の画面の場面は枠と「実際の動作(早送り)」の印 */
   body.explain { background: #0f172a; color: #f1f5f9; }
+  html.dark-start { background: #0f172a; } html.dark-start body:not(.real) { background: #0f172a; } html.dark-start body:not(.real) header { visibility: hidden; }
   body.explain header { background: #0f172a; }
   body.explain .diagram h2 { color: #fff; }
   body.explain .chain .row { color: #e2e8f0; } body.explain .chain .row b { color: #fbbf24; }
@@ -104,10 +105,11 @@ const PAGE = String.raw`<!doctype html>
   body.explain .diagram .lead { color: #cbd5e1; }
   body.explain .ok { color: #4ade80; } body.explain .ng { color: #f87171; }
   body.real main { outline: 4px solid #3949ab; outline-offset: -2px; border-radius: 8px; margin: 0 12px; }
-  .story { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 2.4vh; padding: 3vh 8vw 8vh; }
-  .story p { margin: 0; font-size: clamp(20px, 3.4vh, 36px); line-height: 1.5; color: #e2e8f0; opacity: 0; transform: translateY(8px); transition: opacity .8s, transform .8s; }
+  .story { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3.2vh; padding: 3vh 8vw 8vh; }
+  .story p { margin: 0; white-space: pre-line; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif; font-weight: 600; letter-spacing: .03em; font-size: clamp(20px, 3.3vh, 36px); line-height: 1.55; color: #e2e8f0; opacity: 0; transform: translateY(8px); transition: opacity .8s, transform .8s; }
   .story p.last { font-size: clamp(28px, 5vh, 52px); font-weight: 800; color: #fbbf24; margin-top: 1.5vh; }
   .story p.in { opacity: 1; transform: none; }
+  .story p.past { color: #94a3b8; }
   body.bare header { visibility: hidden; }
   .namecard { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vh; padding: 0 8vw; text-align: center; }
   .namecard b { font-size: clamp(44px, 10vh, 110px); color: #fff; letter-spacing: .04em; opacity: 0; transition: opacity 1s; }
@@ -119,6 +121,16 @@ const PAGE = String.raw`<!doctype html>
   .namecard .pair div { display: flex; align-items: baseline; gap: 12px; font-size: clamp(16px, 2.6vh, 28px); color: #e2e8f0; }
   .namecard .pair em { font-style: normal; font-weight: 800; color: #fbbf24; font-size: 1.3em; }
   .namecard img.art.in, .namecard .pair.in { opacity: 1; }
+  .intro { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vh; padding: 0 6vw; text-align: center; }
+  .intro > *, .intro .steps > * { opacity: 0; transition: opacity .8s; } .intro .in { opacity: 1 !important; }
+  .intro h2 { margin: 0; font-size: clamp(30px, 6vh, 64px); color: #fff; }
+  .intro .steps { display: flex; align-items: center; gap: 2vw; opacity: 1; }
+  .intro .step { background: #1e293b; border-radius: 14px; padding: 2.4vh 2vw; display: flex; flex-direction: column; align-items: center; gap: 1vh; min-width: 18vw; }
+  .intro .step em { font-style: normal; font-weight: 800; color: #0f172a; background: #fbbf24; border-radius: 50%; width: 1.8em; height: 1.8em; display: grid; place-items: center; font-size: clamp(16px, 2.6vh, 26px); }
+  .intro .step span { white-space: pre-line; font-size: clamp(18px, 3vh, 30px); color: #e2e8f0; line-height: 1.45; }
+  .intro .arrow { font-size: clamp(24px, 4vh, 40px); color: #64748b; }
+  .intro .lead { margin: 1vh 0 0; font-size: clamp(22px, 4vh, 42px); font-weight: 800; color: #fbbf24; }
+  .intro .sub { margin: 0; font-size: clamp(15px, 2.4vh, 24px); color: #94a3b8; }
   .ending { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; padding: 0 8vw; text-align: center; }
   .ending .vs { display: flex; gap: 6vw; align-items: flex-end; }
   .ending .vs div { display: flex; flex-direction: column; gap: 6px; }
@@ -195,7 +207,7 @@ const PAGE = String.raw`<!doctype html>
   .card ul { list-style: none; padding: 0; margin: 0; }
   .card li { font-size: 22px; line-height: 1.45; padding: 6px 0; }
   .card li small { display: block; font-size: 15px; color: var(--muted); }
-</style></head><body>
+</style><script>if (/[?&]scene=(story|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
 <header><h1 id="title">self-harden</h1><span class="badge">実際の動作(記録の早送り)</span><span class="adv" id="adv"></span></header>
 <div class="controls" id="controls"></div>
 <main id="main"></main>
@@ -472,7 +484,7 @@ const PAGE = String.raw`<!doctype html>
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
       var lines = (st.lines || []).map(function (x) { var p = el('p', x.last ? 'last' : null); x.text.split(/(EC-CUBE)/).forEach(function (t) { p.appendChild(t === 'EC-CUBE' ? el('span', 'nw', t) : document.createTextNode(t)); }); d.appendChild(p); return { p: p, ms: (x.hold || 3) * 1000 }; });
       if (st.source) { var src = el('small', 'src', st.source); d.appendChild(src); lines[0] && (lines[0].src = src); }
-      return lines.reduce(function (pr, x) { return pr.then(function () { x.p.classList.add('in'); if (x.src) x.src.classList.add('in'); return holdFor(x.ms); }); }, Promise.resolve());
+      return lines.reduce(function (pr, x) { return pr.then(function () { lines.forEach(function (y) { if (y.p.classList.contains('in')) y.p.classList.add('past'); }); x.p.classList.add('in'); if (x.src) x.src.classList.add('in'); return holdFor(x.ms); }); }, Promise.resolve());
     });
   };
 
@@ -491,6 +503,25 @@ const PAGE = String.raw`<!doctype html>
       setTimeout(function () { g.classList.add('in'); }, 1200);
       setTimeout(function () { if (pair) pair.classList.add('in'); }, 2600);
       return holdFor((n.hold || 5) * 1000);
+    });
+  };
+
+  // 導入: 入れるのはプラグインだけ。FTP や管理画面のパスワードは渡さない
+  scenes.I = function () {
+    layout(1); badge(false); document.body.classList.add('bare');
+    var d = el('div', 'intro'); main.appendChild(d);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var n = st.intro || {}, parts = [];
+      var h = el('h2', null, n.title || ''); d.appendChild(h); parts.push(h);
+      var row = el('div', 'steps'); d.appendChild(row);
+      (n.steps || []).forEach(function (t, i) {
+        if (i) { var a = el('div', 'arrow', '→'); row.appendChild(a); parts.push(a); }
+        var b = el('div', 'step'); b.appendChild(el('em', null, String(i + 1))); b.appendChild(el('span', null, t)); row.appendChild(b); parts.push(b);
+      });
+      if (n.lead) { var l = el('p', 'lead', n.lead); d.appendChild(l); parts.push(l); }
+      if (n.sub) { var u = el('p', 'sub', n.sub); d.appendChild(u); parts.push(u); }
+      parts.forEach(function (p, i) { setTimeout(function () { p.classList.add('in'); }, 200 + i * 600); });
+      return holdFor((n.hold || 9) * 1000);
     });
   };
 
@@ -669,6 +700,7 @@ const PAGE = String.raw`<!doctype html>
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
       return step('起', scenes.K)
         .then(function () { return step('名前', scenes.N); })
+        .then(function () { return step('導入', scenes.I); })
         .then(function () { return step('承・転', function () { return scenes.S([id], { turn: st.turn }); }); })
         .then(function () { return step('数字', function () { return scenes.R([id]); }); })
         .then(function () { return step('結', function () { return scenes.Z([id]); }); });
@@ -710,7 +742,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['story', 'K', 'N', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['story', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -739,7 +771,7 @@ const PAGE = String.raw`<!doctype html>
     if (k === 'all') all();
     else if (k === 'story') story();
     else if (k === 'Z') scenes.Z(ids);
-    else if (k === 'K' || k === 'N' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
