@@ -5,7 +5,7 @@
 ```sh
 cd demo-servers
 docker compose --profile build-only build php-apache-base php-fpm-base   # 土台のイメージ(初回だけ)
-docker compose up -d --build kagoya lolipop-php lolipop
+docker compose up -d --build server-a server-b-php server-b
 ./check.sh                       # 制約が本物どおりかを確かめる
 docker compose down -v           # 消して初期状態に戻す
 ```

@@ -1,10 +1,10 @@
 #!/bin/sh
 # デモの店に plugin/SelfHarden を入れて有効にする
-#   ./install-plugin.sh kagoya|lolipop|all
+#   ./install-plugin.sh server-a|server-b|all
 set -eu
 cd "$(dirname "$0")"
 one() {
-  case "$1" in kagoya) C=self-harden-demo-kagoya-1;; lolipop) C=self-harden-demo-lolipop-php-1;; *) echo "kagoya|lolipop|all"; exit 1;; esac
+  case "$1" in server-a) C=self-harden-demo-server-a-1;; server-b) C=self-harden-demo-server-b-php-1;; *) echo "server-a|server-b|all"; exit 1;; esac
   copy() {
     docker exec "$C" rm -rf /var/www/html/app/Plugin/SelfHarden
     docker cp ../plugin/SelfHarden "$C:/var/www/html/app/Plugin/SelfHarden"
@@ -27,4 +27,4 @@ one() {
     echo '管理画面の経路が読まれませんでした' >&2; exit 1"
   echo "[$1] SelfHarden を入れた"
 }
-if [ "$1" = all ]; then one kagoya; one lolipop; else one "$1"; fi
+if [ "$1" = all ]; then one server-a; one server-b; else one "$1"; fi

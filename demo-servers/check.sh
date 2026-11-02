@@ -7,8 +7,8 @@ set -eu
 cd "$(dirname "$0")"
 WAIT_TTL=0; [ "${1:-}" = "--ttl" ] && WAIT_TTL=1
 
-php_container() { case "$1" in kagoya) echo self-harden-demo-kagoya-1;; lolipop) echo self-harden-demo-lolipop-php-1;; esac; }
-port() { case "$1" in kagoya) echo 8081;; lolipop) echo 8082;; esac; }
+php_container() { case "$1" in server-a) echo self-harden-demo-server-a-1;; server-b) echo self-harden-demo-server-b-php-1;; esac; }
+port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; esac; }
 
 get() { # host path -> "status body"
   out=$(curl -s -w '\n%{http_code}' "http://127.0.0.1:$(port "$1")$2")
@@ -23,7 +23,7 @@ print(json.dumps(v,ensure_ascii=False) if isinstance(v,(dict,list)) else v)' "$1
 # 同じパスを n 回開き、memory_limit が want だった回数を返す(FPM は worker ごとに .user.ini をためるので 1 回では決められない)
 count_ml() { n=0; i=0; while [ $i -lt "$3" ]; do set -- "$1" "$2" "$3" $(get "$1" "$2"); [ "$(field "$5" memory_limit)" = "$want" ] && n=$((n+1)); i=$((i+1)); done; echo $n; }
 
-for h in kagoya lolipop; do
+for h in server-a server-b; do
   C=$(php_container "$h")
   docker exec "$C" rm -rf /var/www/html/_check
   probe=$(cat check/probe.php)
@@ -62,26 +62,26 @@ for h in kagoya lolipop; do
   echo ".htaccess php_flag       : HTTP $hf_code, short_open_tag=$hf (既定 1、書いた値 Off)"
   echo ".user.ini 新しいディレクトリ : memory_limit=$un (書いた値 88M)"
   echo ".user.ini 書き換え直後   : 書く前に 20 回開いて 128M が $before 回、書いた直後に 10 回開いて 99M が $right_after 回"
-  eval "BEFORE_$h=\$before"
+  eval "BEFORE_$(echo $h | tr - _)=\$before"
 done
 
 if [ "$WAIT_TTL" = 1 ]; then
   start=$(date +%s)
   echo "== .user.ini の書き換えが効くまで待つ(10 秒おき、最大 330 秒)"
-  for h in kagoya lolipop; do eval "DONE_$h="; done
+  for h in server-a server-b; do eval "DONE_$(echo $h | tr - _)="; done
   while :; do
     now=$(date +%s); el=$((now-start))
-    for h in kagoya lolipop; do
-      eval "d=\$DONE_$h"; [ -n "$d" ] && continue
+    for h in server-a server-b; do
+      eval "d=\$DONE_$(echo $h | tr - _)"; [ -n "$d" ] && continue
       want=99M; n=$(count_ml "$h" /_check/uichg/probe.php 10)
-      if [ "$n" = 10 ]; then echo "$h: ${el} 秒後に 10 回とも 99M になった"; eval "DONE_$h=1"; fi
+      if [ "$n" = 10 ]; then echo "$h: ${el} 秒後に 10 回とも 99M になった"; eval "DONE_$(echo $h | tr - _)=1"; fi
     done
-    [ -n "$DONE_kagoya" ] && [ -n "$DONE_lolipop" ] && break
+    [ -n "$DONE_server_a" ] && [ -n "$DONE_server_b" ] && break
     [ $el -ge 330 ] && break
     sleep 10
   done
-  for h in kagoya lolipop; do eval "d=\$DONE_$h"; [ -z "$d" ] && echo "$h: 330 秒待っても 99M にならなかった"; done
+  for h in server-a server-b; do eval "d=\$DONE_$(echo $h | tr - _)"; [ -z "$d" ] && echo "$h: 330 秒待っても 99M にならなかった"; done
 fi
 
-for h in kagoya lolipop; do docker exec "$(php_container "$h")" rm -rf /var/www/html/_check; done
+for h in server-a server-b; do docker exec "$(php_container "$h")" rm -rf /var/www/html/_check; done
 echo "== 確認用のファイルを消した"

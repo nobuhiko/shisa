@@ -20,7 +20,7 @@ EC-CUBE 4.2 は店のルート = 公開ディレクトリ(`index.php` がある�
 
 ```
 <?php exit; ?>
-{"shop_id":"shp_xxxxxxxx","secret":"<64 文字の 16 進数>","api_base":"http://api:8787","self_base":"http://kagoya","public_base":"http://127.0.0.1:8081","created_at":1730000000}
+{"shop_id":"shp_xxxxxxxx","secret":"<64 文字の 16 進数>","api_base":"http://api:8787","self_base":"http://server-a","public_base":"http://127.0.0.1:8081","created_at":1730000000}
 ```
 
 - `secret`: `random_bytes(32)` を `bin2hex` したもの
@@ -163,7 +163,7 @@ Content-Type: application/json
 
 受け口とは別に、API 自身が店を外から開く(`http_get`)。開いてよいのは登録された `shop_url` と同じ origin だけ。結果は状態・見出し・本文の先頭 4KB。小部屋の `probe.php` もこれで開く。
 
-手元の docker では、API から店へは docker のネットワーク名で届く(`shop_url` を `http://kagoya`, `http://lolipop` のように登録する)。
+手元の docker では、API から店へは docker のネットワーク名で届く(`shop_url` を `http://server-a`, `http://server-b` のように登録する)。
 
 ## 店 → API(プラグインの管理画面から)
 

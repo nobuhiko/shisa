@@ -4,11 +4,11 @@
 
 Agent が自分で調べて手を選ぶところを見せるための舞台です。脆弱性を作り込む環境ではなく、**古い版に固定した検証環境**です。手元の docker だけで動かし、ポートは 127.0.0.1 にだけ開きます。
 
-| | KAGOYA 風 `kagoya` | ロリポップ風 `lolipop` |
+| | サーバー A `server-a` | サーバー B `server-b` |
 |---|---|---|
 | Web と PHP | Apache 2.4.54 + mod_php(`php:8.1.10-apache`) | httpd 2.4.54 + PHP-FPM(`httpd:2.4.54` と `php:8.1.10-fpm` の 2 つのコンテナ) |
 | 手元の URL | http://127.0.0.1:8081 | http://127.0.0.1:8082 |
-| docker の中の名前 | `http://kagoya` | `http://lolipop` |
+| docker の中の名前 | `http://server-a` | `http://server-b` |
 | EC-CUBE | 4.2.0(公式の配布物、sha256 を照合) | 同じ |
 
 - PHP 8.1.10 は EC-CUBE 4.2.0 の公開日(2022-09-27)の時点の 8.1 系
@@ -18,7 +18,7 @@ Agent が自分で調べて手を選ぶところを見せるための舞台で�
 
 ### 制約の確認(2026-11-02、`demo-servers/check.sh` で外から測った値)
 
-| 項目 | KAGOYA 風 | ロリポップ風 | 期待 |
+| 項目 | サーバー A | サーバー B | 期待 |
 |---|---|---|---|
 | SAPI | apache2handler | fpm-fcgi | mod_php / FPM |
 | PHP | 8.1.10 | 8.1.10 | 古いパッチの版 |
@@ -45,12 +45,12 @@ Agent が自分で調べて手を選ぶところを見せるための舞台で�
 - 鍵: Claude の API キーはリポジトリ直下の `.env`(コミットしない)から docker compose の `env_file` で読む。店には置かない
 
 ```sh
-cd demo-servers && docker compose up -d kagoya lolipop-php lolipop
+cd demo-servers && docker compose up -d server-a server-b-php server-b
 cd ../api && docker compose up -d --build        # 鍵は ../.env の ANTHROPIC_API_KEY
 cd ../demo-servers && ./install-plugin.sh all    # プラグインを入れる(受け口が置かれる)
-./connect-plugin.sh kagoya                       # 管理画面の「API とつなぐ」と同じ。つないだら点検が自分で始まる
+./connect-plugin.sh server-a                       # 管理画面の「API とつなぐ」と同じ。つないだら点検が自分で始まる
 open http://127.0.0.1:8081/admin/store/plugin/SelfHarden/config   # 開くだけで経過と結果が流れる
-cd ../api && npx tsx scripts/dev-shop.ts break kagoya            # わざと壊して、同じリクエストの中で戻るかを確かめる
+cd ../api && npx tsx scripts/dev-shop.ts break server-a            # わざと壊して、同じリクエストの中で戻るかを確かめる
 ```
 
 ## プラグイン(ガワ)

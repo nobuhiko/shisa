@@ -8,7 +8,7 @@
 
 - `api/` 頭。Claude を呼び、次の一手を決め、店の受け口を 1 歩ずつ呼びます。店に Claude の API キーは置きません
 - `plugin/` EC-CUBE 4.2 のプラグイン。店に素の PHP 1 枚の受け口を置き、API と鍵を交換し、管理画面に「点検」と「通知の URL を貼る」を出します
-- `demo-servers/` 手元だけで動かす、脆弱性のあるデモ用サーバー(KAGOYA 風 / ロリポップ風)
+- `demo-servers/` 手元だけで動かす、脆弱性のあるデモ用サーバー(mod_php の 1 台と PHP-FPM の 1 台)
 
 つなぎ目は [docs/api.md](docs/api.md)、受け口の守り方は [docs/security.md](docs/security.md)、設計は [docs/design.md](docs/design.md)、決めたことの理由は [docs/decisions.md](docs/decisions.md) にあります。
 

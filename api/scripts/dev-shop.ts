@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // 開発用: プラグインの代わりに、デモの店に受け口を置き、鍵を作って API に登録し、点検を始めて経過を見る
-//   npx tsx scripts/dev-shop.ts connect kagoya
-//   npx tsx scripts/dev-shop.ts start kagoya [通知の URL]
-//   npx tsx scripts/dev-shop.ts watch kagoya <run_id>
-//   npx tsx scripts/dev-shop.ts break lolipop       わざと壊れる .htaccess を書かせ、同じリクエストの中で戻るかを確かめる
+//   npx tsx scripts/dev-shop.ts connect server-a
+//   npx tsx scripts/dev-shop.ts start server-a [通知の URL]
+//   npx tsx scripts/dev-shop.ts watch server-a <run_id>
+//   npx tsx scripts/dev-shop.ts break server-b       わざと壊れる .htaccess を書かせ、同じリクエストの中で戻るかを確かめる
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomHex, signRequest } from "../src/sign.js";
 
 const API = process.env.SH_API ?? "http://127.0.0.1:8787";
 const HOSTS: Record<string, { container: string; public: string }> = {
-  kagoya: { container: "self-harden-demo-kagoya-1", public: "http://127.0.0.1:8081" },
-  lolipop: { container: "self-harden-demo-lolipop-php-1", public: "http://127.0.0.1:8082" },
+  server-a: { container: "self-harden-demo-server-a-1", public: "http://127.0.0.1:8081" },
+  server-b: { container: "self-harden-demo-server-b-php-1", public: "http://127.0.0.1:8082" },
 };
 const STATE = new URL("../data/dev-shops.json", import.meta.url);
 const RECEIVER = new URL("../../plugin/SelfHarden/Resource/receiver/self-harden.php", import.meta.url);
@@ -32,7 +32,7 @@ async function signed(method: string, path: string, shop: { shop_id: string; sec
 
 const [cmd, host, arg] = process.argv.slice(2);
 const h = HOSTS[host];
-if (!h) throw new Error("host must be kagoya or lolipop");
+if (!h) throw new Error("host must be server-a or server-b");
 const state = load();
 
 if (cmd === "connect") {

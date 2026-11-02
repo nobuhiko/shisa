@@ -2,7 +2,7 @@
 name: self-harden-demo
 
 x-trusted: &trusted
-  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^kagoya$$,^lolipop$$'
+  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$'
   PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:
@@ -22,35 +22,35 @@ services:
       args: { BASE: "php:8.1.10-fpm" }
     profiles: ["build-only"]
 
-  kagoya:
-    build: { context: ., dockerfile: kagoya/Dockerfile }
-    image: self-harden/kagoya:dev
-    hostname: kagoya
+  server-a:
+    build: { context: ., dockerfile: server-a/Dockerfile }
+    image: self-harden/server-a:dev
+    hostname: server-a
     environment: *trusted
     ports: ["127.0.0.1:8081:80"]
-    volumes: ["kagoya-docroot:/var/www/html"]
+    volumes: ["server-a-docroot:/var/www/html"]
     networks: [self-harden]
 
-  lolipop-php:
-    build: { context: ., dockerfile: lolipop/Dockerfile.php }
-    image: self-harden/lolipop-php:dev
-    hostname: lolipop-php
+  server-b-php:
+    build: { context: ., dockerfile: server-b/Dockerfile.php }
+    image: self-harden/server-b-php:dev
+    hostname: server-b-php
     environment: *trusted
-    volumes: ["lolipop-docroot:/var/www/html"]
+    volumes: ["server-b-docroot:/var/www/html"]
     networks: [self-harden]
 
-  lolipop:
-    build: { context: ., dockerfile: lolipop/Dockerfile.web }
-    image: self-harden/lolipop-web:dev
-    hostname: lolipop
-    depends_on: [lolipop-php]
+  server-b:
+    build: { context: ., dockerfile: server-b/Dockerfile.web }
+    image: self-harden/server-b-web:dev
+    hostname: server-b
+    depends_on: [server-b-php]
     ports: ["127.0.0.1:8082:80"]
-    volumes: ["lolipop-docroot:/var/www/html"]
+    volumes: ["server-b-docroot:/var/www/html"]
     networks: [self-harden]
 
 volumes:
-  kagoya-docroot:
-  lolipop-docroot:
+  server-a-docroot:
+  server-b-docroot:
 
 networks:
   self-harden:

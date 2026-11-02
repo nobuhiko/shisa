@@ -90,7 +90,7 @@ const PAGE = String.raw`<!doctype html>
 <section class="compare" id="cmp"><h3>同じ弱点に、それぞれのサーバーで効く手を選んだ</h3><div class="row"><div id="xa"></div><div id="xb"></div></div></section>
 <script>
 (function () {
-  var NAMES = { kagoya: 'KAGOYA 風(Apache + mod_php)', lolipop: 'ロリポップ風(Apache + PHP-FPM)' };
+  var NAMES = { server-a: 'サーバー A(Apache + mod_php)', server-b: 'サーバー B(Apache + PHP-FPM)' };
   var KEY_TOOL = /本番に入れる|公式の中身に戻す|公式の修正を当てる|隔離する|照らし合わせる|小部屋で試す|部品の弱点/;
   var KEY_RES = /戻した|500|壊れる|隔離した|当てた|入れた|違う [1-9]/;
   function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
