@@ -67,6 +67,10 @@ const PAGE = String.raw`<!doctype html>
               opacity: .15; transition: opacity .25s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .band div.show { opacity: 1; } .band div.warn { color: #ffcc80; } .band div.good { color: #a5d6a7; }
   .band div.fixed { opacity: 1; text-align: center; }
+  /* 通し再生: 場面の間の見出し(記録ではなく編集の文字) */
+  .title-card { position: fixed; inset: 0; background: #111827; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 10; text-align: center; padding: 40px; }
+  .title-card b { font-size: 44px; line-height: 1.35; }
+  .title-card small { font-size: 18px; color: #9ca3af; }
   /* 場面 D: 見せ場を 1 つずつ大きく */
   .spot { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 20px 60px; text-align: center; }
   .spot .cap { font-size: 40px; font-weight: 800; line-height: 1.3; }
@@ -220,14 +224,15 @@ const PAGE = String.raw`<!doctype html>
       return load(ids[0]).then(function (run) {
         layout(1); setAdv([run]);
         var v = makeColumn(main, run), cell = el('div'); band.appendChild(cell);
-        play(run, run.steps, v, cell);
+        return new Promise(function (res) { play(run, run.steps, v, cell, res); });
       });
     },
     // B: 2 台を並べて「試す」の段階だけ。並べた下の帯に一言
     B: function (ids) {
       return Promise.all([load(ids[0]), load(ids[1])]).then(function (rs) {
         layout(2); setAdv(rs);
-        var left = 2;
+        var left = 2, finish;
+        var p = new Promise(function (res) { finish = res; });
         rs.forEach(function (run) {
           var v = makeColumn(main, run), cell = el('div'); band.appendChild(cell);
           var trial = run.steps.filter(function (s) {
@@ -238,8 +243,10 @@ const PAGE = String.raw`<!doctype html>
             if (--left) return;
             band.className = 'band'; band.textContent = '';
             band.appendChild(el('div', 'fixed show', '同じ点検、逆の手'));
+            setTimeout(finish, 2500);
           });
         });
+        return p;
       });
     },
     // C: 1 台。照らし合わせ → 書き換えと覚えのないファイル → 戻す・隔離 → 入口を閉じる
@@ -251,7 +258,7 @@ const PAGE = String.raw`<!doctype html>
         var picked = run.steps.slice(Math.max(0, start)).filter(function (s) {
           return /照らし合わせる|公式との違い|公式の中身に戻す|隔離する|本番に入れる: root\/\.htaccess|外から開く/.test(s.tool || '');
         });
-        play(run, picked, v, cell);
+        return new Promise(function (res) { play(run, picked, v, cell, res); });
       });
     },
     // D: 複数の記録から見せ場の行だけを 1 つずつ
@@ -268,9 +275,10 @@ const PAGE = String.raw`<!doctype html>
           });
         });
         var box = el('div', 'spot'); main.appendChild(box);
-        var i = 0;
+        var i = 0, finish;
+        var p = new Promise(function (res) { finish = res; });
         (function next() {
-          if (i >= items.length) return;
+          if (i >= items.length) { finish(); return; }
           var it = items[i++];
           box.textContent = '';
           box.appendChild(el('div', 'cap ' + (it.c.cls || ''), it.c.text));
@@ -278,6 +286,7 @@ const PAGE = String.raw`<!doctype html>
           box.appendChild(el('div', 'from', hostName(it.run) + '・' + new Date(it.s.at).toLocaleString('ja-JP')));
           setTimeout(next, 2800);
         })();
+        return p;
       });
     },
     // E: 報告を大きなカードで
@@ -298,9 +307,39 @@ const PAGE = String.raw`<!doctype html>
           b.appendChild(el('h4', null, 'お願い ' + asks.length + ' 件(依頼文つき)'));
           var ul3 = el('ul'); asks.slice(0, 2).forEach(function (x) { var li = el('li', null, '→ ' + x.title); li.style.fontSize = '18px'; li.appendChild(el('small', null, x.to || x.who || '')); ul3.appendChild(li); }); b.appendChild(ul3);
         }
+        return new Promise(function (res) { setTimeout(res, 12000); });
       });
     }
   };
+
+  // ---- 通し再生: A → B → C → D → E。場面の間に台本の字幕を見出しとして出す ----
+  function titleCard(text, sub, ms) {
+    return new Promise(function (res) {
+      var c = el('div', 'title-card'); c.appendChild(el('b', null, text)); if (sub) c.appendChild(el('small', null, sub));
+      document.body.appendChild(c);
+      setTimeout(function () { c.remove(); res(); }, ms || 2200);
+    });
+  }
+  function all() {
+    var t0 = Date.now();
+    var plan = [
+      ['A', [q('sA')], 'お店を止めずに守る、3 つ目の選択肢', '自分で調べ、試して、効く方法を選ぶ'],
+      ['B', [q('sBa'), q('sBb')], '同じ点検でも、サーバーによって正しい手は逆', ''],
+      ['C', [q('sC')], '公表前の攻撃でも、入られた跡に気づいて戻す', '改ざんはデモ用に入れたもの'],
+      ['D', (q('sD') || '').split(','), '何が来ても、自分で考える', ''],
+      ['E', [q('sE')], 'できないことは、誰に頼むかまで書いて渡す', '']
+    ];
+    var times = [];
+    return plan.reduce(function (p, step) {
+      return p.then(function () {
+        var s0 = Date.now();
+        return titleCard(step[2], step[3]).then(function () { return scenes[step[0]](step[1].filter(Boolean)); })
+          .then(function () { times.push(step[0] + ' ' + Math.round((Date.now() - s0) / 1000) + '秒'); });
+      });
+    }, Promise.resolve()).then(function () {
+      document.getElementById('adv').textContent = '通し ' + Math.round((Date.now() - t0) / 1000) + ' 秒(' + times.join(' / ') + ')';
+    });
+  }
 
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
@@ -329,7 +368,8 @@ const PAGE = String.raw`<!doctype html>
     controls(runs);
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
-    if (k && scenes[k] && ids.length) scenes[k](ids);
+    if (k === 'all') all();
+    else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
   });
 })();
