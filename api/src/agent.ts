@@ -277,7 +277,7 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
       out = { content: JSON.stringify({ error: (e as Error).message }), isError: true, title: u.name };
     }
     const note = typeof (u.input as any)?.note === "string" && (u.input as any).note.trim() ? await toJapanese(client, (u.input as any).note.trim(), run) : out.title;
-    push(run, out.isError ? "error" : "tool", note, short(out.content, 3000), summarize(u.name, out.content, out.isError), out.title);
+    push(run, out.isError ? "error" : out.decision ? "decision" : "tool", note, short(out.content, 3000), out.decision ? undefined : summarize(u.name, out.content, out.isError), out.title);
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
     if (out.report) {
       // 次の点検で「前回から変わったか」を見られるように、終わったときの指紋を残す

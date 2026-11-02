@@ -185,6 +185,12 @@ export const CLIENT_TOOLS: Tool[] = [
     input_schema: obj({}),
   },
   {
+    name: "decide",
+    description:
+      "Record a decision the shop owner should see, as one plain Japanese sentence in note (for example whether a pasted advisory applies to this shop, whether to keep the shop open, or which mechanism you chose and why). It changes nothing on the shop; it is shown on the admin screen as a decision.",
+    input_schema: obj({ topic: { type: "string", enum: ["advisory_applies", "advisory_not_applicable", "keep_shop_open", "mechanism", "other"] } }, ["topic"]),
+  },
+  {
     name: "wait",
     description: "Pause for the given number of seconds (max 360). The pause happens between this turn and the next one, so call wait alone (or as the last call of a turn) and do the checks in the next turn; calls placed after wait in the same turn are not run.",
     input_schema: obj({ seconds: { type: "integer", minimum: 1, maximum: 360 } }, ["seconds"]),
@@ -259,6 +265,7 @@ export interface ToolOutcome {
   isError?: boolean;
   waitSec?: number;
   report?: unknown;
+  decision?: boolean;
   title: string; // 道具の名前(画面では一言の横に小さく出す)
 }
 
@@ -565,6 +572,9 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     case "list_backups": {
       const r = await callReceiver(shop, "list_backups", {});
       return { content: j(r), isError: !r.ok, title: "退避の一覧を見る" };
+    }
+    case "decide": {
+      return { content: j({ ok: true, recorded: input.topic }), title: "判断", decision: true };
     }
     case "wait": {
       const sec = Math.max(1, Math.min(360, Number(input.seconds) || 1));

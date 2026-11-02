@@ -15,7 +15,7 @@ export interface Shop {
 
 export interface Step {
   at: number;
-  kind: "think" | "tool" | "result" | "error" | "report" | "info";
+  kind: "think" | "tool" | "result" | "error" | "report" | "info" | "decision";
   title: string;
   tool?: string; // 道具の名前(画面では小さく出す)
   result?: string; // 結果の 1 行(店の人向け)

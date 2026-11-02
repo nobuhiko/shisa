@@ -71,6 +71,21 @@ const PAGE = String.raw`<!doctype html>
   .title-card { position: fixed; inset: 0; background: #111827; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 10; text-align: center; padding: 40px; }
   .title-card b { font-size: 44px; line-height: 1.35; }
   .title-card small { font-size: 18px; color: #9ca3af; }
+  /* 前提・説明のカード(図) */
+  .diagram { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 28px 48px; }
+  .diagram h2 { margin: 0; font-size: 34px; }
+  .chain { display: flex; flex-direction: column; gap: 10px; }
+  .chain .row { display: flex; align-items: center; gap: 14px; font-size: 24px; line-height: 1.4; }
+  .chain .arrow { color: var(--muted); font-size: 22px; padding-left: 14px; }
+  .chain .row b { color: #b26a00; }
+  .chain .last { font-size: 30px; font-weight: 800; color: var(--accent); margin-top: 8px; }
+  .chain small { font-size: 14px; color: var(--muted); }
+  .boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .box { background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 22px 26px; }
+  .box h3 { margin: 0 0 14px; font-size: 24px; }
+  .box p { margin: 8px 0; font-size: 22px; }
+  .ok { color: var(--ok); font-weight: 700; } .ng { color: var(--err); font-weight: 700; }
+  .diagram .lead { font-size: 24px; text-align: center; color: #374151; }
   /* 場面 D: 見せ場を 1 つずつ大きく */
   .spot { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 20px 60px; text-align: center; }
   .spot .cap { font-size: 40px; font-weight: 800; line-height: 1.3; }
@@ -119,6 +134,7 @@ const PAGE = String.raw`<!doctype html>
   // 字幕。その行に書かれていること(道具・版・結果)だけから作る。台本は書かない
   function captionOf(s, ctx) {
     var t = s.tool || '', r = s.result || '', m;
+    if (s.kind === 'decision') return { cls: 'good', text: s.title };
     if (/照らし合わせる/.test(t) && (m = /違う (\d+) 件、公式に無い (\d+) 件/.exec(r)) && m[1] !== '0')
       return { cls: 'warn', text: '公式の配布物と照らし合わせ: 書き換え ' + m[1] + ' 件' };
     if (/公式の中身に戻す/.test(t) && /公式の中身に戻した/.test(r)) {
@@ -215,7 +231,7 @@ const PAGE = String.raw`<!doctype html>
   }
 
   var main = document.getElementById('main'), band = document.getElementById('band');
-  function layout(n) { main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
+  function layout(n) { var b = document.querySelector('header .badge'); if (b) b.style.visibility = ''; main.className = n === 2 ? 'two' : 'one'; band.className = 'band' + (n === 2 ? ' two' : ''); main.textContent = ''; band.textContent = ''; }
 
   // ---- 場面 ----
   var scenes = {
@@ -242,7 +258,7 @@ const PAGE = String.raw`<!doctype html>
           play(run, trial, v, cell, function () {
             if (--left) return;
             band.className = 'band'; band.textContent = '';
-            band.appendChild(el('div', 'fixed show', '同じ点検、逆の手'));
+            band.appendChild(el('div', 'fixed show', '同じ点検でも、サーバーごとに自分で確かめて手を選ぶ'));
             setTimeout(finish, 2500);
           });
         });
@@ -312,6 +328,42 @@ const PAGE = String.raw`<!doctype html>
     }
   };
 
+  function html(tag, cls, inner) { var e = el(tag, cls); e.innerHTML = inner; return e; }
+  function holdFor(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
+
+  // 前提のカード: なぜ PHP を上げないのか(サーバー会社の名前は出さない)
+  function badge(on) { document.querySelector('header .badge').style.visibility = on ? '' : 'hidden'; }
+  scenes.P = function () {
+    layout(1); badge(false);
+    var d = el('div', 'diagram'); main.appendChild(d);
+    d.appendChild(el('h2', null, 'なぜ、PHP を上げないの?'));
+    var c = el('div', 'chain'); d.appendChild(c);
+    var rows = [
+      '日本の小さなネットショップ = <b>レンタルサーバー</b> + <b>EC-CUBE</b>',
+      '直すには PHP を修正版に。でも PHP を替えられるのは<b>サーバー会社だけ</b>',
+      '修正を当てた会社も、サービスを止めた会社も、「公開の停止を検討して」と<b>店に任せた会社</b>もあった',
+      '店が自分で PHP 8.2 以上に上げたくても、<b>EC-CUBE 4.2 が動くのは PHP 7.4〜8.1</b> まで',
+      '先に EC-CUBE を 4.3 に = 開発の案件、プラグインの買い直し。<b>数週間〜数か月</b>、費用も店の負担'
+    ];
+    rows.forEach(function (r, i) { if (i) c.appendChild(el('div', 'arrow', '↓')); c.appendChild(html('div', 'row', r)); });
+    c.appendChild(el('div', 'last', 'だから、上げるまでのあいだ守るものが要る'));
+    c.appendChild(html('small', null, '出典: EC-CUBE 公式の動作環境 https://doc4.ec-cube.net/quickstart/requirement(4.3 は PHP 8.1〜8.3)'));
+    return holdFor(15000);
+  };
+
+  // 説明のカード: レンタルサーバーごとに、正しい手が違う
+  scenes.X = function () {
+    layout(1); badge(false);
+    var d = el('div', 'diagram'); main.appendChild(d);
+    d.appendChild(el('h2', null, 'レンタルサーバーごとに、正しい手が違う'));
+    d.appendChild(el('p', 'lead', '会社ごとに PHP の動かし方が違う。同じ設定を書いても、効く会社と、お店が止まる会社がある'));
+    var b = el('div', 'boxes'); d.appendChild(b);
+    b.appendChild(html('div', 'box', '<h3>ある会社(Apache + mod_php)</h3><p>.htaccess に書く → <span class="ok">効く ✓</span></p><p>.user.ini に書く → 読まれない</p>'));
+    b.appendChild(html('div', 'box', '<h3>別の会社(Apache + PHP-FPM)</h3><p>.htaccess に書く → <span class="ng">お店が止まる(500)✗</span></p><p>.user.ini に書く → <span class="ok">効く ✓</span>(数分あとから)</p>'));
+    d.appendChild(el('p', 'lead', '手順書を配っても、間違えるとお店が落ちる。だから Agent は、そのサーバーで試して確かめてから手を選ぶ'));
+    return holdFor(14000);
+  };
+
   // ---- 通し再生: A → B → C → D → E。場面の間に台本の字幕を見出しとして出す ----
   function titleCard(text, sub, ms) {
     return new Promise(function (res) {
@@ -322,18 +374,19 @@ const PAGE = String.raw`<!doctype html>
   }
   function all() {
     var t0 = Date.now();
+    // 管理画面の場面(URL を貼る → 考えが流れる → 大事なところで止まる)は、管理画面そのものを撮る
     var plan = [
-      ['A', [q('sA')], 'お店を止めずに守る、3 つ目の選択肢', '自分で調べ、試して、効く方法を選ぶ'],
-      ['B', [q('sBa'), q('sBb')], '同じ点検でも、サーバーによって正しい手は逆', ''],
-      ['C', [q('sC')], '公表前の攻撃でも、入られた跡に気づいて戻す', '改ざんはデモ用に入れたもの'],
-      ['D', (q('sD') || '').split(','), '何が来ても、自分で考える', ''],
-      ['E', [q('sE')], 'できないことは、誰に頼むかまで書いて渡す', '']
+      ['P', [], '前提', ''],
+      ['X', [], 'レンタルサーバーごとに、正しい手が違う', ''],
+      ['B', [q('sBa'), q('sBb')], '同じ点検を、2 台のサーバーで', '「試す」の段階だけを並べる'],
+      ['C', [q('sC')], '入られた跡に気づいて戻す', '改ざんはデモ用に入れたもの'],
+      ['E', [q('sE')], '報告', '直したこと / これから自分でやること / 人へのお願い']
     ];
     var times = [];
     return plan.reduce(function (p, step) {
       return p.then(function () {
         var s0 = Date.now();
-        return titleCard(step[2], step[3]).then(function () { return scenes[step[0]](step[1].filter(Boolean)); })
+        return titleCard(step[2], step[3], 2000).then(function () { return scenes[step[0]](step[1].filter(Boolean)); })
           .then(function () { times.push(step[0] + ' ' + Math.round((Date.now() - s0) / 1000) + '秒'); });
       });
     }, Promise.resolve()).then(function () {
@@ -344,7 +397,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['A', 'B', 'C', 'D', 'E'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['P', 'X', 'A', 'B', 'C', 'D', 'E'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -369,6 +422,7 @@ const PAGE = String.raw`<!doctype html>
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
+    else if (k === 'P' || k === 'X') scenes[k]();
     else if (k && scenes[k] && ids.length) scenes[k](ids);
     else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
   });

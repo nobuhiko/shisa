@@ -31,10 +31,18 @@
   .sh-report .sev-high { background: #fde0e0; } .sh-report .sev-medium { background: #fff1d6; }
   .sh-report .summary { white-space: pre-wrap; font-size: 15px; }
   .sh-report .sh-draft { white-space: pre-wrap; background: #f7f7f7; border-left: 3px solid #ccc; padding: 8px 10px; font-size: 13px; margin: 6px 0; }
+  .sh-band { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2000; background: #1f2933; color: #fff; font-size: 26px; font-weight: 700; padding: 16px 28px; text-align: center; transform: translateY(100%); transition: transform .25s; }
+  .sh-band.show { transform: none; } .sh-band.warn { color: #ffcc80; } .sh-band.good { color: #a5d6a7; }
+  .sh-steps li.sh-research { color: #8a8a8a; font-size: 13px; }
+  .sh-steps li.key { background: #fff3c4; }
+  .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
+  body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
+  body.sh-big .sh-steps .tool { font-size: 13px; } body.sh-big .sh-report { font-size: 17px; }
 </style>
 {% endblock %}
 
 {% block main %}
+<div class="sh-band" id="sh-band"></div>
 <div class="c-contentsArea__cols">
   <div class="c-contentsArea__primaryCol">
     <div class="c-primaryCol">
@@ -167,14 +175,57 @@
     return li;
   }
 
-  // ---- 記録の再生(動画用)。記録した経過を同じ順番で、時間を縮めて流す。Claude は呼ばない ----
-  var KEY_TOOL = /本番に入れる|公式の中身に戻す|公式の修正を当てる|隔離する|照らし合わせる|小部屋で試す|部品の弱点/;
-  var KEY_RES = /戻した|500|壊れる|隔離した|当てた|入れた|違う [1-9]/;
-  function isKey(s) { return s.kind === 'report' || s.kind === 'error' || KEY_TOOL.test(s.tool || '') || KEY_RES.test(s.result || ''); }
+  // ---- 記録の再生(動画用)。記録した経過を同じ順番で流し、大事な行で止める。Claude は呼ばない ----
+  // 字幕は、その行(または報告)に書かれていることだけから作る
+  var RESEARCH = /公開の情報|ファイルを読む|ファイルの一覧|サーバーを調べる|調べた結果|前回の点検|外から開く|退避の一覧|隔離の一覧|公式との違い|部品の弱点|照らし合わせる/;
   function waitSec(s) { var m = /^(\d+) 秒待つ/.exec(s.tool || ''); return m ? Number(m[1]) : 0; }
-  function mmss(n) { return Math.floor(n / 60) + ':' + ('0' + (n % 60)).slice(-2); }
+  function isResearch(s) { return (!s.tool && /^公開の情報を(探す|読む)/.test(s.title)) || RESEARCH.test(s.tool || ''); }
+  var band = document.getElementById('sh-band');
+  function showBand(text, cls) { band.className = 'sh-band show ' + (cls || ''); band.textContent = text; }
+  function hideBand() { band.className = 'sh-band'; }
 
-  function replay(runId, targetSec) {
+  // 止める行と、その一言
+  function stopOf(s, st) {
+    var t = s.tool || '', r = s.result || '', m;
+    if (s.kind === 'decision') { if (/公開|止め|開けた/.test(s.title)) st.decidedOpen = true; return { text: s.title, cls: 'good' }; }
+    if (st.adv && !st.readAdv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0) { st.readAdv = true; return { text: '届いたお知らせを読む' }; }
+    if (/小部屋で試す/.test(t) && !/空に|片付け/.test(s.title)) {
+      var f = (/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      if (/500|壊れる/.test(r)) { st.broke = f; return { text: '試験場で ' + f + ' を試す → 500 でお店が止まる書き方だった', cls: 'warn' }; }
+      if (st.broke && f && f !== st.broke && /HTTP 200/.test(r) && !st.switched) { st.switched = true; return { text: '別の手(' + f + ')に切り替え → 効いた', cls: 'good' }; }
+    }
+    if (/本番に入れる/.test(t) && /入れた/.test(r)) {
+      var g = (/root\/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      return { text: '本番の ' + g + ' に入れて、お店を開いて確かめた', cls: 'good' };
+    }
+    return null;
+  }
+
+  function stepRow(s) {
+    if (s.research) { var li = el('li', 'k-tool sh-research'); li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP'))); li.appendChild(el('span', null, s.title)); return li; }
+    var w = waitSec(s);
+    if (w) { var lw = el('li', 'k-tool'); lw.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP'))); lw.appendChild(el('span', null, '⏩ ' + Math.round(w / 60) + ' 分待つ(設定が効くまで)')); return lw; }
+    return stepEl(s);
+  }
+
+  function compactSteps(steps, st) {
+    var out = [], n = 0, first = null;
+    function flush() { if (n > 1) out.push({ at: first.at, research: true, title: '調べ物 ' + n + ' 件' }); else if (n === 1) out.push(first); n = 0; first = null; }
+    steps.forEach(function (s) {
+      var isAdvRead = st.adv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0;
+      if (isResearch(s) && !isAdvRead) { if (!n) first = s; n++; } else { flush(); out.push(s); }
+    });
+    flush();
+    return out;
+  }
+
+  function advOf(d) {
+    if (d.advisory_url) return d.advisory_url;
+    for (var i = 0; i < d.steps.length; i++) { var m = /通知の URL を受け取った: (\S+)/.exec(d.steps[i].title); if (m) return m[1]; }
+    return null;
+  }
+
+  function replay(runId) {
     clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
     statusEl.textContent = '';
     var badge = el('span', 'sh-replay-badge', '記録を早送りで再生');
@@ -184,32 +235,22 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
-        var steps = d.steps, gaps = [], sum = 0;
-        for (var i = 0; i < steps.length; i++) {
-          var real = i === 0 ? 0 : Math.max(0, (steps[i].at - steps[i - 1].at) / 1000);
-          var g = i === 0 ? 0.6 : 0.35 + 1.6 * (1 - Math.exp(-real / 25));
-          if (i > 0 && isKey(steps[i - 1])) g += 1.0;
-          if (i > 0 && waitSec(steps[i - 1])) g += 2.4;
-          gaps.push(g); sum += g;
-        }
-        var k = Math.max(0.5, Math.min(1.5, (targetSec || 75) / Math.max(sum, 1)));
-        var idx = 0;
+        var st = { adv: advOf(d) };
+        var list = compactSteps(d.steps.filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
         (function next() {
-          if (idx >= steps.length) { setTimeout(function () { renderReport(d.report); badge.textContent = '記録を早送りで再生(終わり)'; }, 1200); return; }
-          var s = steps[idx++];
-          var li = stepEl(s);
-          if (isKey(s)) li.classList.add('key');
+          if (i >= list.length) {
+            // 報告の前に、報告に書かれた「公開を止めることは選ばなかった」判断を出す
+            // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
+            var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
+            var finish = function () { showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good'); renderReport(r); badge.textContent = '記録を早送りで再生(終わり)'; reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+            if (notStop) { showBand('お知らせにある「公開を止める」は選ばなかった(お店は開けたまま)', 'good'); setTimeout(finish, 2600); } else finish();
+            return;
+          }
+          var s = list[i++], li = stepRow(s), c = s.research ? null : stopOf(s, st);
+          if (c) { li.classList.add('key'); showBand(c.text, c.cls); }
           stepsEl.appendChild(li);
           stepsEl.scrollTop = stepsEl.scrollHeight;
-          var w = waitSec(s);
-          if (w) {
-            // 長い待ちは、カウントダウンを早送りで見せる
-            var ff = el('span', 'ff', '⏩ ' + mmss(w));
-            li.querySelector('summary, span').appendChild(ff);
-            var t0 = Date.now(), dur = 2200 * k;
-            (function tick() { var p = Math.min(1, (Date.now() - t0) / dur); ff.textContent = '⏩ ' + mmss(Math.round(w * (1 - p))); if (p < 1) requestAnimationFrame(tick); })();
-          }
-          timer = setTimeout(next, (gaps[idx] || 0.6) * k * 1000);
+          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? 2500 : s.research ? 400 : waitSec(s) ? 1000 : 600);
         })();
       });
   }
@@ -257,15 +298,22 @@
       .catch(function () { btn.disabled = false; err.textContent = '始められませんでした'; err.hidden = false; });
   }
   var start = document.getElementById('sh-start');
-  if (start) start.addEventListener('click', function () { begin(start, document.getElementById('sh-advisory').value.trim()); });
+  // 撮影用: ?film=<記録> を付けて開くと、「通知を渡す」で本物の点検は始めず、その記録を早送りで流す(画面に「記録を早送りで再生」が出る)
+  var filmRun = new URLSearchParams(location.search).get('film');
+  if (new URLSearchParams(location.search).get('big') === '1') document.body.classList.add('sh-big');
+  if (start) start.addEventListener('click', function () {
+    var adv = document.getElementById('sh-advisory').value.trim();
+    if (filmRun && /^run_[0-9a-f]{8,32}$/.test(filmRun)) { if (adv) replay(filmRun); return; }
+    begin(start, adv);
+  });
   var now = document.getElementById('sh-now');
   if (now) now.addEventListener('click', function () { begin(now, null); });
-  {% if connected %}if (!new URLSearchParams(location.search).get('replay')) watchNew();{% endif %}
+  {% if connected %}if (!new URLSearchParams(location.search).get('replay') && !new URLSearchParams(location.search).get('film')) watchNew();{% endif %}
   document.querySelectorAll('.sh-open').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); open(a.getAttribute('data-run')); }); });
   document.querySelectorAll('.sh-replay').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); replay(a.getAttribute('data-run')); }); });
   // ?replay=<run_id>&seconds=<全体の秒数> で開くと、すぐに再生する(撮影用)
   var q = new URLSearchParams(location.search);
-  if (q.get('replay') && /^run_[0-9a-f]{8,32}$/.test(q.get('replay'))) replay(q.get('replay'), Number(q.get('seconds')) || 75);
+  if (q.get('replay') && /^run_[0-9a-f]{8,32}$/.test(q.get('replay'))) replay(q.get('replay'));
 })();
 </script>
 {% endblock %}
