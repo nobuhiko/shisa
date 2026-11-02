@@ -103,7 +103,7 @@ const PAGE = String.raw`<!doctype html>
   .health { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 20px 40px; }
   .health h2 { margin: 0; font-size: 30px; }
   .health h2 small { font-size: 15px; color: var(--muted); font-weight: normal; margin-left: 10px; }
-  .htable { display: grid; grid-template-columns: 200px 150px minmax(0, 1fr); gap: 0; background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
+  .htable { display: grid; grid-template-columns: 260px 140px minmax(0, 1fr); gap: 0; background: var(--card); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
   .htable > div { padding: 12px 16px; border-bottom: 1px solid #eef0f3; font-size: 20px; display: flex; align-items: center; }
   .htable .hd { background: #f3f4f6; font-size: 15px; color: var(--muted); font-weight: 700; }
   .htable .item { font-weight: 700; }
@@ -180,12 +180,12 @@ const PAGE = String.raw`<!doctype html>
     }
     if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) {
       var fr = (/ @ (\S+)$/.exec(t) || [])[1] || '';
-      if (/^v/.test(fr)) return { cls: 'good', text: '部品を、公式の修正版 ' + fr + ' に差し替えた' };
+      if (/^v/.test(fr)) return { cls: 'good', text: '中の部品を、開発元の修正版 ' + fr + ' に差し替えた' };
       return { cls: 'good', text: '公式の修正版 ' + fr + ' を、全部そろえて当てた' };
     }
     if (/公式の修正を当てる/.test(t) && /何も置いていない/.test(r)) return { cls: 'warn', text: '公式の修正がそろわないので、1 つも置かない' };
     if (/隔離する/.test(t) && /隔離した/.test(r)) return { cls: 'good', text: '覚えのないファイルを隔離した(消さずに)' };
-    if (s.kind === 'error' && /受け口からは書けません/.test(r)) return { cls: 'warn', text: '危ない書き方は、受け口が断った' };
+    if (s.kind === 'error' && /受け口からは書けません/.test(r)) return { cls: 'warn', text: '乗っ取りに使える書き方は、お店に置いた窓口が断った' };
     if (/小部屋で試す/.test(t) && /空に|片付け/.test(s.title)) return null;
     if (/小部屋で試す/.test(t)) {
       var f = (/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
@@ -410,12 +410,12 @@ const PAGE = String.raw`<!doctype html>
 
   // お店の健康診断: 項目ごとに、実際の記録から当てはまる行を拾って流し、判定を変える
   var HEALTH = [
-    { item: 'PHP 本体', pick: function (s) { return /小部屋で試す/.test(s.tool || '') && /500|壊れる/.test(s.result || '') || /本番に入れる: root\/\.(user\.ini|htaccess)/.test(s.tool || '') && /応急|暫定|回避|PHP2Shell|公式/.test(s.title); } },
-    { item: 'EC-CUBE 本体', pick: function (s) { return /公式の修正を当てる: .*@ 4\./.test(s.tool || ''); } },
-    { item: '部品', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || ''); } },
-    { item: '改ざん', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
-    { item: '見えている情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } },
-    { item: '危ない書き方', pick: function (s) { return s.kind === 'error' && /受け口からは書けません/.test(s.result || ''); } }
+    { item: 'PHP(お店を動かす土台)', pick: function (s) { return /小部屋で試す/.test(s.tool || '') && /500|壊れる/.test(s.result || '') || /本番に入れる: root\/\.(user\.ini|htaccess)/.test(s.tool || '') && /応急|暫定|回避|PHP2Shell|公式/.test(s.title); } },
+    { item: 'EC-CUBE(お店のソフト)', pick: function (s) { return /公式の修正を当てる: .*@ 4\./.test(s.tool || ''); } },
+    { item: '中の部品(ほかの開発元のプログラム)', pick: function (s) { return /公式の修正を当てる: .*@ v/.test(s.tool || '') && /当てた/.test(s.result || ''); } },
+    { item: '書き換えられた跡', pick: function (s) { return /照らし合わせる/.test(s.tool || '') && /違う [1-9]/.test(s.result || '') || /公式との違いを見る: src\//.test(s.tool || '') || /公式の中身に戻す/.test(s.tool || '') && /戻した/.test(s.result || '') || /隔離する/.test(s.tool || '') && /隔離した/.test(s.result || ''); } },
+    { item: '外から見えていた情報', useTitle: true, pick: function (s) { return /本番に入れる/.test(s.tool || '') && /入れた/.test(s.result || '') && /エラー|版|表示|X-Powered/.test(s.title) && !/応急|暫定/.test(s.title); } },
+    { item: '乗っ取りに使える設定', pick: function (s) { return s.kind === 'error' && /受け口からは書けません/.test(s.result || ''); } }
   ];
   scenes.H = function (ids) {
     return Promise.all(ids.map(load)).then(function (rs) {
