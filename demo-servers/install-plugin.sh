@@ -9,6 +9,8 @@ one() {
     docker exec "$C" rm -rf /var/www/html/app/Plugin/SelfHarden
     docker cp ../plugin/SelfHarden "$C:/var/www/html/app/Plugin/SelfHarden"
     docker exec "$C" chown -R www-data:www-data /var/www/html/app/Plugin/SelfHarden
+    # docker cp は元の時刻を写すので、今の時刻にそろえる(キャッシュより古いファイルに見えないように)
+    docker exec "$C" find /var/www/html/app/Plugin/SelfHarden -exec touch {} +
   }
   # CLI には Web 用の制約を読ませない(docs/design.md)
   CONSOLE='cd /var/www/html && php -d memory_limit=-1 bin/console'
@@ -19,6 +21,7 @@ one() {
   docker exec -u www-data -e PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d "$C" sh -c "
     for i in 1 2 3; do
       $CONSOLE eccube:plugin:enable --code=SelfHarden >/dev/null 2>&1 || true
+      $CONSOLE cache:clear >/dev/null 2>&1 || true
       [ \$($CONSOLE debug:router 2>/dev/null | grep -c self_harden) -gt 0 ] && exit 0
     done
     echo '管理画面の経路が読まれませんでした' >&2; exit 1"

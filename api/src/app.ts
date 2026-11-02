@@ -61,7 +61,8 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     shop.status = ping.ok ? "connected" : "error";
     await store.putShop(shop);
     // つながったら、押されるのを待たずに最初の点検を始める
-    const started = ping.ok ? await startRun(shop, null, "connect") : null;
+    // 撮影などで、つないだだけでは始めたくないときは SH_AUTO_ON_CONNECT=0
+    const started = ping.ok && process.env.SH_AUTO_ON_CONNECT !== "0" ? await startRun(shop, null, "connect") : null;
     const runId = typeof started === "string" ? started : null;
     return c.json({ ok: ping.ok, shop_id: shopId, status: shop.status, run_id: runId, ping: ping.ok ? ping.result : ping });
   });
