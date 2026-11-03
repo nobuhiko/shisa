@@ -10,5 +10,6 @@ for v in $VERSIONS; do
   echo "=== PHP $v"
   docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver_test.php || status=1
   docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver3_test.php || status=1
+  docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver2_test.php || status=1
 done
 exit $status

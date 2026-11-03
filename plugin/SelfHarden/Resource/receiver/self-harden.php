@@ -48,7 +48,28 @@ const SH_MAPS = [
         'line_re' => '/^(3\\.0)\\./',
         'release_asset' => null,
     ],
+    // 2 系(2.13〜。PHP 7 以上で動くもの)。公開の場所は html/、本体は data/。公式のタグには eccube- が付く
+    'eccube2' => [
+        'code_tops' => ['', 'data', 'html'],
+        'var_dir' => 'data/self-harden',
+        'cache' => null,
+        'secrets' => ['data/config/config.php'],
+        'version_file' => 'data/class/SC_Initial.php',
+        'version_re' => "/define\\(\\s*'ECCUBE_VERSION'\\s*,\\s*'([^']+)'\\s*\\)/",
+        'repo' => 'EC-CUBE/ec-cube2',
+        'tag_prefix' => 'eccube-',
+        'tag_re' => '/^eccube-2\\.[0-9]+\\.[0-9]+(-p[0-9]+)?$/',
+        'line_re' => '/^(2\\.[0-9]+)\\./',
+        'release_asset' => '%s.tar.gz',
+    ],
 ];
+
+// 公式のタグから版の数字だけを取り出す(2 系のタグは eccube-2.17.2-p1 の形)
+function sh_tagver($ref)
+{
+    $p = isset(sh_map()['tag_prefix']) ? sh_map()['tag_prefix'] : '';
+    return ($p !== '' && strpos((string) $ref, $p) === 0) ? substr($ref, strlen($p)) : (string) $ref;
+}
 
 // 店の作り(どの地図か、本体の一番上、公開の場所)を、窓口が自分の居場所のファイルの目印だけで決める。
 // 上の階を本体とみなすのは、3 系の既定の置き方(窓口が html/ にあり、上の階に 3 系の目印がある)のときだけ
@@ -64,6 +85,8 @@ function sh_layout()
             $l = ['map' => 'eccube3', 'root' => $here, 'pub' => ''];
         } elseif (basename($here) === 'html' && is_file($up . '/src/Eccube/Application.php') && !is_file($up . '/src/Eccube/Kernel.php')) {
             $l = ['map' => 'eccube3', 'root' => $up, 'pub' => 'html'];
+        } elseif (basename($here) === 'html' && is_file($up . '/data/class/SC_Initial.php')) {
+            $l = ['map' => 'eccube2', 'root' => $up, 'pub' => 'html'];
         } else {
             // 見分けがつかないときは 4 系の置き方(窓口の場所が一番上)
             $l = ['map' => 'eccube4', 'root' => $here, 'pub' => ''];
@@ -921,7 +944,7 @@ function sh_official_url($rel, $ref)
         }
     }
     if (!$sha) {
-        if (!preg_match(sh_map()['tag_re'], $ref) || $installed === null || version_compare($ref, $installed, '<')) {
+        if (!preg_match(sh_map()['tag_re'], $ref) || $installed === null || version_compare(sh_tagver($ref), $installed, '<')) {
             throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号(40 文字の 16 進数。短い形は不可)だけにできます');
         }
     }
@@ -1262,8 +1285,8 @@ function op_apply_official_release(array $cfg, array $args)
     $ref = isset($args['ref']) ? $args['ref'] : null;
     $installed = sh_eccube_version();
     // 同じ系列(4.x.y の x.y が同じ)で、今の版より新しいリリースのタグだけ
-    if (!is_string($ref) || !preg_match(sh_map()['tag_re'], $ref) || !preg_match(sh_map()['line_re'], $ref, $rm) || $installed === null
-        || !preg_match(sh_map()['line_re'], $installed, $im) || $rm[1] !== $im[1] || version_compare($ref, $installed, '<=')) {
+    if (!is_string($ref) || !preg_match(sh_map()['tag_re'], $ref) || !preg_match(sh_map()['line_re'], sh_tagver($ref), $rm) || $installed === null
+        || !preg_match(sh_map()['line_re'], $installed, $im) || $rm[1] !== $im[1] || version_compare(sh_tagver($ref), $installed, '<=')) {
         throw new ShError('bad_ref', 'リリースは、今の版(' . $installed . ')と同じ系列の新しいタグだけにできます');
     }
     $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
@@ -1310,6 +1333,9 @@ function op_apply_official_release(array $cfg, array $args)
 function op_clear_cache(array $cfg, array $args)
 {
     $cache = sh_map()['cache'];
+    if (!$cache) {
+        throw new ShError('no_cache', 'この版の系統では、キャッシュを消す操作はありません');
+    }
     $base = sh_root() . '/' . $cache['base'];
     if (is_link($base)) {
         throw new ShError('symlink', 'キャッシュの場所がシンボリックリンクです');

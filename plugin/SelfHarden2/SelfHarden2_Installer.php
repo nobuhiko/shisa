@@ -4,15 +4,12 @@
 /**
  * 受け口(素の PHP 1 枚)を店の公開ディレクトリ(html/)直下に置く・消す。
  *
- * 置き場(鍵・退避・nonce)の中身は、公開ディレクトリの外の data/self-harden/ に置く。
- * 受け口は手を入れずに 4 系と同じものを使うので、受け口から見た置き場は「自分の隣の var/self-harden/」(html/var/self-harden/)になる。
- * そこは data/self-harden/ を指すシンボリックリンクにして、中身は公開ディレクトリに置かない。
- * html/var/ には Web から読ませない .htaccess を置く(リンクが使えないサーバーでは、ここが実体になるので、その守りも兼ねる)
+ * 置き場(鍵・退避・nonce)は、公開ディレクトリの外の data/self-harden/。
+ * 受け口は自分の居場所(html/ の上に data/class/SC_Initial.php がある)を見て 2 系の地図を選び、同じ場所を読む。
  */
 class SelfHarden2_Installer
 {
     const RECEIVER = 'self-harden.php';
-    const VAR_DIR = 'var/self-harden';     // 受け口から見た置き場(html/ からの相対)
     const STORE_DIR = 'self-harden';       // 置き場の実体(data/ からの相対)
     const LAB_DIR = 'self-harden-lab';
 
@@ -32,10 +29,10 @@ class SelfHarden2_Installer
         return rtrim($data !== false ? $data : DATA_REALDIR, '/') . '/' . self::STORE_DIR;
     }
 
-    /** 受け口が読む置き場(html/var/self-harden)。ふつうは storeDir を指すリンク */
+    /** 受け口が読む置き場(受け口の 2 系の地図と同じ data/self-harden) */
     public static function varDir()
     {
-        return self::htmlDir() . '/' . self::VAR_DIR;
+        return self::storeDir();
     }
 
     public static function place()
@@ -56,17 +53,9 @@ class SelfHarden2_Installer
         }
         @chmod($dst, 0644);
 
-        // 置き場の実体(公開ディレクトリの外)
+        // 置き場(公開ディレクトリの外)
         self::protectedDir(self::storeDir());
-        // 受け口から見た置き場: html/var/ を Web から閉じ、その中に実体へのリンクを張る
-        self::protectedDir($html . '/var', false);
         $var = self::varDir();
-        if (!is_link($var) && !is_dir($var)) {
-            if (!@symlink(self::storeDir(), $var)) {
-                // リンクが使えないサーバーでは、閉じた html/var/ の中に実体を置く(4 系と同じ守り方)
-                self::protectedDir($var);
-            }
-        }
         foreach (array('', '/backups', '/nonces') as $sub) {
             if (!is_dir($var . $sub)) {
                 @mkdir($var . $sub, 0700, true);
