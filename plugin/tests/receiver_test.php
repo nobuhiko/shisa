@@ -505,6 +505,39 @@ foreach (['var/self-harden/.htaccess', 'var/other/composer.json', 'var/self-hard
 // ---- 受け口に危ない関数が無いこと ----
 echo "受け口のコード\n";
 $src = file_get_contents($receiver);
+// ---- 公式のリリースの配布物(tar.gz)から当てる ----
+$lock423 = '6a7007a0b4851e5a80516b28e87a0d0420e9081d9d22eb7efa645a6265356668';
+$index423 = 'abcc550e0457cbb738ae79e81e4fcf6564fb430bd15c003075bea3bbee26418f';
+foreach ([
+    ['ref' => '4.1.0', 'why' => '別の系列'],
+    ['ref' => '4.3.0', 'why' => '別の系列(新しい)'],
+    ['ref' => '4.2.0', 'why' => '今の版と同じ'],
+    ['ref' => '710b64ce96786770fe59ba8255ff16925171f172', 'why' => 'コミットの番号'],
+    ['ref' => '4.2.3/../../x', 'why' => '形がおかしい'],
+] as $b) {
+    $r = call('apply_official_release', ['ref' => $b['ref'], 'paths' => ['composer.lock'], 'expected_sha256' => ['composer.lock' => $lock423]]);
+    check('リリース: 断る(' . $b['why'] . ')', err($r) === 'bad_ref', $r['body']);
+}
+$r = call('apply_official_release', ['ref' => '4.2.3', 'paths' => ['composer.lock']]);
+check('リリース: expected_sha256 が無ければ断る', err($r) === 'bad_request', $r['body']);
+foreach (['var/self-harden/x.php', 'self-harden.php', '.env', 'self-harden-lab/x.php', '../outside/x.php', 'bin/x.php'] as $bp) {
+    $r = call('apply_official_release', ['ref' => '4.2.3', 'paths' => [$bp], 'expected_sha256' => [$bp => $lock423]]);
+    check('リリース: 書けない場所は断る: ' . $bp, isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+}
+$before_lock = is_file($root . '/composer.lock') ? hash_file('sha256', $root . '/composer.lock') : null;
+$r = call('apply_official_release', ['ref' => '4.2.3', 'paths' => ['composer.lock', 'index.php'], 'expected_sha256' => ['composer.lock' => $lock423, 'index.php' => str_repeat('0', 64)]]);
+check('リリース: 1 つでも中身が合わなければ、何も置かない', err($r) === 'official_mismatch'
+    && (is_file($root . '/composer.lock') ? hash_file('sha256', $root . '/composer.lock') : null) === $before_lock, $r['body']);
+$r = call('apply_official_release', ['ref' => '4.2.3', 'paths' => ['composer.lock', 'src/Eccube/NoSuchFile.php'], 'expected_sha256' => ['composer.lock' => $lock423, 'src/Eccube/NoSuchFile.php' => $lock423]]);
+check('リリース: 配布物に無いファイルがあれば、何も置かない', err($r) === 'official_fetch_failed'
+    && (is_file($root . '/composer.lock') ? hash_file('sha256', $root . '/composer.lock') : null) === $before_lock, $r['body']);
+$r = call('apply_official_release', ['ref' => '4.2.3', 'paths' => ['composer.lock', 'index.php'], 'expected_sha256' => ['composer.lock' => $lock423, 'index.php' => $index423], 'verify' => ['paths' => ['/']]]);
+check('リリース: チェックサムで確かめた配布物から、composer.lock も含めて当てる', !empty($r['json']['ok']) && $r['json']['result']['rolled_back'] === false
+    && hash_file('sha256', $root . '/composer.lock') === $lock423 && hash_file('sha256', $root . '/index.php') === $index423, $r['body']);
+check('リリース: 配布物は var/self-harden/release/ に 1 つだけ', count(glob($root . '/var/self-harden/release/*.tar.gz')) === 1);
+$r = call('write_file', ['target' => 'root:composer.lock', 'content' => '{}']);
+check('リリース以外では composer.lock は書けないまま', isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+
 $code = '';
 foreach (token_get_all($src) as $tk) {
     if (is_array($tk) && in_array($tk[0], [T_COMMENT, T_DOC_COMMENT, T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE, T_INLINE_HTML, T_START_HEREDOC, T_END_HEREDOC], true)) {

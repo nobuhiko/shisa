@@ -426,7 +426,9 @@ function sh_backup($rel, $abs, $target)
     if (@file_put_contents(sh_var('backups/' . $id . '.json'), json_encode($meta)) === false) {
         throw new ShError('io', '退避を書けませんでした');
     }
-    sh_prune_backups();
+    if (empty($GLOBALS['sh_defer_prune'])) {
+        sh_prune_backups();
+    }
     return $meta;
 }
 
@@ -447,10 +449,10 @@ function sh_backup_list()
     return $out;
 }
 
-function sh_prune_backups()
+function sh_prune_backups($keep = SH_MAX_BACKUPS)
 {
     $list = sh_backup_list();
-    foreach (array_slice($list, SH_MAX_BACKUPS) as $m) {
+    foreach (array_slice($list, max(SH_MAX_BACKUPS, (int) $keep)) as $m) {
         @unlink(sh_var('backups/' . $m['backup_id'] . '.json'));
         @unlink(sh_var('backups/' . $m['backup_id'] . '.bak'));
     }
@@ -958,6 +960,12 @@ function op_apply_official_fix(array $cfg, array $args)
             $dirs_to_make[$d] = true;
         }
     }
+    return sh_apply_items($cfg, $args, $ref, $items, $dirs_to_make);
+}
+
+// 公式の中身を、全部を退避してから書き、店を開いて確かめる。だめなら全部戻す(apply_official_fix と apply_official_release で共通)
+function sh_apply_items(array $cfg, array $args, $ref, array $items, array $dirs_to_make)
+{
     $lock = @fopen(sh_var('lock'), 'c');
     if ($lock) {
         flock($lock, LOCK_EX);
@@ -992,6 +1000,8 @@ function op_apply_official_fix(array $cfg, array $args)
             }
             $created[] = $d;
         }
+        // 何百ものファイルを書くときに途中で古い退避を消すと戻せなくなるので、消すのは最後にまとめて(この回の退避は全部残す)
+        $GLOBALS['sh_defer_prune'] = true;
         foreach ($items as $it) {
             $abs = sh_root() . '/' . $it['rel'];
             $meta = sh_backup($it['rel'], $abs, 'code:' . $it['rel']);
@@ -1003,8 +1013,11 @@ function op_apply_official_fix(array $cfg, array $args)
         }
     } catch (Throwable $e) {
         $rollback();
+        $GLOBALS['sh_defer_prune'] = false;
         throw $e instanceof ShError ? $e : new ShError('io', '書いている途中で失敗したので、全部戻しました');
     }
+    $GLOBALS['sh_defer_prune'] = false;
+    sh_prune_backups(count($written) + 50);
     $res = ['ref' => $ref, 'applied' => [], 'created_dirs' => $created, 'verify' => null, 'rolled_back' => false];
     foreach ($items as $i => $it) {
         $res['applied'][] = ['path' => $it['rel'], 'source' => $it['url'], 'backup_id' => $written[$i]['backup_id'],
@@ -1020,6 +1033,202 @@ function op_apply_official_fix(array $cfg, array $args)
         }
     }
     return $res;
+}
+
+// ---- 公式のリリースの配布物(tar.gz)から当てる ----
+// 取りに行くのは GitHub の EC-CUBE 公式リポジトリのリリースの添付ファイルだけ。転送先も GitHub の配布用の場所だけ。
+// 同じリリースのチェックサムで配布物を確かめ、さらに API が渡す expected_sha256 と 1 つずつ照らす。
+// 部品(vendor/)や composer.lock の入れ替えも、composer を動かさずに公式の配布物どおりに置ける
+const SH_RELEASE_HOSTS = ['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'];
+const SH_MAX_RELEASE = 104857600;
+
+function sh_release_get($url, $dest)
+{
+    if (strpos($url, 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/') !== 0 || !function_exists('curl_init')) {
+        throw new ShError('no_official_source', '公式のリリースから取れません');
+    }
+    $fp = $dest !== null ? @fopen($dest, 'wb') : null;
+    if ($dest !== null && !$fp) {
+        throw new ShError('io', '配布物の置き場を作れませんでした');
+    }
+    $buf = '';
+    $size = 0;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => false, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3,
+        CURLOPT_TIMEOUT => 90, CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTPS, CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_WRITEFUNCTION => function ($ch, $data) use (&$buf, &$size, $fp) {
+            $host = parse_url((string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL), PHP_URL_HOST);
+            $size += strlen($data);
+            if (!in_array($host, SH_RELEASE_HOSTS, true) || $size > SH_MAX_RELEASE) {
+                return 0;
+            }
+            if ($fp) {
+                return fwrite($fp, $data);
+            }
+            $buf .= $data;
+            return strlen($data);
+        }]);
+    curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $host = parse_url((string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL), PHP_URL_HOST);
+    curl_close($ch);
+    if ($fp) {
+        fclose($fp);
+    }
+    if ($status !== 200 || !in_array($host, SH_RELEASE_HOSTS, true) || $size > SH_MAX_RELEASE) {
+        if ($dest !== null) {
+            @unlink($dest);
+        }
+        throw new ShError('official_fetch_failed', '公式のリリースから取れませんでした(HTTP ' . $status . ')');
+    }
+    return $buf;
+}
+
+// 公式の配布物を取って、同じリリースのチェックサムで確かめる。確かめた配布物は var/self-harden/release/ に残して使い回す
+function sh_release_tarball($ref)
+{
+    $dir = sh_var('release');
+    if (!is_dir($dir) && !@mkdir($dir, 0700)) {
+        throw new ShError('io', '配布物の置き場を作れませんでした');
+    }
+    $base = 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/' . $ref . '/eccube-' . $ref . '.tar.gz';
+    $path = $dir . '/eccube-' . $ref . '.tar.gz';
+    $sum = strtolower(trim(strtok(sh_release_get($base . '.checksum.sha256', null), " \t\r\n")));
+    if (!preg_match('/^[0-9a-f]{64}$/', $sum)) {
+        throw new ShError('official_fetch_failed', '公式のチェックサムが読めませんでした');
+    }
+    if (!is_file($path) || !hash_equals($sum, (string) hash_file('sha256', $path))) {
+        sh_release_get($base, $path . '.part');
+        if (!hash_equals($sum, (string) hash_file('sha256', $path . '.part'))) {
+            @unlink($path . '.part');
+            throw new ShError('official_mismatch', '公式の配布物がチェックサムと合わないので、何も置いていません');
+        }
+        rename($path . '.part', $path);
+    }
+    // 古い版の配布物は 1 つだけ残す
+    foreach ((array) glob($dir . '/eccube-*.tar.gz') as $old) {
+        if ($old !== $path) {
+            @unlink($old);
+        }
+    }
+    return $path;
+}
+
+// tar.gz を先頭から少しずつ読み、欲しいファイルだけを取り出す(全体をメモリに載せない)。先頭のフォルダ名は外す
+function sh_tar_pick($gz, array $want)
+{
+    $fp = @gzopen($gz, 'rb');
+    if (!$fp) {
+        throw new ShError('io', '配布物を開けませんでした');
+    }
+    $out = [];
+    $long = null;
+    $read = function ($n) use ($fp) {
+        $b = '';
+        while (strlen($b) < $n) {
+            $c = gzread($fp, min(1048576, $n - strlen($b)));
+            if ($c === false || $c === '') {
+                break;
+            }
+            $b .= $c;
+        }
+        return $b;
+    };
+    $skip = function ($n) use ($fp) {
+        while ($n > 0) {
+            $c = gzread($fp, min(1048576, $n));
+            if ($c === false || $c === '') {
+                break;
+            }
+            $n -= strlen($c);
+        }
+    };
+    while (count($out) < count($want)) {
+        $h = $read(512);
+        if (strlen($h) < 512 || trim($h, "\0") === '') {
+            break;
+        }
+        $name = rtrim(substr($h, 0, 100), "\0");
+        $prefix = rtrim(substr($h, 345, 155), "\0");
+        $size = octdec(trim(substr($h, 124, 12), " \0"));
+        $type = $h[156];
+        $pad = (512 - $size % 512) % 512;
+        if ($type === 'x' || $type === 'L') {
+            $data = $read($size);
+            $skip($pad);
+            if ($type === 'L') {
+                $long = rtrim($data, "\0");
+            } elseif (preg_match('/\d+ path=([^\n]*)\n/', $data, $m)) {
+                $long = $m[1];
+            }
+            continue;
+        }
+        $full = $long !== null ? $long : ($prefix !== '' ? $prefix . '/' . $name : $name);
+        $long = null;
+        $rel = preg_replace('#^[^/]+/#', '', $full);
+        if (($type === '0' || $type === "\0") && isset($want[$rel])) {
+            if ($size > SH_MAX_OFFICIAL) {
+                throw new ShError('too_large', '大きすぎるファイルがあります: ' . $rel);
+            }
+            $out[$rel] = $read($size);
+            $skip($pad);
+        } else {
+            $skip($size + $pad);
+        }
+    }
+    gzclose($fp);
+    return $out;
+}
+
+function op_apply_official_release(array $cfg, array $args)
+{
+    @set_time_limit(150);
+    $ref = isset($args['ref']) ? $args['ref'] : null;
+    $installed = sh_eccube_version();
+    // 同じ系列(4.x.y の x.y が同じ)で、今の版より新しいリリースのタグだけ
+    if (!is_string($ref) || !preg_match('/^(4\.[0-9]+)\.([0-9]+)(-p[0-9]+)?$/', $ref, $rm) || $installed === null
+        || !preg_match('/^(4\.[0-9]+)\./', $installed, $im) || $rm[1] !== $im[1] || version_compare($ref, $installed, '<=')) {
+        throw new ShError('bad_ref', 'リリースは、今の版(' . $installed . ')と同じ系列の新しいタグだけにできます');
+    }
+    $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
+    $expected = isset($args['expected_sha256']) && is_array($args['expected_sha256']) ? $args['expected_sha256'] : [];
+    if (!$paths || count($paths) > 2000 || count(array_unique($paths)) !== count($paths)) {
+        throw new ShError('bad_request', 'paths は 1〜2000 件の重ならないファイルにしてください');
+    }
+    // 1. 場所を確かめる(composer.json と composer.lock は、公式の配布物から置くときだけ書ける)
+    $rels = [];
+    $dirs_to_make = [];
+    foreach ($paths as $p) {
+        if ($p === 'composer.json' || $p === 'composer.lock') {
+            $r = $p;
+        } else {
+            $missing = [];
+            $r = sh_code_path($p, $missing);
+            foreach ($missing as $d) {
+                $dirs_to_make[$d] = true;
+            }
+        }
+        if (!isset($expected[$p]) || !preg_match('/^[0-9a-f]{64}$/', (string) $expected[$p])) {
+            throw new ShError('bad_request', 'expected_sha256 が無いファイルがあります: ' . $p);
+        }
+        $rels[$r] = $p;
+    }
+    // 2. 公式の配布物を取り、チェックサムで確かめ、欲しいファイルを取り出す
+    $gz = sh_release_tarball($ref);
+    $got = sh_tar_pick($gz, $rels);
+    $items = [];
+    $url = 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/' . $ref . '/eccube-' . $ref . '.tar.gz';
+    foreach ($rels as $r => $p) {
+        if (!isset($got[$r])) {
+            throw new ShError('official_fetch_failed', '公式の配布物に無いファイルがあるので、何も置いていません: ' . $r);
+        }
+        if (!hash_equals((string) $expected[$p], hash('sha256', $got[$r]))) {
+            throw new ShError('official_mismatch', '公式の配布物の中身が expected_sha256 と違うので、何も置いていません: ' . $r);
+        }
+        $items[] = ['rel' => $r, 'url' => $url . '#' . $r, 'content' => $got[$r]];
+    }
+    return sh_apply_items($cfg, $args, $ref, $items, $dirs_to_make);
 }
 
 // アプリのキャッシュ(var/cache/prod)を消す。いったん別の名前に付け替えてから(すぐに効く)、時間の許す範囲で中身を消す
@@ -1290,6 +1499,7 @@ function sh_main()
             case 'hash_tree': $r = op_hash_tree($args); break;
             case 'restore_official': $r = op_restore_official($cfg, $args); break;
             case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
+            case 'apply_official_release': $r = op_apply_official_release($cfg, $args); break;
             case 'quarantine': $r = op_quarantine($cfg, $args); break;
             case 'clear_cache': $r = op_clear_cache($cfg, $args); break;
             case 'release_quarantine': $r = sh_release(isset($args['quarantine_id']) ? $args['quarantine_id'] : null); break;
