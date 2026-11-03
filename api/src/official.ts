@@ -11,13 +11,21 @@ const VERSION_RE = /^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
 // 3 系(3.0.x)は GitHub のリリースに配布物が添付されていない。公式リポジトリのタグのソース一式を正本にする(vendor/ は含まれない)
 const V3_RE = /^3\.0\.[0-9]+(-p[0-9]+)?$/;
 const V3_ARCHIVE = "https://github.com/EC-CUBE/ec-cube/archive/refs/tags/";
+// 2 系(2.x)は EC-CUBE/ec-cube2 のリリース。タグは eccube-<版>。配布物に data/vendor/ は入っていない
+const V2_RE = /^(eccube-)?2\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
+const V2_RELEASE = "https://github.com/EC-CUBE/ec-cube2/releases/download/";
+export const v2tag = (v: string) => (v.startsWith("eccube-") ? v : `eccube-${v}`);
+export const plainVersion = (v: string) => v.replace(/^eccube-/, "");
+// 部品のフォルダ(配布物に入っていない系統では比べない)
+export const vendorDirOf = (v: string) => (V2_RE.test(v) ? "data/vendor/" : "vendor/");
 
 export interface Manifest {
   version: string;
   source: string;
   tarball_sha256: string;
   files: Record<string, string>; // path -> sha256
-  source_only?: boolean; // タグのソース一式から作った一覧(vendor/ を含まない。3 系)
+  source_only?: boolean; // 部品のフォルダを含まない一覧(3 系はタグのソース、2 系は配布物に data/vendor/ が無い)
+  vendor_dir?: string;
 }
 
 const dir = () => join(process.env.SH_DATA_DIR ?? "./data", "official");
@@ -30,6 +38,23 @@ async function download(url: string): Promise<Buffer> {
 }
 
 async function tarball(version: string): Promise<{ buf: Buffer; sha: string; source: string }> {
+  if (V2_RE.test(version)) {
+    const tag = v2tag(version);
+    await mkdir(dir(), { recursive: true });
+    const path = join(dir(), `${tag}.tar.gz`);
+    const source = `${V2_RELEASE}${tag}/${tag}.tar.gz`;
+    let buf: Buffer;
+    try {
+      buf = await readFile(path);
+    } catch {
+      buf = await download(source);
+      const expect = (await download(`${source}.checksum.sha256`)).toString("utf8").trim().split(/\s+/)[0];
+      const got = createHash("sha256").update(buf).digest("hex");
+      if (expect !== got) throw new Error(`公式の配布物の SHA-256 が公式の値と合いません(${got} != ${expect})`);
+      await writeFile(path, buf);
+    }
+    return { buf, sha: createHash("sha256").update(buf).digest("hex"), source };
+  }
   if (V3_RE.test(version)) {
     await mkdir(dir(), { recursive: true });
     const path = join(dir(), `eccube-src-${version}.tar.gz`);
@@ -93,6 +118,7 @@ function* entries(tar: Buffer): Generator<{ path: string; data: Buffer }> {
 }
 
 export async function manifest(version: string): Promise<Manifest> {
+  version = V2_RE.test(version) ? plainVersion(version) : version;
   const cache = join(dir(), `manifest-${version}.json`);
   try {
     return JSON.parse(await readFile(cache, "utf8"));
@@ -102,7 +128,7 @@ export async function manifest(version: string): Promise<Manifest> {
   const { buf, sha, source } = await tarball(version);
   const files: Record<string, string> = {};
   for (const e of entries(gunzipSync(buf))) files[e.path] = createHash("sha256").update(e.data).digest("hex");
-  const m: Manifest = { version, source, tarball_sha256: sha, files, ...(V3_RE.test(version) ? { source_only: true } : {}) };
+  const m: Manifest = { version, source, tarball_sha256: sha, files, ...(V3_RE.test(version) || V2_RE.test(version) ? { source_only: true, vendor_dir: vendorDirOf(version) } : {}) };
   await writeFile(cache, JSON.stringify(m));
   return m;
 }
@@ -130,15 +156,19 @@ function inShopCode(p: string) {
 
 export async function officialFixScope(installed: string, ref: string): Promise<FixScope> {
   let url: string;
-  if (SHA_RE.test(ref)) url = `${GH_API}/commits/${ref}`;
+  const v2 = V2_RE.test(installed);
+  const api = v2 ? "https://api.github.com/repos/EC-CUBE/ec-cube2" : GH_API;
+  if (SHA_RE.test(ref)) url = `${api}/commits/${ref}`;
   else if (TAG_RE.test(ref) && TAG_RE.test(installed)) url = `${GH_API}/compare/${installed}...${ref}`;
+  else if (v2 && V2_RE.test(ref)) url = `${api}/compare/${v2tag(installed)}...${v2tag(ref)}`;
   else throw new Error(`公式の修正の範囲を出せない版の指定です: ${ref}`);
   const res = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "self-harden" }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`公式の修正の範囲を取れませんでした: HTTP ${res.status}`);
   const data = (await res.json()) as { files?: { filename: string; status: string }[] };
   const all = (data.files ?? []).map((f) => f.filename);
-  const blockers = all.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p) || p === "composer.lock" || p === "composer.json");
-  const files = all.filter((p) => inShopCode(p) && !blockers.includes(p) && (data.files ?? []).find((f) => f.filename === p)?.status !== "removed");
+  const blockers = all.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p) || p === "composer.lock" || p === "composer.json" || (v2 && /^html\/install\/sql\//.test(p)));
+  const inCode = v2 ? (p: string) => /^(data|html)\//.test(p) && !/^data\/vendor\//.test(p) && !/^html\/install\//.test(p) : inShopCode;
+  const files = all.filter((p) => inCode(p) && !blockers.includes(p) && (data.files ?? []).find((f) => f.filename === p)?.status !== "removed");
   return { files, blockers, source: url.replace("https://api.github.com/repos/", "https://github.com/") };
 }
 

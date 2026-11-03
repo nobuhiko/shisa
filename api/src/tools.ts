@@ -445,7 +445,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         // タグのソースから作った一覧(3 系)には vendor/ が無い。部品は check_packages で見る
         let vendorNotCompared = 0;
         for (const [p, sha] of Object.entries(mine)) {
-          if (m.source_only && p.startsWith("vendor/")) { vendorNotCompared++; continue; }
+          if (m.source_only && p.startsWith(m.vendor_dir ?? "vendor/")) { vendorNotCompared++; continue; }
           const fx = intendedBy.get(p);
           if (fx && fx.sha256 === sha) {
             intended.push({ path: p, ref: fx.ref, reason: fx.reason, applied_at: new Date(fx.at).toISOString() });
@@ -580,7 +580,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       const title = `公式のリリースに上げる: ${ref}`;
       try {
         const installed = await installedVersion(shop);
-        const line = (v: string) => (/^(4\.\d+)\./.exec(v) ?? [])[1];
+        const line = (v: string) => (/^([2-4]\.\d+)\./.exec(v.replace(/^eccube-/, "")) ?? [])[1];
         if (!line(ref) || line(ref) !== line(installed)) {
           return { content: j({ ok: false, error: "bad_ref", detail: `Only a newer release tag of the same line as the installed version (${installed}).` }), isError: true, title };
         }
