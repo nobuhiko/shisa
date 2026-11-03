@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // 通しの 1 本を組み立てる(手元だけ): 起(できている mp4)+ 導入(画面を並べる)+ 承・転(撮影モードの録画に、止めどころごとにナレーションを置く)+ 結
 // 使い方: PW=<playwright> node api/scripts/make-full.mjs <作業ディレクトリ(video/)>
-// 前提: VOICEVOX が 127.0.0.1:50021、デモのお店 B が 8082、起の video/ki-v3.mp4、絵コンテの video/board/*.png
+// 前提: VOICEVOX が 127.0.0.1:50021、デモのお店 B が 8082、絵コンテの video/board/*.png
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ const dur = (f) => Number(sh("ffprobe", ["-v", "error", "-show_entries", "format
 
 // 1. 1 行ずつ音声に
 const clip = {};
-for (const sec of ["intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
+for (const sec of ["ki", "intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
   const key = `${sec}${i}`, f = join(out, key);
   execFileSync("node", [join(ROOT, "api/scripts/tts.mjs"), String(voice.speaker_id), f, JSON.stringify([{ text: l.read ?? l.text, pause: l.pause }])], { env: { ...process.env, ACCENTS: JSON.stringify(voice.accents) } });
   clip[key] = { file: f + ".wav", d: dur(f + ".wav") };
@@ -28,16 +28,21 @@ for (const sec of ["intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
 
 // 2. 止めどころ(撮影モードで止まる順)ごとに読む行。止まる長さは読む行の長さの合計
 // 止めどころは帯の言葉で探す(番号は記録や撮影モードの直しでずれるので)。まず短く流して、止まる順を取る
-const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2", "ten3"]]];
+const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]], [/中の部品を/, ["ten3", "ten4"], "ten2"]];
 const dry = join(out, "dry"); execFileSync("rm", ["-rf", dry]);
 sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, Array(30).fill(150).join(","), dry]);
 const order = JSON.parse(readFileSync(join(dry, "marks.json"), "utf8")).stops.map((s) => s.text);
 const MAP = {}; const used = new Set();
-for (const [re, keys] of RULES) { const i = order.findIndex((t, j) => re.test(t) && !used.has(j)); if (i < 0) throw new Error("止めどころが無い: " + re); used.add(i); MAP[i] = keys; }
+// 3 つ目があるものは、その止めどころが無い点検ではその行の続きで読む(部品を差し替えなかった点検など)
+for (const [re, keys, after] of RULES) {
+  const i = order.findIndex((t, j) => re.test(t) && !used.has(j));
+  if (i < 0 && after) { MAP[Object.keys(MAP).find((j) => MAP[j].includes(after))].push(...keys); continue; }
+  if (i < 0) throw new Error("止めどころが無い: " + re); used.add(i); MAP[i] = keys;
+}
 // 「この間、お店は開けたまま」(sho6)は、本番に入れた話(sho5)のあとでないと意味が通らない。判断の行が先に来た点検では、sho5 の続きで読む
 { const at = (k) => Number(Object.keys(MAP).find((i) => MAP[i].includes(k)));
   if (at("sho6") < at("sho5")) { MAP[at("sho6")] = MAP[at("sho6")].filter((k) => k !== "sho6"); if (!MAP[at("sho6")]?.length) delete MAP[at("sho6")]; MAP[at("sho5")].push("sho6"); } }
-const holds = order.map((_, i) => (MAP[i] ? Math.round(MAP[i].reduce((a, k) => a + clip[k].d, 0) * 1000 + 300) : 1200));
+const holds = order.map((_, i) => (MAP[i] ? Math.round(MAP[i].reduce((a, k) => a + clip[k].d, 0) * 1000 + 300) : 500));
 console.log(order.map((t, i) => `${i} ${MAP[i] ? MAP[i].join("+") : "-"} ${t}`).join("\n"));
 const fdir = join(out, "film"); execFileSync("rm", ["-rf", fdir]);
 sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, holds.join(","), fdir]);
@@ -70,18 +75,50 @@ ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) 
   iplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[ia${i}]`).join(";") + ";" + iplace.map((_, i) => `[ia${i}]`).join("") + `amix=inputs=${iplace.length}:normalize=0,apad[ia]`,
   "-map", "[v]", "-map", "[ia]", "-t", String(ilen), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "2-intro.mp4"));
 
+// 行の目印(場面の右下の四角が白黒に反転する)を録画の中で探す。録画は時計どおりに進まないので、音声はこの時刻に置く
+const MARK = "drawbox=x=1896:y=1056:w=24:h=24:color=0x0d172a:t=fill";
+function lineFlips(webm) {
+  const txt = execFileSync("ffmpeg", ["-v", "error", "-i", webm, "-vf", "crop=12:12:1902:1062,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-", "-f", "null", "-"]).toString();
+  // 読み込み前の白い画面は目印ではない。場面の黒い四角が出てから、反転を数える
+  const flips = []; let pts = 0, prev = null;
+  for (const ln of txt.split("\n")) {
+    const m = /pts_time:([0-9.]+)/.exec(ln); if (m) { pts = Number(m[1]); continue; }
+    const y = /YAVG=([0-9.]+)/.exec(ln); if (!y) continue;
+    const v = Number(y[1]);
+    if (prev === null) { if (v < 40) prev = false; continue; }
+    const white = v > 128;
+    if (white !== prev) { flips.push(pts); prev = white; }
+  }
+  return { flips, end: pts };
+}
+// ナレーション付きの場面を録って、行の目印のあいだを、行の音声の長さに合わせて伸び縮みさせる(録画は時計より遅れて進むので)
+function narratedScene(scene, keys, name) {
+  const dir = join(out, name); execFileSync("rm", ["-rf", dir]);
+  const rec = sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), scene + "&mark=1", dir, ".kv-layer.in", name === "ki" ? "起" : "結"]);
+  const webm = join(dir, readdirSync(dir).find((f) => f.endsWith(".webm")));
+  const { flips, end } = lineFlips(webm);
+  if (flips.length !== keys.length) throw new Error(`${name}: 行の目印が ${flips.length} 個(${keys.length} 個のはず)`);
+  const d = keys.map((k) => clip[k].d), n = keys.length;
+  const ratio = n > 1 ? (flips[n - 1] - flips[0]) / d.slice(0, -1).reduce((a, x) => a + x, 0) : 1;
+  const seg = flips.map((a, i) => [a, i + 1 < n ? flips[i + 1] : Math.min(end, a + d[i] * ratio)]);
+  const list = join(out, name + ".list"); writeFileSync(list, keys.map((k) => `file '${clip[k].file}'`).join("\n"));
+  const wav = join(out, name + "-voice.wav"); ff("-f", "concat", "-safe", "0", "-i", list, "-c", "copy", wav);
+  const f = join(out, name + ".mp4");
+  ff("-i", webm, "-i", wav, "-filter_complex",
+    `[0:v]fps=30,${MARK},split=${n}` + seg.map((_, i) => `[s${i}]`).join("") + ";" +
+    seg.map(([a, b], i) => `[s${i}]trim=${a.toFixed(3)}:${b.toFixed(3)},setpts=(PTS-STARTPTS)*${(d[i] / (b - a)).toFixed(5)}[v${i}]`).join(";") + ";" +
+    seg.map((_, i) => `[v${i}]`).join("") + `concat=n=${n}:v=1:a=0[v]`,
+    "-map", "[v]", "-map", "1:a", "-t", d.reduce((a, x) => a + x, 0).toFixed(3), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", f);
+  console.log(name, "行の目印", flips.map((x) => x.toFixed(2)).join(","), "録画の遅れ", ratio.toFixed(3));
+  return f;
+}
+
 // 5. 結の 2〜4 行目: 版の違う店の健康診断 → 志の 1 行 → 屋根のシーサーと名前(再生の画面の場面 KE を録る)
 const kd = ["ketsu1", "ketsu2", "ketsu3"].map((k) => clip[k].d.toFixed(2));
-const kdir = join(out, "ke"); execFileSync("rm", ["-rf", kdir]);
-const krec = sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), `KE&d=${kd.join(",")}`, kdir, ".kv-layer.in", "結"]);
-const ktrim = (/TRIM ([0-9.]+)/.exec(krec) ?? [])[1] ?? "0";
-writeFileSync(join(out, "end.list"), ["ketsu1", "ketsu2", "ketsu3"].map((k) => `file '${clip[k].file}'`).join("\n"));
-const endA = join(out, "end.wav"); ff("-f", "concat", "-safe", "0", "-i", join(out, "end.list"), "-c", "copy", endA);
-const kwebm = join(kdir, readdirSync(kdir).find((f) => f.endsWith(".webm")));
-ff("-ss", ktrim, "-i", kwebm, "-i", endA, "-map", "0:v", "-map", "1:a", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", join(out, "4-end.mp4"));
+execFileSync("cp", [narratedScene(`KE&d=${kd.join(",")}`, ["ketsu1", "ketsu2", "ketsu3"], "ke"), join(out, "4-end.mp4")]);
 
-// 6. 起をそろえて、つなぐ
-ff("-i", join(W, "ki-v3.mp4"), "-vf", "fps=30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "1-ki.mp4"));
+// 6. 起(場面 V を録り、行の音声を置く)をつくって、つなぐ
+execFileSync("cp", [narratedScene("V", N.ki.map((_, i) => `ki${i}`), "ki"), join(out, "1-ki.mp4")]);
 writeFileSync(join(out, "all.list"), ["1-ki", "2-intro", "3-film", "4-end"].map((n) => `file '${join(out, n + ".mp4")}'`).join("\n"));
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, "full-v1.mp4"));
 console.log("full-v1.mp4", dur(join(W, "full-v1.mp4")).toFixed(1), "秒", JSON.stringify({ ki: dur(join(out, "1-ki.mp4")), intro: dur(join(out, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), end: dur(join(out, "4-end.mp4")) }));

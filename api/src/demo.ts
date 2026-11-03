@@ -526,6 +526,14 @@ const PAGE = String.raw`<!doctype html>
 
   function html(tag, cls, inner) { var e = el(tag, cls); e.innerHTML = inner; return e; }
   function holdFor(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
+  // ナレーション付きの場面の行の目印: 右下の 24px の四角を、行が変わるたびに白黒で反転する。録画は時計どおりに進まないので、
+  // 組み立てでは録画の中のこの反転を探して行の音声を置き、四角は背景の色で塗りつぶす(録るときの ?mark=1 のときだけ出す)
+  function lineMark(i) {
+    if (q('mark') !== '1') return;
+    var m = document.getElementById('sh-line-mark');
+    if (!m) { m = document.createElement('div'); m.id = 'sh-line-mark'; m.style.cssText = 'position:fixed;right:0;bottom:0;width:24px;height:24px;z-index:2147483647;background:#000'; document.body.appendChild(m); }
+    m.style.background = i % 2 ? '#000' : '#fff';
+  }
 
   // 前提のカード: なぜ PHP を上げないのか(サーバー会社の名前は出さない)
   function badge(on) { document.querySelector('header .badge').style.visibility = on ? '' : 'hidden'; document.body.classList.toggle('explain', !on); document.body.classList.toggle('real', on); }
@@ -553,6 +561,7 @@ const PAGE = String.raw`<!doctype html>
 
   // 起(ナレーション付き): 行ごとの音声の長さ(story.json の narration.ki[].dur)に合わせて画面を切り替える。音声は録画のあとで重ねる
   scenes.V = function () {
+    lineMark(-1);
     layout(1); badge(false); document.body.classList.add('bare');
     var d = el('div', 'kv'); main.appendChild(d);
     var cap = el('div', 'kv-cap'); document.body.appendChild(cap);
@@ -596,20 +605,21 @@ const PAGE = String.raw`<!doctype html>
         function () { tl.classList.add('dim'); show(late); },
         function () { hide(late); hide(tl); sh.classList.remove('far', 'out'); sh.classList.add('guarded', 'in'); show(ok); }
       ];
-      var t0 = performance.now();
-      return L.reduce(function (p, line, i) {
+      // 録るときは、行の目印の黒い四角が確実に映るまで少し待ってから始める(この待ちは組み立てで切り落とす)
+      return holdFor(q('mark') === '1' ? 500 : 0).then(function () { var t0 = performance.now(); return L.reduce(function (p, line, i) {
         return p.then(function () {
           cap.textContent = line.text; cap.classList.add('in');
-          plan[i]();
+          plan[i](); lineMark(i);
           var due = L.slice(0, i + 1).reduce(function (a, x) { return a + (x.dur || 3) * 1000; }, 0);
           return holdFor(Math.max(0, due - (performance.now() - t0)));
         });
-      }, Promise.resolve()).then(function () { cap.remove(); document.title = '起 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; });
+      }, Promise.resolve()).then(function () { cap.remove(); document.title = '起 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; }); });
     });
   };
 
   // 結(ナレーション付き): 版の違う店の健康診断が並ぶ → 志の 1 行 → 屋根のシーサーと名前。行の長さは URL の d=秒,秒,秒
   scenes.KE = function () {
+    lineMark(-1);
     layout(1); badge(false); document.body.classList.add('bare');
     var d = el('div', 'kv'); main.appendChild(d);
     var cap = el('div', 'kv-cap'); document.body.appendChild(cap);
@@ -631,15 +641,15 @@ const PAGE = String.raw`<!doctype html>
       n.appendChild(el('b', null, (st.name || {}).short || 'Shisa')); n.appendChild(el('p', null, (st.name || {}).tagline || ''));
       n.appendChild(el('small', 'ke-credit', E.credit)); n.appendChild(el('small', 'ke-notice', E.notice));
       var plan = [function () { g.classList.add('in'); g.querySelectorAll('video').forEach(function (v, i) { setTimeout(function () { v.play(); }, i * 450); }); }, function () { g.classList.add('out'); m.classList.add('in'); }, function () { m.classList.add('out'); n.classList.add('in'); }];
-      var t0 = performance.now();
-      return L.reduce(function (p, line, i) {
+      // 録るときは、行の目印の黒い四角が確実に映るまで少し待ってから始める(この待ちは組み立てで切り落とす)
+      return holdFor(q('mark') === '1' ? 500 : 0).then(function () { var t0 = performance.now(); return L.reduce(function (p, line, i) {
         return p.then(function () {
           // 志の 1 行と名前の画面は、画面の大きな文字が言葉を担うので、字幕は出さない(下の注記とも重ならないように)
-          cap.textContent = i >= 1 ? '' : line.text; cap.classList.toggle('in', i === 0); plan[i]();
+          cap.textContent = i >= 1 ? '' : line.text; cap.classList.toggle('in', i === 0); plan[i](); lineMark(i);
           var due = durs.slice(0, i + 1).reduce(function (a, x) { return a + x * 1000; }, 0);
           return holdFor(Math.max(0, due - (performance.now() - t0)));
         });
-      }, Promise.resolve()).then(function () { document.title = '結 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; });
+      }, Promise.resolve()).then(function () { document.title = '結 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; }); });
     });
   };
 
