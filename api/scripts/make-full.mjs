@@ -11,7 +11,7 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 const story = JSON.parse(readFileSync(join(ROOT, "api/demo/story.json"), "utf8"));
 const N = story.narration;
 const voice = N.voice;
-const SHOP = "http://127.0.0.1:8082", RUN = "run_7d1a35d01696bb75", ADV = "https://www.kagoya.jp/news/2026102337094/";
+const SHOP = "http://127.0.0.1:8082", RUN = "run_8b6975cd6a0135d2", ADV = "https://www.kagoya.jp/news/2026102337094/";
 const out = join(W, "full"); mkdirSync(out, { recursive: true });
 const sh = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "inherit"] }).toString();
 const ff = (...a) => sh("ffmpeg", ["-y", "-loglevel", "error", ...a]);
@@ -27,7 +27,7 @@ for (const sec of ["intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
 
 // 2. 止めどころ(撮影モードで止まる順)ごとに読む行。止まる長さは読む行の長さの合計
 // 止めどころは帯の言葉で探す(番号は記録や撮影モードの直しでずれるので)。まず短く流して、止まる順を取る
-const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手/, ["sho4"]], [/本番の \.htaccess/, ["sho5"]], [/本番の \.user\.ini/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]]];
+const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]]];
 const dry = join(out, "dry"); execFileSync("rm", ["-rf", dry]);
 sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, Array(30).fill(150).join(","), dry]);
 const order = JSON.parse(readFileSync(join(dry, "marks.json"), "utf8")).stops.map((s) => s.text);
