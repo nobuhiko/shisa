@@ -195,7 +195,7 @@
     var sections = [
       ['したこと', r.actions, function (a) { var li = el('li', null, a.title + ' — ' + a.target); li.appendChild(el('div', 'text-muted small', '確かめ方: ' + a.verified + (a.backup_id ? '(退避: ' + a.backup_id + ')' : ''))); return li; }],
       ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + (stLabels[f.status] || f.status) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
-      ['これから self-harden がやること', r.next_by_self_harden, function (x) { return el('li', null, x.title + (x.when ? '(' + x.when + ')' : '')); }],
+      ['これから Shisa がやること', r.next_by_self_harden, function (x) { return el('li', null, x.title + (x.when ? '(' + x.when + ')' : '')); }],
       ['お願い(依頼文つき)', r.requests, function (x) {
         var li = el('li', null, x.title + '(宛先: ' + x.to + ')');
         li.appendChild(el('div', 'text-muted small', x.why));
