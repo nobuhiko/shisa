@@ -104,15 +104,14 @@
           "match": "サアバアガイシャ",
           "accent": 5,
           "note": "サーバーが↘いしゃ"
+        },
+        {
+          "match": "イイシイキュウブ",
+          "accent": 5,
+          "note": "イーシーキュ↘ーブ(B)。C のイーシーキュー↘ブ(accent 6)も候補"
         }
       ],
-      "user_dict": [
-        {
-          "surface": "イーシーキューブ",
-          "pronunciation": "イーシーキューブ",
-          "accent_type": 0
-        }
-      ]
+      "user_dict": []
     },
     "ki": [
       {
