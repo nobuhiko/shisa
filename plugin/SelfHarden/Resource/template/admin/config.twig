@@ -39,7 +39,7 @@
   .sh-health th { font-size: 12px; color: #888; font-weight: normal; }
   .sh-health .item { font-weight: bold; white-space: nowrap; }
   .sh-health .j { font-weight: bold; white-space: nowrap; }
-  .sh-health .j-ok { color: #2e7d32; } .sh-health .j-fixed { color: #2e7d32; } .sh-health .j-mit { color: #1565c0; } .sh-health .j-human { color: #b26a00; } .sh-health .j-next { color: #3949ab; }
+  .sh-health .j-ok { color: #2e7d32; } .sh-health .j-fixed { color: #2e7d32; } .sh-health .j-mit { color: #1565c0; } .sh-health .j-human { color: #b26a00; } .sh-health .j-next { color: #3949ab; } .sh-health .j-approve { color: #7b1fa2; }
   .sh-health tr { transition: background .4s; } .sh-health tr.in { background: #f1f8e9; }
   body.sh-big .sh-health td { font-size: 17px; }
   body.sh-film #sh-runs-card, body.sh-film #sh-connect-card { display: none; }
@@ -149,14 +149,14 @@
   var timer = null, shown = 0;
   var labels = { running: '実行中…', done: '完了', failed: '止まりました' };
   var sevLabels = { high: '高', medium: '中', low: '低', info: '情報' };
-  var stLabels = { fixed: '直した', mitigated: '守りを入れた', scheduled: '次の点検で Shisa が対応', needs_human: '人の作業が必要', not_affected: '当てはまらない' };
+  var stLabels = { fixed: '直した', mitigated: '守りを入れた', scheduled: '次の点検で Shisa が対応', needs_approval: '店主の判断を待つ(メンテナンスが要る作業)', needs_human: 'サーバー会社の作業が必要', not_affected: '当てはまらない' };
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
   // ---- お店の健康診断(報告の「見つけたこと」の項目から作る) ----
   var HEALTH_ITEMS = [['php', 'PHP(お店を動かす土台)'], ['eccube', 'EC-CUBE(お店のソフト)'], ['packages', '中の部品(ほかの開発元のプログラム)'],
     ['tamper', '書き換えられた跡'], ['exposure', '外から見えていた情報'], ['config', '設定の甘さ']];
-  var JUDGE = { needs_human: [5, '人の作業が必要', 'j-human'], scheduled: [4, '次の点検で Shisa が対応', 'j-next'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
+  var JUDGE = { needs_human: [6, 'サーバー会社の作業', 'j-human'], needs_approval: [5, '店主の判断を待つ', 'j-approve'], scheduled: [4, '次の点検で Shisa が対応', 'j-next'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
   function renderHealth(r, meta, animate) {
     var f = (r && r.findings) || [];
     if (!f.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
