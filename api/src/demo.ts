@@ -47,6 +47,17 @@ export function mountDemo(app: Hono, store: Store) {
     }
   });
 
+  // 結の素材: 版の違う店の健康診断の画面(demo/shots/ の .png だけ)
+  app.get("/demo/shot/:name", async (c) => {
+    const name = c.req.param("name");
+    if (!/^[a-z0-9-]+\.png$/.test(name)) return c.text("not found", 404);
+    try {
+      return c.body(await readFile(new URL(`../demo/shots/${name}`, import.meta.url)), 200, { "Content-Type": "image/png" });
+    } catch {
+      return c.text("not found", 404);
+    }
+  });
+
   app.get("/demo", (c) => c.html(PAGE));
 }
 
@@ -153,6 +164,16 @@ const PAGE = String.raw`<!doctype html>
   .kv-ok { justify-content: flex-start; padding-top: 10vh; }
   .kv-store { position: relative; } .kv-roof { position: absolute; left: 50%; bottom: 100%; width: 16vw; transform: translate(-50%, 1vh) scale(.6); opacity: 0; transition: opacity .6s, transform .7s cubic-bezier(.2,1.4,.4,1); }
   .kv-shop.guarded .kv-roof { opacity: 1; transform: translate(-50%, 0) scale(1); transition-delay: .3s; } .kv-shop.guarded .kv-bubble { opacity: 0; } .kv-shop.guarded { filter: none; transform: none; } .kv-ok b { font-size: clamp(56px, 13vh, 140px); color: #fff; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
+  .ke-grid { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 2vh 1.5vw; padding: 4vh 3vw 12vh; align-content: center; }
+  .ke-tile { display: flex; flex-direction: column; gap: 0.8vh; opacity: 0; transform: translateY(12px); transition: opacity .5s, transform .5s; transition-delay: calc(var(--i) * .45s); }
+  .ke-grid.in .ke-tile { opacity: 1; transform: none; }
+  .ke-tile b { color: #fbbf24; font-size: clamp(16px, 2.6vh, 28px); }
+  .ke-tile img { width: 100%; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .ke-mission b { font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; font-size: clamp(36px, 7vh, 80px); color: #fff; }
+  .ke-name { gap: 1.6vh; } .ke-name img { height: 26vh; } .ke-name b { font-size: clamp(48px, 10vh, 110px); color: #fff; }
+  .ke-name p { margin: 0; color: #cbd5e1; font-size: clamp(18px, 3vh, 32px); }
+  .ke-credit { color: #e2e8f0; font-size: clamp(14px, 2.2vh, 22px); margin-top: 2vh; }
+  .ke-notice { position: absolute; left: 6vw; right: 6vw; bottom: 3vh; color: #64748b; font-size: 13px; text-align: center; }
   .opening { flex: 1; display: grid; place-items: center; }
   .opening b { font-size: clamp(32px, 6vh, 64px); color: #fff; letter-spacing: .02em; opacity: 0; transition: opacity .8s; } .opening b.in { opacity: 1; }
   body.bare header { visibility: hidden; }
@@ -252,7 +273,7 @@ const PAGE = String.raw`<!doctype html>
   .card ul { list-style: none; padding: 0; margin: 0; }
   .card li { font-size: 22px; line-height: 1.45; padding: 6px 0; }
   .card li small { display: block; font-size: 15px; color: var(--muted); }
-</style><script>if (/[?&]scene=(story|O|V|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
+</style><script>if (/[?&]scene=(story|O|V|KE|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
 <header><h1 id="title">self-harden</h1><span class="badge">実際の動作(記録の早送り)</span><span class="adv" id="adv"></span></header>
 <div class="controls" id="controls"></div>
 <main id="main"></main>
@@ -587,6 +608,38 @@ const PAGE = String.raw`<!doctype html>
     });
   };
 
+  // 結(ナレーション付き): 版の違う店の健康診断が並ぶ → 志の 1 行 → 屋根のシーサーと名前。行の長さは URL の d=秒,秒,秒
+  scenes.KE = function () {
+    layout(1); badge(false); document.body.classList.add('bare');
+    var d = el('div', 'kv'); main.appendChild(d);
+    var cap = el('div', 'kv-cap'); document.body.appendChild(cap);
+    var durs = (q('d') || '6,5,4').split(',').map(Number);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var E = st.ending, L = st.narration.ketsu.slice(1);
+      function layer(cls) { var e = el('div', 'kv-layer ' + cls); d.appendChild(e); return e; }
+      var g = layer('ke-grid');
+      E.grid.forEach(function (t, i) {
+        var c = el('div', 'ke-tile'); c.style.setProperty('--i', i);
+        c.appendChild(el('b', null, t.label)); var im = el('img'); im.src = '/demo/shot/' + t.img; c.appendChild(im); g.appendChild(c);
+      });
+      var m = layer('ke-mission'); m.appendChild(el('b', null, E.mission));
+      var n = layer('ke-name');
+      var img = el('img'); img.src = '/demo/asset/' + encodeURIComponent((st.name || {}).image || 'shisa.svg'); n.appendChild(img);
+      n.appendChild(el('b', null, (st.name || {}).short || 'Shisa')); n.appendChild(el('p', null, (st.name || {}).tagline || ''));
+      n.appendChild(el('small', 'ke-credit', E.credit)); n.appendChild(el('small', 'ke-notice', E.notice));
+      var plan = [function () { g.classList.add('in'); }, function () { g.classList.add('out'); m.classList.add('in'); }, function () { m.classList.add('out'); n.classList.add('in'); }];
+      var t0 = performance.now();
+      return L.reduce(function (p, line, i) {
+        return p.then(function () {
+          // 志の 1 行と名前の画面は、画面の大きな文字が言葉を担うので、字幕は出さない(下の注記とも重ならないように)
+          cap.textContent = i >= 1 ? '' : line.text; cap.classList.toggle('in', i === 0); plan[i]();
+          var due = durs.slice(0, i + 1).reduce(function (a, x) { return a + x * 1000; }, 0);
+          return holdFor(Math.max(0, due - (performance.now() - t0)));
+        });
+      }, Promise.resolve()).then(function () { document.title = '結 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; });
+    });
+  };
+
   // 冒頭: 応募先の名前
   scenes.O = function () {
     layout(1); badge(false); document.body.classList.add('bare');
@@ -864,7 +917,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['story', 'O', 'V', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['story', 'O', 'V', 'KE', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -893,7 +946,7 @@ const PAGE = String.raw`<!doctype html>
     if (k === 'all') all();
     else if (k === 'story') story();
     else if (k === 'Z') scenes.Z(ids);
-    else if (k === 'O' || k === 'V' || k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'O' || k === 'V' || k === 'KE' || k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);

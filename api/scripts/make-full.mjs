@@ -11,7 +11,7 @@ const ROOT = new URL("../..", import.meta.url).pathname;
 const story = JSON.parse(readFileSync(join(ROOT, "api/demo/story.json"), "utf8"));
 const N = story.narration;
 const voice = N.voice;
-const SHOP = "http://127.0.0.1:8082", RUN = "run_8b6975cd6a0135d2", ADV = "https://www.kagoya.jp/news/2026102337094/";
+const SHOP = "http://127.0.0.1:8082", RUN = process.env.RUN || "run_8b6975cd6a0135d2", ADV = "https://www.kagoya.jp/news/2026102337094/";
 const out = join(W, "full"); mkdirSync(out, { recursive: true });
 const sh = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "inherit"] }).toString();
 const ff = (...a) => sh("ffmpeg", ["-y", "-loglevel", "error", ...a]);
@@ -27,7 +27,7 @@ for (const sec of ["intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
 
 // 2. 止めどころ(撮影モードで止まる順)ごとに読む行。止まる長さは読む行の長さの合計
 // 止めどころは帯の言葉で探す(番号は記録や撮影モードの直しでずれるので)。まず短く流して、止まる順を取る
-const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]]];
+const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]]];
 const dry = join(out, "dry"); execFileSync("rm", ["-rf", dry]);
 sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, Array(30).fill(150).join(","), dry]);
 const order = JSON.parse(readFileSync(join(dry, "marks.json"), "utf8")).stops.map((s) => s.text);
@@ -40,31 +40,41 @@ sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, holds.joi
 const marks = JSON.parse(readFileSync(join(fdir, "marks.json"), "utf8"));
 const webm = join(fdir, readdirSync(fdir).find((f) => f.endsWith(".webm")));
 
-// 3. 承・転: 録画の「貼る前」から「健康診断の表 + 結の 1 行目」まで。止めどころに行を置く
-const S = Math.max(0, marks.ready - 0.4);
+// 3. 承・転: 録画の「通知を渡す」を押したところ(貼る所作は導入の本物の操作で見せる)から「健康診断の表 + 結の 1 行目」まで。止めどころに行を置く
+const S = Math.max(0, marks.start - 0.3);
 const k0 = clip.ketsu0.d;
 // 健康診断の表は 0.7 秒ずつ行が埋まる(7 行で約 5.5 秒)。埋まりきって少し置くまで流す
 const E = Math.min(marks.total - 0.3, marks.end + Math.max(k0 + 1.0, 12));
-const place = [{ at: marks.paste - S, k: "sho0" }];
+const place = [];
 for (const [i, keys] of Object.entries(MAP)) { let t = marks.stops[i].at - S + 0.15; for (const k of keys) { place.push({ at: t, k }); t += clip[k].d; } }
 place.push({ at: marks.end - S + 0.3, k: "ketsu0" });
 const inputs = place.flatMap((p) => ["-i", clip[p.k].file]);
 const filt = place.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[a${i}]`).join(";") + ";" + place.map((_, i) => `[a${i}]`).join("") + `amix=inputs=${place.length}:normalize=0,apad[aout]`;
 ff("-ss", String(S), "-t", String(E - S), "-i", webm, ...inputs, "-filter_complex", filt, "-map", "0:v", "-map", "[aout]", "-t", String(E - S), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "3-film.mp4"));
 
-// 4. 導入: 絵コンテで撮った管理画面を、ナレーションの長さで並べる(仮。本物の操作は後で撮る)
-const introA = join(out, "intro.wav");
-writeFileSync(join(out, "intro.list"), ["intro0", "intro1"].map((k) => `file '${clip[k].file}'`).join("\n"));
-ff("-f", "concat", "-safe", "0", "-i", join(out, "intro.list"), "-c", "copy", introA);
-const iD = dur(introA), stills = ["intro-1-upload", "intro-2-list", "intro-3-connect"].map((n) => join(W, "board", n + ".png"));
-const per = iD / stills.length;
-ff(...stills.flatMap((s) => ["-loop", "1", "-t", String(per), "-i", s]), "-i", introA, "-filter_complex", stills.map((_, i) => `[${i}:v]scale=1920:1080,fps=30[v${i}]`).join(";") + ";" + stills.map((_, i) => `[v${i}]`).join("") + `concat=n=${stills.length}:v=1:a=0[v]`, "-map", "[v]", "-map", `${stills.length}:a`, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", join(out, "2-intro.mp4"));
+// 4. 導入: 本物の管理画面の操作の録画(video/admin)。プラグインを上げる → 有効にする → つなぐ → お知らせの URL を貼って「通知を渡す」。
+// 貼った URL(サーバー会社の名前が入る)の入力欄は、打ち始めからぼかす
+const adir = join(W, "admin"), am = JSON.parse(readFileSync(join(adir, "marks.json"), "utf8"));
+const awebm = join(adir, readdirSync(adir).find((f) => f.endsWith(".webm")));
+const A0 = Math.max(0, am.login - 0.2), A1 = am.started + 1.2;
+const iplace = [{ at: 0.6, k: "intro0" }, { at: 0.6 + clip.intro0.d, k: "intro1" }, { at: Math.max(am.paste - A0, 0.6 + clip.intro0.d + clip.intro1.d), k: "sho0" }];
+const ilen = Math.max(A1 - A0, iplace[2].at + clip.sho0.d + 0.3);
+const blurFrom = (am.paste - A0).toFixed(2);
+ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) => ["-i", clip[p.k].file]),
+  "-filter_complex",
+  `[0:v]split[base][cp];[cp]crop=1100:40:248:312,boxblur=8:3[bl];[base][bl]overlay=248:312:enable='gte(t,${blurFrom})',tpad=stop_mode=clone:stop_duration=${Math.max(0, ilen - (A1 - A0)).toFixed(2)}[v];` +
+  iplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[ia${i}]`).join(";") + ";" + iplace.map((_, i) => `[ia${i}]`).join("") + `amix=inputs=${iplace.length}:normalize=0,apad[ia]`,
+  "-map", "[v]", "-map", "[ia]", "-t", String(ilen), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "2-intro.mp4"));
 
-// 5. 結の 2〜3 行目: 屋根にシーサーの絵(起の最後のコマ)
-const roof = join(out, "roof.png"); ff("-sseof", "-0.5", "-i", join(W, "ki-v3.mp4"), "-frames:v", "1", roof);
-writeFileSync(join(out, "end.list"), ["ketsu1", "ketsu2"].map((k) => `file '${clip[k].file}'`).join("\n"));
+// 5. 結の 2〜4 行目: 版の違う店の健康診断 → 志の 1 行 → 屋根のシーサーと名前(再生の画面の場面 KE を録る)
+const kd = ["ketsu1", "ketsu2", "ketsu3"].map((k) => clip[k].d.toFixed(2));
+const kdir = join(out, "ke"); execFileSync("rm", ["-rf", kdir]);
+const krec = sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), `KE&d=${kd.join(",")}`, kdir, ".kv-layer.in", "結"]);
+const ktrim = (/TRIM ([0-9.]+)/.exec(krec) ?? [])[1] ?? "0";
+writeFileSync(join(out, "end.list"), ["ketsu1", "ketsu2", "ketsu3"].map((k) => `file '${clip[k].file}'`).join("\n"));
 const endA = join(out, "end.wav"); ff("-f", "concat", "-safe", "0", "-i", join(out, "end.list"), "-c", "copy", endA);
-ff("-loop", "1", "-i", roof, "-i", endA, "-vf", "scale=1920:1080,fps=30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", join(out, "4-end.mp4"));
+const kwebm = join(kdir, readdirSync(kdir).find((f) => f.endsWith(".webm")));
+ff("-ss", ktrim, "-i", kwebm, "-i", endA, "-map", "0:v", "-map", "1:a", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", join(out, "4-end.mp4"));
 
 // 6. 起をそろえて、つなぐ
 ff("-i", join(W, "ki-v3.mp4"), "-vf", "fps=30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "1-ki.mp4"));

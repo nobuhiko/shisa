@@ -11,3 +11,4 @@ demo-servers/**/src/
 .DS_Store
 demo-servers/.cache/
 video/
+api/demo/shots/
