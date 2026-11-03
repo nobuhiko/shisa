@@ -6,9 +6,9 @@ const { chromium } = require(process.env.PW || "playwright");
 const { mkdirSync } = require("node:fs");
 
 const PAGE = {
-  4: (b, run) => `${b}/admin/store/plugin/SelfHarden/config?film=${run}&big=1&rs=80&hold=1000`,
-  3: (b, run) => `${b}/admin/plugin/SelfHarden3/config?film=${run}&big=1&rs=80&hold=1000`,
-  2: (b, run) => `${b}/admin/load_plugin_config.php?plugin_id=10000&film=${run}&big=1&rs=80&hold=1000`,
+  4: (b, run) => `${b}/admin/store/plugin/SelfHarden/config?film=${run}&big=1&rs=60&hold=700`,
+  3: (b, run) => `${b}/admin/plugin/SelfHarden3/config?film=${run}&big=1&rs=60&hold=700`,
+  2: (b, run) => `${b}/admin/load_plugin_config.php?plugin_id=10000&film=${run}&big=1&rs=60&hold=700`,
 };
 const LOGIN = { 4: "/admin/login", 3: "/admin/login", 2: "/admin/" };
 
@@ -19,19 +19,28 @@ const LOGIN = { 4: "/admin/login", 3: "/admin/login", 2: "/admin/" };
   for (const spec of shops) {
     const [name, rest] = spec.split("=");
     const [kind, base, run] = rest.split(",");
-    const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-    const page = await ctx.newPage();
+    // 動きのまま並べるので、ログインのあとから録画する(早送りの経過 → 健康診断の表が埋まるまで)
+    const pre = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    let page = await pre.newPage();
+    let ctx = pre, t0 = 0;
+    const vdir = `${out}/rec-${name}`;
     try {
       await page.goto(base + LOGIN[kind]);
       await page.fill('input[name="login_id"]', "admin");
       await page.fill('input[name="password"]', "password");
       await Promise.all([page.waitForNavigation(), page.press('input[name="password"]', "Enter")]);
+      const state = await pre.storageState();
+      ctx = await browser.newContext({ storageState: state, viewport: { width: 1920, height: 1080 }, recordVideo: { dir: vdir, size: { width: 1920, height: 1080 } } });
+      t0 = Date.now();
+      page = await ctx.newPage();
       await page.goto(PAGE[kind](base, run));
       await page.waitForTimeout(1500);
       await page.fill("#sh-advisory", "https://example.invalid/");
       await page.click("#sh-start");
-      await page.waitForFunction(() => document.body.classList.contains("sh-health-focus"), null, { timeout: 300000, polling: 300 });
+      await page.waitForFunction(() => document.body.classList.contains("sh-health-focus"), null, { timeout: 300000, polling: 100 });
+      const focus = (Date.now() - t0) / 1000;
       await page.waitForTimeout(8000);
+      require("node:fs").writeFileSync(`${vdir}/marks.json`, JSON.stringify({ focus }));
       await page.screenshot({ path: `${out}/${name}.png` });
       console.log("ok", name);
     } catch (e) {
@@ -39,6 +48,7 @@ const LOGIN = { 4: "/admin/login", 3: "/admin/login", 2: "/admin/" };
       console.log("ng", name, e.message.split("\n")[0]);
     }
     await ctx.close();
+    if (ctx !== pre) await pre.close();
   }
   await browser.close();
 })();

@@ -50,9 +50,9 @@ export function mountDemo(app: Hono, store: Store) {
   // 結の素材: 版の違う店の健康診断の画面(demo/shots/ の .png だけ)
   app.get("/demo/shot/:name", async (c) => {
     const name = c.req.param("name");
-    if (!/^[a-z0-9-]+\.png$/.test(name)) return c.text("not found", 404);
+    if (!/^[a-z0-9-]+\.(png|webm)$/.test(name)) return c.text("not found", 404);
     try {
-      return c.body(await readFile(new URL(`../demo/shots/${name}`, import.meta.url)), 200, { "Content-Type": "image/png" });
+      return c.body(await readFile(new URL(`../demo/shots/${name}`, import.meta.url)), 200, { "Content-Type": name.endsWith(".webm") ? "video/webm" : "image/png" });
     } catch {
       return c.text("not found", 404);
     }
@@ -168,7 +168,7 @@ const PAGE = String.raw`<!doctype html>
   .ke-tile { display: flex; flex-direction: column; gap: 0.8vh; opacity: 0; transform: translateY(12px); transition: opacity .5s, transform .5s; transition-delay: calc(var(--i) * .45s); }
   .ke-grid.in .ke-tile { opacity: 1; transform: none; }
   .ke-tile b { color: #fbbf24; font-size: clamp(16px, 2.6vh, 28px); }
-  .ke-tile img { width: 100%; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .ke-tile video, .ke-tile img { width: 100%; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
   .ke-mission b { font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif; font-size: clamp(36px, 7vh, 80px); color: #fff; }
   .ke-name { gap: 1.6vh; } .ke-name img { height: 26vh; } .ke-name b { font-size: clamp(48px, 10vh, 110px); color: #fff; }
   .ke-name p { margin: 0; color: #cbd5e1; font-size: clamp(18px, 3vh, 32px); }
@@ -620,14 +620,17 @@ const PAGE = String.raw`<!doctype html>
       var g = layer('ke-grid');
       E.grid.forEach(function (t, i) {
         var c = el('div', 'ke-tile'); c.style.setProperty('--i', i);
-        c.appendChild(el('b', null, t.label)); var im = el('img'); im.src = '/demo/shot/' + t.img; c.appendChild(im); g.appendChild(c);
+        c.appendChild(el('b', null, t.label));
+        if (t.clip) { var v = el('video'); v.src = '/demo/shot/' + t.clip; v.muted = true; v.playsInline = true; v.preload = 'auto'; c.appendChild(v); }
+        else { var im = el('img'); im.src = '/demo/shot/' + t.img; c.appendChild(im); }
+        g.appendChild(c);
       });
       var m = layer('ke-mission'); m.appendChild(el('b', null, E.mission));
       var n = layer('ke-name');
       var img = el('img'); img.src = '/demo/asset/' + encodeURIComponent((st.name || {}).image || 'shisa.svg'); n.appendChild(img);
       n.appendChild(el('b', null, (st.name || {}).short || 'Shisa')); n.appendChild(el('p', null, (st.name || {}).tagline || ''));
       n.appendChild(el('small', 'ke-credit', E.credit)); n.appendChild(el('small', 'ke-notice', E.notice));
-      var plan = [function () { g.classList.add('in'); }, function () { g.classList.add('out'); m.classList.add('in'); }, function () { m.classList.add('out'); n.classList.add('in'); }];
+      var plan = [function () { g.classList.add('in'); g.querySelectorAll('video').forEach(function (v, i) { setTimeout(function () { v.play(); }, i * 450); }); }, function () { g.classList.add('out'); m.classList.add('in'); }, function () { m.classList.add('out'); n.classList.add('in'); }];
       var t0 = performance.now();
       return L.reduce(function (p, line, i) {
         return p.then(function () {

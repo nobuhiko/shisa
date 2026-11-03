@@ -271,27 +271,27 @@
   "ending": {
     "grid": [
       {
-        "img": "h.png",
+        "clip": "h.webm",
         "label": "EC-CUBE 2.17"
       },
       {
-        "img": "g.png",
+        "clip": "g.webm",
         "label": "EC-CUBE 3.0"
       },
       {
-        "img": "d.png",
+        "clip": "d.webm",
         "label": "EC-CUBE 4.0"
       },
       {
-        "img": "e.png",
+        "clip": "e.webm",
         "label": "EC-CUBE 4.1"
       },
       {
-        "img": "c.png",
+        "clip": "b.webm",
         "label": "EC-CUBE 4.2"
       },
       {
-        "img": "f.png",
+        "clip": "f.webm",
         "label": "EC-CUBE 4.3"
       }
     ],
