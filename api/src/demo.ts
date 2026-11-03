@@ -141,13 +141,13 @@ const PAGE = String.raw`<!doctype html>
   .kv-q { position: absolute; font-style: normal; font-weight: 800; color: #fbbf24; font-size: 8vh; opacity: 0; transition: opacity .4s; transition-delay: calc(var(--i) * .35s); }
   .kv-q:nth-of-type(1) { left: 14vw; top: 22vh; } .kv-q:nth-of-type(2) { right: 14vw; top: 18vh; } .kv-q:nth-of-type(3) { right: 20vw; bottom: 22vh; }
   .kv-notice.puzzled .kv-q { opacity: 1; }
-  .kv-time { gap: 3vh; align-items: stretch; padding: 0 12vw; }
+  .kv-time { gap: 3vh; align-items: stretch; padding: 0 12vw 14vh; }
   .kv-time .row { display: flex; align-items: center; gap: 2vw; } .kv-time label { width: 16vw; text-align: right; color: #cbd5e1; font-size: clamp(20px, 3.6vh, 38px); font-weight: 700; }
   .kv-time .bar { height: 8vh; border-radius: 4px; display: flex; align-items: center; padding-left: 1vw; font-weight: 800; color: #fff; font-size: clamp(18px, 3.2vh, 34px); width: 0; transition: width 1.2s ease-out; white-space: nowrap; }
   .kv-time.in .pub { width: 8vw; background: #475569; transition-delay: .2s; } .kv-time.in .atk { width: 14vw; background: #c62828; transition-delay: 1.2s; }
-  .kv-time.in .ask { width: 52vw; background: #64748b; transition: width 5.5s linear; transition-delay: 2.4s; }
+  .kv-time.in .ask { width: 56vw; background: #64748b; transition: width 9s linear; transition-delay: 2.4s; } .kv-time.dim .row, .kv-time.dim .src { opacity: .55; transition: opacity .4s; }
   .kv-time .src { position: absolute; left: 8vw; right: 8vw; bottom: 12vh; color: #94a3b8; font-size: 15px; text-align: center; }
-  .kv-late b { font-size: clamp(48px, 11vh, 120px); color: #ef4444; position: relative; transition: color .4s, transform .5s; }
+  .kv-late { background: transparent; justify-content: flex-end; padding-bottom: 17vh; } .kv-late b { font-size: clamp(48px, 11vh, 120px); color: #ef4444; text-shadow: 0 4px 24px rgba(0,0,0,.85); position: relative; transition: color .4s, transform .5s; }
   .kv-late b::after { content: ''; position: absolute; left: -2%; top: 52%; height: .09em; width: 0; background: #fff; transition: width .45s ease-out; }
   .kv-late.struck b { color: rgba(239,68,68,.35); transform: translateY(-9vh) scale(.8); } .kv-late.struck b::after { width: 104%; }
   .kv-ok { justify-content: flex-start; padding-top: 10vh; }
@@ -572,8 +572,8 @@ const PAGE = String.raw`<!doctype html>
         function () { hide(nw); sh.classList.add('far'); show(nt); },
         function () { nt.classList.add('puzzled'); },
         function () { hide(nt); hide(sh); hide(nw); show(tl); },
-        function () { hide(tl); show(late); },
-        function () { hide(late); sh.classList.remove('far', 'out'); sh.classList.add('guarded', 'in'); show(ok); }
+        function () { tl.classList.add('dim'); show(late); },
+        function () { hide(late); hide(tl); sh.classList.remove('far', 'out'); sh.classList.add('guarded', 'in'); show(ok); }
       ];
       var t0 = performance.now();
       return L.reduce(function (p, line, i) {
