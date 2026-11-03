@@ -116,6 +116,38 @@ const PAGE = String.raw`<!doctype html>
   .story .notice-card b { font-size: clamp(18px, 3vh, 32px); line-height: 1.45; word-break: auto-phrase; }
   .story .notice-card.in { opacity: 1; transform: none; }
   .story .notice-card.past { opacity: .75; }
+  .kv { flex: 1; position: relative; overflow: hidden; }
+  .kv-layer { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; opacity: 0; transition: opacity .7s, transform .9s, filter .9s; }
+  .kv-layer.in { opacity: 1; } .kv-layer.out { opacity: 0; }
+  .kv-cap { position: fixed; left: 0; right: 0; bottom: 4vh; text-align: center; font-size: clamp(18px, 3vh, 32px); color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,.8); padding: 0 8vw; opacity: 0; transition: opacity .3s; z-index: 10; }
+  .kv-cap.in { opacity: 1; }
+  .kv-god img { height: 34vh; } .kv-god b { margin-top: 3vh; font-size: clamp(26px, 5vh, 56px); color: #fff; }
+  .kv-news { gap: 1.6vh; } .kv-news.far { transform: scale(.82); filter: blur(3px) brightness(.45); }
+  .kv-head { display: flex; align-items: center; gap: 16px; background: #f8fafc; color: #111827; padding: 1.4vh 2vw; border-radius: 6px; width: 62vw; box-shadow: 0 6px 24px rgba(0,0,0,.4); opacity: 0; transform: translateX(-40px); transition: opacity .4s, transform .4s; transition-delay: calc(var(--i) * .55s); }
+  .kv-news.in .kv-head { opacity: 1; transform: none; }
+  .kv-head small { background: #c62828; color: #fff; font-weight: 800; padding: 2px 8px; border-radius: 3px; font-size: clamp(11px, 1.6vh, 15px); }
+  .kv-head span { font-weight: 800; font-size: clamp(16px, 2.8vh, 30px); }
+  .kv-img { position: absolute; right: 6vw; bottom: 12vh; color: #94a3b8; font-style: normal; font-size: 14px; }
+  .kv-shop { justify-content: flex-end; padding-bottom: 14vh; } .kv-shop.far { transform: translateY(6vh) scale(.85); filter: brightness(.5); }
+  .kv-store { width: 22vw; } .kv-store .awn { height: 5vh; background: repeating-linear-gradient(90deg, #fbbf24 0 2vw, #fff7e6 2vw 4vw); border-radius: 8px 8px 0 0; }
+  .kv-store .body { height: 18vh; background: #e2e8f0; display: grid; place-items: center; border-radius: 0 0 4px 4px; }
+  .kv-store .body span { font-weight: 800; color: #0f172a; font-size: clamp(16px, 2.8vh, 28px); }
+  .kv-ground { width: 40vw; text-align: center; margin-top: 0; background: #334155; color: #e2e8f0; padding: 1.2vh 0; border-radius: 4px; font-weight: 700; font-size: clamp(14px, 2.2vh, 22px); }
+  .kv-bubble { margin-bottom: 3vh; background: #fff; color: #111827; padding: 1.6vh 2vw; border-radius: 24px; font-size: clamp(18px, 3vh, 32px); font-weight: 700; position: relative; }
+  .kv-bubble::after { content: ''; position: absolute; left: 50%; bottom: -14px; border: 14px solid transparent; border-top-color: #fff; border-bottom: 0; transform: translateX(-50%); }
+  .kv-notice .notice-card { opacity: 1; transform: none; align-self: center; max-width: 64vw; } .kv-notice { justify-content: flex-start; padding-top: 16vh; } .kv-shop.far .kv-bubble { opacity: 0; } .kv-bubble { transition: opacity .5s; }
+  .kv-notice .notice-card { background: #f8fafc; color: #1f2933; border-left: 6px solid #c62828; border-radius: 6px; padding: 2.4vh 2.4vw; display: flex; flex-direction: column; gap: 1vh; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .kv-notice .notice-card small { font-size: clamp(13px, 1.9vh, 18px); color: #6b7280; } .kv-notice .notice-card b { font-size: clamp(20px, 3.4vh, 36px); line-height: 1.45; word-break: auto-phrase; }
+  .kv-q { position: absolute; font-style: normal; font-weight: 800; color: #fbbf24; font-size: 8vh; opacity: 0; transition: opacity .4s; transition-delay: calc(var(--i) * .35s); }
+  .kv-q:nth-of-type(1) { left: 14vw; top: 22vh; } .kv-q:nth-of-type(2) { right: 14vw; top: 18vh; } .kv-q:nth-of-type(3) { right: 20vw; bottom: 22vh; }
+  .kv-notice.puzzled .kv-q { opacity: 1; }
+  .kv-time { gap: 3vh; align-items: stretch; padding: 0 12vw; }
+  .kv-time .row { display: flex; align-items: center; gap: 2vw; } .kv-time label { width: 16vw; text-align: right; color: #cbd5e1; font-size: clamp(20px, 3.6vh, 38px); font-weight: 700; }
+  .kv-time .bar { height: 8vh; border-radius: 4px; display: flex; align-items: center; padding-left: 1vw; font-weight: 800; color: #fff; font-size: clamp(18px, 3.2vh, 34px); width: 0; transition: width 1.2s ease-out; white-space: nowrap; }
+  .kv-time.in .pub { width: 8vw; background: #475569; transition-delay: .2s; } .kv-time.in .atk { width: 14vw; background: #c62828; transition-delay: 1.2s; }
+  .kv-time.in .ask { width: 52vw; background: #64748b; transition: width 5.5s linear; transition-delay: 2.4s; }
+  .kv-time .src { position: absolute; left: 8vw; right: 8vw; bottom: 12vh; color: #94a3b8; font-size: 15px; text-align: center; }
+  .kv-late b { font-size: clamp(48px, 11vh, 120px); color: #ef4444; } .kv-ok b { font-size: clamp(48px, 11vh, 120px); color: #fff; }
   .opening { flex: 1; display: grid; place-items: center; }
   .opening b { font-size: clamp(32px, 6vh, 64px); color: #fff; letter-spacing: .02em; opacity: 0; transition: opacity .8s; } .opening b.in { opacity: 1; }
   body.bare header { visibility: hidden; }
@@ -215,7 +247,7 @@ const PAGE = String.raw`<!doctype html>
   .card ul { list-style: none; padding: 0; margin: 0; }
   .card li { font-size: 22px; line-height: 1.45; padding: 6px 0; }
   .card li small { display: block; font-size: 15px; color: var(--muted); }
-</style><script>if (/[?&]scene=(story|O|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
+</style><script>if (/[?&]scene=(story|O|V|K|N|I|Z)\b/.test(location.search)) document.documentElement.className = 'dark-start';</script></head><body>
 <header><h1 id="title">self-harden</h1><span class="badge">実際の動作(記録の早送り)</span><span class="adv" id="adv"></span></header>
 <div class="controls" id="controls"></div>
 <main id="main"></main>
@@ -491,6 +523,63 @@ const PAGE = String.raw`<!doctype html>
     var k = 0;
     (function show() { if (k >= els.length) return; els[k].classList.add('in'); if (els[k].classList.contains('row') || els[k].classList.contains('last')) { k++; setTimeout(show, 2600); } else { k++; show(); } })();
     return holdFor(2600 * 6 + 3000);
+  };
+
+  // 起(ナレーション付き): 行ごとの音声の長さ(story.json の narration.ki[].dur)に合わせて画面を切り替える。音声は録画のあとで重ねる
+  scenes.V = function () {
+    layout(1); badge(false); document.body.classList.add('bare');
+    var d = el('div', 'kv'); main.appendChild(d);
+    var cap = el('div', 'kv-cap'); document.body.appendChild(cap);
+    return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      var L = st.narration.ki, notice = (st.lines || []).filter(function (x) { return x.notice; })[0] || {};
+      function layer(cls) { var e = el('div', 'kv-layer ' + cls); d.appendChild(e); return e; }
+      function show(e) { requestAnimationFrame(function () { e.classList.add('in'); }); }
+      function hide(e) { e.classList.remove('in'); e.classList.add('out'); }
+      // 1. 守り神
+      var g = layer('kv-god'); var img = el('img'); img.src = '/demo/asset/' + encodeURIComponent((st.name || {}).image || 'shisa.svg'); g.appendChild(img); g.appendChild(el('b', null, (st.name || {}).tagline || ''));
+      // 2. ニュース(イメージ。実在の名前も数字も出さない)
+      var nw = layer('kv-news');
+      ['通販サイトに不正アクセス　カード情報流出のおそれ', '会員の個人情報が流出か　調査を開始', '顧客情報が外部に　不正アクセスの被害', 'ウェブサイト改ざん　個人情報が抜き取られた可能性', 'ランサムウェア被害　サービスを停止'].forEach(function (t, i) {
+        var c = el('div', 'kv-head'); c.appendChild(el('small', null, 'NEWS')); c.appendChild(el('span', null, t)); c.style.setProperty('--i', i); nw.appendChild(c);
+      });
+      nw.appendChild(el('em', 'kv-img', '※イメージ'));
+      // 3. 小さなお店
+      var sh = layer('kv-shop');
+      sh.innerHTML = '<div class="kv-bubble">うちのお店は、大丈夫だろうか…</div><div class="kv-store"><div class="awn"></div><div class="body"><span>EC-CUBE</span></div></div><div class="kv-ground">レンタルサーバー</div>';
+      // 4-5. お知らせ
+      var nt = layer('kv-notice');
+      var card = el('div', 'notice-card'); card.appendChild(el('small', null, notice.label || 'サーバー会社からのお知らせ')); card.appendChild(el('b', null, notice.text || '')); nt.appendChild(card);
+      ['?', '?', '?'].forEach(function (q, i) { var e = el('i', 'kv-q', q); e.style.setProperty('--i', i); nt.appendChild(e); });
+      // 6. 時間の帯
+      var tl = layer('kv-time');
+      tl.innerHTML = '<div class="row"><label>弱点の公表</label><div class="bar pub"><span>10/21</span></div></div>'
+        + '<div class="row"><label>攻撃</label><div class="bar atk"><span>同じ日から</span></div></div>'
+        + '<div class="row"><label>頼む先を探す</label><div class="bar ask"><span>…</span></div></div>'
+        + '<small class="src"></small>';
+      tl.querySelector('.src').textContent = '出典: ' + (L[5].source || '');
+      // 7-8.
+      var late = layer('kv-late'); late.appendChild(el('b', null, '間に合いません。'));
+      var ok = layer('kv-ok'); ok.appendChild(el('b', null, 'でも、大丈夫。'));
+      var plan = [
+        function () { show(g); },
+        function () { hide(g); show(nw); },
+        function () { nw.classList.add('far'); show(sh); },
+        function () { hide(nw); sh.classList.add('far'); show(nt); },
+        function () { nt.classList.add('puzzled'); },
+        function () { hide(nt); hide(sh); hide(nw); show(tl); },
+        function () { hide(tl); show(late); },
+        function () { hide(late); show(ok); }
+      ];
+      var t0 = performance.now();
+      return L.reduce(function (p, line, i) {
+        return p.then(function () {
+          cap.textContent = line.text; cap.classList.add('in');
+          plan[i]();
+          var due = L.slice(0, i + 1).reduce(function (a, x) { return a + (x.dur || 3) * 1000; }, 0);
+          return holdFor(Math.max(0, due - (performance.now() - t0)));
+        });
+      }, Promise.resolve()).then(function () { cap.remove(); document.title = '起 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; });
+    });
   };
 
   // 冒頭: 応募先の名前
@@ -770,7 +859,7 @@ const PAGE = String.raw`<!doctype html>
   // ---- 撮影の操作(clean=1 で隠す) ----
   function controls(runs) {
     var c = document.getElementById('controls');
-    var scene = el('select'); ['story', 'O', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
+    var scene = el('select'); ['story', 'O', 'V', 'K', 'N', 'I', 'S', 'Z', 'P', 'X', 'A', 'B', 'C', 'H', 'E', 'R'].forEach(function (k) { var o = el('option', null, '場面 ' + k); o.value = k; scene.appendChild(o); });
     scene.value = q('scene') || 'A';
     var sels = [0, 1].map(function () {
       var s = el('select');
@@ -799,7 +888,7 @@ const PAGE = String.raw`<!doctype html>
     if (k === 'all') all();
     else if (k === 'story') story();
     else if (k === 'Z') scenes.Z(ids);
-    else if (k === 'O' || k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
+    else if (k === 'O' || k === 'V' || k === 'K' || k === 'N' || k === 'I' || k === 'P' || k === 'X') scenes[k]();
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);

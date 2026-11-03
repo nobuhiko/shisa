@@ -17,4 +17,7 @@ for (const [i, l] of lines.entries()) {
 }
 writeFileSync(`${out}.list`, parts.map((p) => `file '${p.split("/").pop()}'`).join("\n"));
 execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", `${out}.list`, "-c", "copy", `${out}.wav`]);
+// 行ごとの長さ(秒、間を含む)を残す。画面の切り替えをこれに合わせる
+const durs = parts.map((p) => { const b = execFileSync("afinfo", [p]).toString(); return Number((/estimated duration: ([0-9.]+)/.exec(b) ?? [])[1] ?? 0); });
+writeFileSync(`${out}.timing.json`, JSON.stringify(durs));
 for (const p of parts) execFileSync("rm", [p]); execFileSync("rm", [`${out}.list`]);
