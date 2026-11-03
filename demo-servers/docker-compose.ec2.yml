@@ -17,6 +17,14 @@ services:
     volumes: ["server-h-root:/var/www/html"]
     networks: [self-harden, default]
 
+  # 店の中の窓口も、書いたあとに設定どおりの URL(127.0.0.1:8088)で店を開いて確かめる。店の箱の中でも 8088 を 80 へ中継する
+  server-h-self-loop:
+    image: alpine:3.20
+    network_mode: "service:server-h"
+    depends_on: [server-h]
+    command: sh -c "apk add --no-cache socat >/dev/null && exec socat TCP-LISTEN:8088,fork,reuseaddr TCP:127.0.0.1:80"
+    restart: unless-stopped
+
   # server-h だけが使うデータベース。外にもほかの店にも開かない
   server-h-db:
     image: postgres:13-alpine
