@@ -67,12 +67,14 @@ const adir = join(W, "admin"), am = JSON.parse(readFileSync(join(adir, "marks.js
 const awebm = join(adir, readdirSync(adir).find((f) => f.endsWith(".webm")));
 // ログインの場面は省いて、プラグインを上げるところから見せる
 const A0 = Math.max(0, am.upload - 0.3), A1 = am.started + 1.2;
-const iplace = [{ at: 0.6, k: "intro0" }, { at: 0.6 + clip.intro0.d, k: "intro1" }, { at: Math.max(am.paste - A0, 0.6 + clip.intro0.d + clip.intro1.d), k: "sho0" }];
-const ilen = Math.max(A1 - A0, iplace[2].at + clip.sho0.d + 0.3);
+// 起の最後の「でも、大丈夫。」は、本物の管理画面でプラグインを入れ始めるところに重ねる(絵からふわっと切り替える)
+const okKey = `ki${N.ki.length - 1}`, o = 0.5 + clip[okKey].d;
+const iplace = [{ at: 0.5, k: okKey }, { at: o, k: "intro0" }, { at: o + clip.intro0.d, k: "intro1" }, { at: Math.max(am.paste - A0, o + clip.intro0.d + clip.intro1.d), k: "sho0" }];
+const ilen = Math.max(A1 - A0, iplace[3].at + clip.sho0.d + 0.3);
 const blurFrom = (am.paste - A0).toFixed(2);
 ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) => ["-i", clip[p.k].file]),
   "-filter_complex",
-  `[0:v]split[base][cp];[cp]crop=1100:40:248:312,boxblur=8:3[bl];[base][bl]overlay=248:312:enable='gte(t,${blurFrom})',tpad=stop_mode=clone:stop_duration=${Math.max(0, ilen - (A1 - A0)).toFixed(2)}[v];` +
+  `[0:v]split[base][cp];[cp]crop=1100:40:248:312,boxblur=8:3[bl];[base][bl]overlay=248:312:enable='gte(t,${blurFrom})',tpad=stop_mode=clone:stop_duration=${Math.max(0, ilen - (A1 - A0)).toFixed(2)},fade=t=in:st=0:d=0.5:color=0x0d172a[v];` +
   iplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[ia${i}]`).join(";") + ";" + iplace.map((_, i) => `[ia${i}]`).join("") + `amix=inputs=${iplace.length}:normalize=0,apad[ia]`,
   "-map", "[v]", "-map", "[ia]", "-t", String(ilen), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "2-intro.mp4"));
 
@@ -119,16 +121,9 @@ const kd = ["ketsu1", "ketsu2", "ketsu3"].map((k) => clip[k].d.toFixed(2));
 execFileSync("cp", [narratedScene(`KE&d=${kd.join(",")}`, ["ketsu1", "ketsu2", "ketsu3"], "ke"), join(out, "4-end.mp4")]);
 
 // 6. 起(場面 V を録り、行の音声を置く)をつくって、つなぐ
-// 起の最後の「でも、大丈夫。」は、絵ではなく本物の管理画面(Shisa を入れてつないだところ。URL を貼る前)をゆっくり寄せて見せる
-const kiKeys = N.ki.map((_, i) => `ki${i}`), okKey = kiKeys.pop();
+const kiKeys = N.ki.map((_, i) => `ki${i}`).slice(0, -1);
 const kiA = narratedScene(`V&d=${N.ki.map((_, i) => clip[`ki${i}`].d.toFixed(2)).join(",")}`, kiKeys, "ki", kiKeys.length + 1);
-const okPng = join(out, "ok.png"); ff("-ss", String(Math.max(am.connect + 2, am.paste - 0.8)), "-i", awebm, "-frames:v", "1", okPng);
-const okMp4 = join(out, "ki-ok.mp4");
-ff("-loop", "1", "-framerate", "30", "-i", okPng, "-i", clip[okKey].file, "-filter_complex",
-  `[0:v]scale=1920:1080,zoompan=z='min(1+0.0012*on,1.12)':x='0':y='0':d=1:s=1920x1080:fps=30[v]`,
-  "-map", "[v]", "-map", "1:a", "-t", clip[okKey].d.toFixed(3), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", okMp4);
-writeFileSync(join(out, "ki-all.list"), [kiA, okMp4].map((f) => `file '${f}'`).join("\n"));
-ff("-f", "concat", "-safe", "0", "-i", join(out, "ki-all.list"), "-c", "copy", join(out, "1-ki.mp4"));
+execFileSync("cp", [kiA, join(out, "1-ki.mp4")]);
 writeFileSync(join(out, "all.list"), ["1-ki", "2-intro", "3-film", "4-end"].map((n) => `file '${join(out, n + ".mp4")}'`).join("\n"));
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, "full-v1.mp4"));
 console.log("full-v1.mp4", dur(join(W, "full-v1.mp4")).toFixed(1), "秒", JSON.stringify({ ki: dur(join(out, "1-ki.mp4")), intro: dur(join(out, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), end: dur(join(out, "4-end.mp4")) }));
