@@ -1,0 +1,37 @@
+# EC-CUBE 2 系の検証環境(server-h)。手元だけで使う(ポートは 127.0.0.1 にだけ開く)
+#   docker compose -f demo-servers/docker-compose.ec2.yml up -d --build
+# ほかの店(docker-compose.yml)とは別の箱の組。API とは、同じ docker のネットワーク self-harden でつながる
+name: self-harden-demo-ec2
+
+services:
+  server-h:
+    build: { context: ., dockerfile: server-h/Dockerfile }
+    image: self-harden/server-h:dev
+    hostname: server-h
+    depends_on: [server-h-db]
+    environment:
+      SELF_HARDEN_SELF_BASE: http://server-h   # 2.17 系。API(docker の中)から店に届く URL
+      ECCUBE_DB_HOST: server-h-db
+      ECCUBE_HTTP_URL: http://127.0.0.1:8088/
+    ports: ["127.0.0.1:8088:80"]
+    volumes: ["server-h-root:/var/www/html"]
+    networks: [self-harden, default]
+
+  # server-h だけが使うデータベース。外にもほかの店にも開かない
+  server-h-db:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: eccube_db_user
+      POSTGRES_PASSWORD: password   # 手元の検証用の決まった値
+    volumes: ["server-h-db:/var/lib/postgresql/data"]
+    networks: [default]
+
+volumes:
+  server-h-root:
+  server-h-db:
+
+networks:
+  default:
+  self-harden:
+    name: self-harden
+    external: true
