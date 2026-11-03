@@ -44,6 +44,10 @@
   body.sh-big .sh-health td { font-size: 17px; }
   body.sh-film #sh-runs-card, body.sh-film #sh-connect-card { display: none; }
   body.sh-film #sh-advisory { filter: blur(6px); }
+  body.sh-health-focus #sh-check-card, body.sh-health-focus #sh-progress-card { display: none; }
+  body.sh-health-focus #sh-health-card .card-header { font-size: 26px; font-weight: 700; }
+  body.sh-health-focus .sh-health td, body.sh-health-focus.sh-big .sh-health td { font-size: 24px; padding: 18px 20px; }
+  body.sh-health-focus .sh-health th { font-size: 16px; }
   body.sh-film .sh-steps, body.sh-film.sh-big .sh-steps { font-size: 21px; max-height: calc(100vh - 560px); } body.sh-film { padding-bottom: 90px; } body.sh-film .sh-steps time { font-size: 15px; } body.sh-film .sh-steps .tool { font-size: 14px; }
   .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
   body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
@@ -64,7 +68,7 @@
         </div>
       </div>
 
-      <div class="card rounded border-0 mb-4">
+      <div class="card rounded border-0 mb-4" id="sh-check-card">
         <div class="card-header"><span>点検</span></div>
         <div class="card-body">
           {% if connected %}
@@ -317,6 +321,8 @@
               renderReport(r); badge.textContent = '実際の動作(記録の早送り)・終わり';
               if (r.findings && r.findings.some(function (x) { return x.category; })) {
                 showBand('お店の健康診断: 項目ごとに、効く手を打った', 'good');
+                // 撮影のときは、健康診断の表だけを大きく出す
+                if (document.body.classList.contains('sh-film')) document.body.classList.add('sh-health-focus');
                 renderHealth(r, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, true);
               } else {
                 showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good');

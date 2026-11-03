@@ -127,7 +127,11 @@ export async function compareWithPrevious(store: Store, shop: Shop, currentRunId
   const pf = (prev as any).fingerprint as Record<string, unknown>;
   const changed = Object.keys(now).filter((k) => (now as any)[k] !== pf[k]);
   return {
-    previous: { run_id: prev.run_id, at: new Date(prev.created_at).toISOString(), summary: (prev.report as any)?.summary ?? null },
+    previous: {
+      run_id: prev.run_id, at: new Date(prev.created_at).toISOString(), summary: (prev.report as any)?.summary ?? null,
+      // 前回「これから self-harden がやること」と書いた約束。次の点検で手を付ける
+      promised_next: ((prev.report as any)?.next_by_self_harden ?? []).map((x: any) => ({ title: x.title, when: x.when })),
+    },
     changed,
     unchanged: changed.length === 0,
   };
