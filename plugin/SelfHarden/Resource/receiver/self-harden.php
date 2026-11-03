@@ -603,7 +603,9 @@ function op_inspect(array $args)
             foreach (['packages', 'packages-dev'] as $k) {
                 foreach (isset($lock[$k]) ? (array) $lock[$k] : [] as $p) {
                     if (isset($p['name'], $p['version'])) {
-                        $app['packages'][] = ['name' => $p['name'], 'version' => $p['version'], 'dev' => $k === 'packages-dev'];
+                        $app['packages'][] = ['name' => $p['name'], 'version' => $p['version'], 'dev' => $k === 'packages-dev',
+                            'source' => isset($p['source']['url']) && is_string($p['source']['url']) ? $p['source']['url'] : null,
+                            'reference' => isset($p['source']['reference']) && is_string($p['source']['reference']) ? $p['source']['reference'] : null];
                     }
                 }
             }

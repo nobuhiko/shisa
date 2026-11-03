@@ -4,7 +4,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { createPatch } from "diff";
 import { callReceiver } from "./receiver.js";
-import { manifest, officialContent, officialFixScope } from "./official.js";
+import { vendorFixScope, manifest, officialContent, officialFixScope } from "./official.js";
 import type { Shop, Store } from "./store.js";
 import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
 
@@ -399,7 +399,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     }
     case "check_packages": {
       try {
-        return { content: j(await checkPackages(shop)), title: "部品の弱点を Packagist で照らし合わせる" };
+        return { content: j(await checkPackages(shop, ctx ? await ctx.store.getApplied(shop.shop_id) : [])), title: "部品の弱点を Packagist で照らし合わせる" };
       } catch (e) {
         return { content: j({ error: (e as Error).message }), isError: true, title: "部品の弱点を Packagist で照らし合わせる" };
       }
@@ -511,6 +511,23 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     }
     case "apply_official_fix": {
       const paths: string[] = Array.isArray(input.paths) ? input.paths.map(String) : [];
+      // 部品の修正も、その部品の公式リポジトリの差分で「全部のファイル」がそろっているかを確かめてから当てる
+      const vpkg = (/^vendor\/([^/]+\/[^/]+)\//.exec(paths[0] ?? "") ?? [])[1];
+      if (vpkg) {
+        try {
+          if (!paths.every((p) => p.startsWith(`vendor/${vpkg}/`))) return { content: j({ ok: false, error: "mixed_packages", detail: "Apply one package per call." }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          const ins = await callReceiver(shop, "inspect", { sections: ["app"] });
+          const pkg = ((ins.ok ? ins.result.app?.packages : []) as any[]).find((p) => p.name === vpkg);
+          if (!pkg) return { content: j({ ok: false, error: "unknown_package", detail: `${vpkg} is not in composer.lock` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          const mine = new Set(Object.keys(await shopHashes(shop)));
+          const scope = await vendorFixScope(pkg, String(input.ref), mine);
+          const missing = scope.files.filter((f) => !paths.includes(f));
+          if (scope.files.length > 30) return { content: j({ ok: false, error: "too_many_files", detail: `This update changes ${scope.files.length} files of ${vpkg}; too many for one unit. Report it.`, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          if (missing.length) return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change of this package includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+        } catch (e) {
+          return { content: j({ ok: false, error: "scope_unknown", detail: `Could not confirm the full set of files of this package update: ${(e as Error).message}. Nothing was written.` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+        }
+      }
       // EC-CUBE 本体の修正は、公式のデータで「全部のファイル」がそろっているかを確かめてから当てる(半端に置かない)
       if (!paths.some((p) => p.startsWith("vendor/"))) {
         try {
