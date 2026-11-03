@@ -5,7 +5,8 @@
 #   費用: 1 店あたり初回の上限まで($12)。終わるまで 10〜20 分
 set -eu
 cd "$(dirname "$0")"
-ADV="${ADV:-https://www.kagoya.jp/news/2026102337094/}"
+# 貼るお知らせの URL は走らせるときに渡す(例: ADV=https://... ./regress.sh)
+ADV="${ADV:?ADV にお知らせの URL を入れてください}"
 SERVERS="${*:-server-a server-b server-c server-d}"
 port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; server-c) echo 8083;; server-d) echo 8084;; server-e) echo 8085;; server-f) echo 8086;; server-g) echo 8087;; server-h) echo 8088;; esac; }
 svcs() { case "$1" in server-b) echo "server-b server-b-php";; *) echo "$1";; esac; }
