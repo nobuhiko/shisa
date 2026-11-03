@@ -426,10 +426,17 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     case "compare_with_official": {
       try {
         const version = await installedVersion(shop);
-        const m = await manifest(version);
-        const mine = await shopHashes(shop);
         const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
+        // 公式の修正(ソースの差だけ)を当てて版が変わった店は、元の版の配布物を基準にする(配布物の作り直しで部品が全部違って見えるのを避ける)。
+        // 配布物ごと上げた店は、上げた先の版が基準。前の版の残りのファイルは分けて出す
+        const lastRelease = applied.filter((a) => a.via === "release").sort((a, b) => b.at - a.at)[0];
+        const fixBase = applied.filter((a) => a.via === "fix" && a.from_version && (!lastRelease || a.at > lastRelease.at)).sort((a, b) => a.at - b.at)[0]?.from_version;
+        const baseVersion = fixBase && fixBase !== version ? fixBase : version;
+        const m = await manifest(baseVersion);
+        const prev = lastRelease?.from_version ? await manifest(lastRelease.from_version) : null;
+        const mine = await shopHashes(shop);
         const intendedBy = new Map(applied.map((f) => [f.path, f]));
+        const leftover: string[] = [];
         const onlyPhp = input?.only_php !== false;
         const modified: string[] = [];
         const added: string[] = [];
@@ -443,14 +450,16 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           }
           if (p in m.files) {
             if (m.files[p] !== sha) modified.push(p);
-          } else if (!onlyPhp || PHP_LIKE.test(p)) added.push(p);
+          } else if (prev && prev.files[p] === sha) leftover.push(p);
+          else if (!onlyPhp || PHP_LIKE.test(p)) added.push(p);
           else addedOther++;
         }
         const missing = Object.keys(m.files).filter((p) => !(p in mine));
         const byTop = (ps: string[]) => ps.reduce<Record<string, number>>((a, p) => ((a[p.split("/")[0]] = (a[p.split("/")[0]] ?? 0) + 1), a), {});
         return {
           content: j({
-            official: { version, source: m.source, tarball_sha256: m.tarball_sha256, files: Object.keys(m.files).length },
+            official: { version, compared_with: baseVersion, note: baseVersion !== version ? `The shop was moved to ${version} by official fixes applied by self-harden; compared with the ${baseVersion} release plus those fixes.` : undefined, source: m.source, tarball_sha256: m.tarball_sha256, files: Object.keys(m.files).length },
+            left_from_previous_release: leftover.length ? { count: leftover.length, from: lastRelease?.from_version, note: "unchanged files of the previous official release that the update did not remove; not traces of intrusion", by_top: byTop(leftover) } : undefined,
             shop_files: Object.keys(mine).length,
             intended: { count: intended.length, note: "official fixes applied by self-harden, still as written", items: intended },
             modified: { count: modified.length, by_top: byTop(modified), paths: modified.sort().slice(0, 300) },
@@ -530,6 +539,8 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           return { content: j({ ok: false, error: "scope_unknown", detail: `Could not confirm the full set of files of this official change: ${(e as Error).message}. Nothing was written.` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
         }
       }
+      let fromVersion: string | undefined;
+      try { fromVersion = await installedVersion(shop); } catch { /* 分からなければ記録しない */ }
       const r = await callReceiver(shop, "apply_official_fix", {
         ref: input.ref,
         paths: input.paths,
@@ -538,7 +549,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       if (r.ok && !r.result.rolled_back && ctx) {
         await ctx.store.addApplied(
           shop.shop_id,
-          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now() })),
+          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const })),
         );
       }
       return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
@@ -582,7 +593,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           verify: { paths: verifyPaths(shop, input.extra_verify_paths ?? ["/admin/login"]), timeout_sec: 8 },
         }, 170_000);
         if (r.ok && !r.result.rolled_back && ctx) {
-          await ctx.store.addApplied(shop.shop_id, (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now() })));
+          await ctx.store.addApplied(shop.shop_id, (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: installed, via: "release" as const })));
         }
         const by = (ps: string[]) => ps.reduce<Record<string, number>>((a, p) => ((a[p.split("/")[0]] = (a[p.split("/")[0]] ?? 0) + 1), a), {});
         const summary = r.ok

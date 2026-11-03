@@ -48,6 +48,8 @@ export interface AppliedFix {
   reason: string;
   run_id: string;
   at: number;
+  from_version?: string; // 当てる前の版(修正で版が変わったときの照らし合わせの基準)
+  via?: "fix" | "release";
 }
 
 export interface Store {
