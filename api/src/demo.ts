@@ -566,6 +566,8 @@ const PAGE = String.raw`<!doctype html>
     var d = el('div', 'kv'); main.appendChild(d);
     var cap = el('div', 'kv-cap'); document.body.appendChild(cap);
     return fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) {
+      // 行の長さ: 組み立てでは、読み上げた音声の長さを ?d=秒,秒,… で渡す(無ければ story.json の dur)
+      var kd = (q('d') || '').split(',').filter(Boolean).map(Number);
       var L = st.narration.ki, notice = (st.lines || []).filter(function (x) { return x.notice; })[0] || {};
       function layer(cls) { var e = el('div', 'kv-layer ' + cls); d.appendChild(e); return e; }
       function show(e) { requestAnimationFrame(function () { e.classList.add('in'); }); }
@@ -610,7 +612,7 @@ const PAGE = String.raw`<!doctype html>
         return p.then(function () {
           cap.textContent = line.text; cap.classList.add('in');
           plan[i](); lineMark(i);
-          var due = L.slice(0, i + 1).reduce(function (a, x) { return a + (x.dur || 3) * 1000; }, 0);
+          var due = L.slice(0, i + 1).reduce(function (a, x, j) { return a + (kd[j] || x.dur || 3) * 1000; }, 0);
           return holdFor(Math.max(0, due - (performance.now() - t0)));
         });
       }, Promise.resolve()).then(function () { cap.remove(); document.title = '起 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒'; }); });

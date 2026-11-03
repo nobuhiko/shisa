@@ -65,7 +65,8 @@ ff("-ss", String(S), "-t", String(E - S), "-i", webm, ...inputs, "-filter_comple
 // 貼った URL(サーバー会社の名前が入る)の入力欄は、打ち始めからぼかす
 const adir = join(W, "admin"), am = JSON.parse(readFileSync(join(adir, "marks.json"), "utf8"));
 const awebm = join(adir, readdirSync(adir).find((f) => f.endsWith(".webm")));
-const A0 = Math.max(0, am.login - 0.2), A1 = am.started + 1.2;
+// ログインの場面は省いて、プラグインを上げるところから見せる
+const A0 = Math.max(0, am.upload - 0.3), A1 = am.started + 1.2;
 const iplace = [{ at: 0.6, k: "intro0" }, { at: 0.6 + clip.intro0.d, k: "intro1" }, { at: Math.max(am.paste - A0, 0.6 + clip.intro0.d + clip.intro1.d), k: "sho0" }];
 const ilen = Math.max(A1 - A0, iplace[2].at + clip.sho0.d + 0.3);
 const blurFrom = (am.paste - A0).toFixed(2);
@@ -92,15 +93,15 @@ function lineFlips(webm) {
   return { flips, end: pts };
 }
 // ナレーション付きの場面を録って、行の目印のあいだを、行の音声の長さに合わせて伸び縮みさせる(録画は時計より遅れて進むので)
-function narratedScene(scene, keys, name) {
+function narratedScene(scene, keys, name, total = keys.length) {
   const dir = join(out, name); execFileSync("rm", ["-rf", dir]);
   const rec = sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), scene + "&mark=1", dir, ".kv-layer.in", name === "ki" ? "起" : "結"]);
   const webm = join(dir, readdirSync(dir).find((f) => f.endsWith(".webm")));
   const { flips, end } = lineFlips(webm);
-  if (flips.length !== keys.length) throw new Error(`${name}: 行の目印が ${flips.length} 個(${keys.length} 個のはず)`);
+  if (flips.length !== total) throw new Error(`${name}: 行の目印が ${flips.length} 個(${total} 個のはず)`);
   const d = keys.map((k) => clip[k].d), n = keys.length;
   const ratio = n > 1 ? (flips[n - 1] - flips[0]) / d.slice(0, -1).reduce((a, x) => a + x, 0) : 1;
-  const seg = flips.map((a, i) => [a, i + 1 < n ? flips[i + 1] : Math.min(end, a + d[i] * ratio)]);
+  const seg = flips.slice(0, n).map((a, i) => [a, i + 1 < flips.length ? flips[i + 1] : Math.min(end, a + d[i] * ratio)]);
   const list = join(out, name + ".list"); writeFileSync(list, keys.map((k) => `file '${clip[k].file}'`).join("\n"));
   const wav = join(out, name + "-voice.wav"); ff("-f", "concat", "-safe", "0", "-i", list, "-c", "copy", wav);
   const f = join(out, name + ".mp4");
@@ -118,7 +119,16 @@ const kd = ["ketsu1", "ketsu2", "ketsu3"].map((k) => clip[k].d.toFixed(2));
 execFileSync("cp", [narratedScene(`KE&d=${kd.join(",")}`, ["ketsu1", "ketsu2", "ketsu3"], "ke"), join(out, "4-end.mp4")]);
 
 // 6. 起(場面 V を録り、行の音声を置く)をつくって、つなぐ
-execFileSync("cp", [narratedScene("V", N.ki.map((_, i) => `ki${i}`), "ki"), join(out, "1-ki.mp4")]);
+// 起の最後の「でも、大丈夫。」は、絵ではなく本物の管理画面(Shisa を入れてつないだところ。URL を貼る前)をゆっくり寄せて見せる
+const kiKeys = N.ki.map((_, i) => `ki${i}`), okKey = kiKeys.pop();
+const kiA = narratedScene(`V&d=${N.ki.map((_, i) => clip[`ki${i}`].d.toFixed(2)).join(",")}`, kiKeys, "ki", kiKeys.length + 1);
+const okPng = join(out, "ok.png"); ff("-ss", String(Math.max(am.connect + 2, am.paste - 0.8)), "-i", awebm, "-frames:v", "1", okPng);
+const okMp4 = join(out, "ki-ok.mp4");
+ff("-loop", "1", "-framerate", "30", "-i", okPng, "-i", clip[okKey].file, "-filter_complex",
+  `[0:v]scale=1920:1080,zoompan=z='min(1+0.0012*on,1.12)':x='0':y='0':d=1:s=1920x1080:fps=30[v]`,
+  "-map", "[v]", "-map", "1:a", "-t", clip[okKey].d.toFixed(3), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", okMp4);
+writeFileSync(join(out, "ki-all.list"), [kiA, okMp4].map((f) => `file '${f}'`).join("\n"));
+ff("-f", "concat", "-safe", "0", "-i", join(out, "ki-all.list"), "-c", "copy", join(out, "1-ki.mp4"));
 writeFileSync(join(out, "all.list"), ["1-ki", "2-intro", "3-film", "4-end"].map((n) => `file '${join(out, n + ".mp4")}'`).join("\n"));
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, "full-v1.mp4"));
 console.log("full-v1.mp4", dur(join(W, "full-v1.mp4")).toFixed(1), "秒", JSON.stringify({ ki: dur(join(out, "1-ki.mp4")), intro: dur(join(out, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), end: dur(join(out, "4-end.mp4")) }));
