@@ -106,6 +106,18 @@ services:
     volumes: ["server-f-docroot:/var/www/html"]
     networks: [self-harden]
 
+  server-g:
+    build: { context: ., dockerfile: server-g/Dockerfile }
+    image: self-harden/server-g:dev
+    hostname: server-g
+    environment:
+      SELF_HARDEN_SELF_BASE: http://server-g   # 3.0 系(サポート終了)。3.0 には TRUSTED_HOSTS が無いので渡さない
+    ports: ["127.0.0.1:8087:80"]
+    # buster の glibc は A と AAAA を同時に問い合わせ、docker の名前解決がときどき片方を落として 5 秒待ちになる。1 つずつ聞かせる
+    dns_opt: [single-request]
+    volumes: ["server-g-docroot:/var/www/html"]
+    networks: [self-harden]
+
 volumes:
   server-a-docroot:
   server-b-docroot:
@@ -113,6 +125,7 @@ volumes:
   server-d-docroot:
   server-e-docroot:
   server-f-docroot:
+  server-g-docroot:
 
 networks:
   self-harden:

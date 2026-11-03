@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# EC-CUBE 3.0 系のプラグイン。4 系の plugin/SelfHarden と同じことをする(受け口を置く、API とつなぐ、点検の経過を見る)
+name: Shisa(シーサー) お店の守り神
+code: SelfHarden3
+version: 0.1.0
+service:
+    - SelfHarden3ServiceProvider

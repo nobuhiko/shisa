@@ -1,0 +1,428 @@
+{# SPDX-License-Identifier: GPL-2.0-or-later #}
+{#
+  EC-CUBE 3.0 の管理画面(Bootstrap 3)向けの設定画面。中身は 4 系の plugin/SelfHarden/Resource/template/admin/config.twig と同じ。
+  違うのは枠の書き方(card → box)と、CSRF の値を画面に直接書くこと(3.0 の枠には eccube-csrf-token の meta が無い)。JavaScript は 4 系のものをそのまま使う
+#}
+{% extends 'default_frame.twig' %}
+
+{% set menus = ['store', 'plugin', 'plugin_list'] %}
+
+{% block title %}Shisa{% endblock %}
+{% block sub_title %}お店の守り神{% endblock %}
+
+{% block stylesheet %}
+<style>
+  [hidden] { display: none !important; }
+  .sh-steps { list-style: none; padding: 0; margin: 0; max-height: 480px; overflow-y: auto; font-size: 14px; }
+  .sh-steps li { padding: 6px 0; border-bottom: 1px solid #eee; display: flex; gap: 10px; }
+  .sh-steps time { color: #888; flex: none; font-variant-numeric: tabular-nums; }
+  .sh-steps .k-think { color: #333; }
+  .sh-steps .k-tool, .sh-steps .k-result { color: #0b5394; }
+  .sh-steps .k-error { color: #b00020; }
+  .sh-steps .k-report { font-weight: bold; }
+  .sh-steps .res { color: #2e7d32; margin-left: 8px; }
+  .sh-steps .tool { color: #999; font-size: 12px; margin-left: 8px; }
+  .sh-steps li.key { animation: sh-flash 2.4s ease-out; }
+  .sh-steps li.key .res { font-weight: bold; }
+  @keyframes sh-flash { 0% { background: #fff3c4; } 100% { background: transparent; } }
+  .sh-steps .ff { margin-left: 8px; color: #8a6d00; font-variant-numeric: tabular-nums; }
+  .sh-replay-badge { display: inline-block; margin-left: 8px; font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3949ab; }
+  .sh-steps .k-error .res { color: #b00020; }
+  .sh-steps details { flex: 1; } .sh-steps summary { cursor: pointer; list-style: none; }
+  .sh-steps summary::-webkit-details-marker { display: none; }
+  .sh-steps pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #f7f7f7; padding: 6px; margin: 4px 0 0; max-height: 240px; overflow: auto; }
+  .sh-report h3 { font-size: 16px; margin-top: 18px; }
+  .sh-report .sev { display: inline-block; min-width: 3.5em; font-size: 12px; padding: 1px 6px; border-radius: 3px; background: #eee; margin-right: 6px; }
+  .sh-report .sev-high { background: #fde0e0; } .sh-report .sev-medium { background: #fff1d6; }
+  .sh-report .summary { white-space: pre-wrap; font-size: 15px; }
+  .sh-report .sh-draft { white-space: pre-wrap; background: #f7f7f7; border-left: 3px solid #ccc; padding: 8px 10px; font-size: 13px; margin: 6px 0; }
+  .sh-band { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2000; background: #1f2933; color: #fff; font-size: 26px; font-weight: 700; padding: 16px 28px; text-align: center; transform: translateY(100%); transition: transform .25s; }
+  .sh-band.show { transform: none; } .sh-band.warn { color: #ffcc80; } .sh-band.good { color: #a5d6a7; }
+  .sh-steps li.sh-research { color: #8a8a8a; font-size: 13px; }
+  .sh-steps li.key { background: #fff3c4; }
+  .sh-health td, .sh-health th { padding: 10px 16px; vertical-align: middle; }
+  .sh-health th { font-size: 12px; color: #888; font-weight: normal; }
+  .sh-health .item { font-weight: bold; white-space: nowrap; }
+  .sh-health .j { font-weight: bold; white-space: nowrap; }
+  .sh-health .j-ok { color: #2e7d32; } .sh-health .j-fixed { color: #2e7d32; } .sh-health .j-mit { color: #1565c0; } .sh-health .j-human { color: #b26a00; } .sh-health .j-next { color: #3949ab; }
+  .sh-health tr { transition: background .4s; } .sh-health tr.in { background: #f1f8e9; }
+  body.sh-big .sh-health td { font-size: 17px; }
+  body.sh-film #sh-runs-card, body.sh-film #sh-connect-card { display: none; }
+  body.sh-film #sh-advisory { filter: blur(6px); }
+  body.sh-health-focus #sh-check-card, body.sh-health-focus #sh-progress-card { display: none; }
+  body.sh-health-focus #sh-health-card .box-header { font-size: 26px; font-weight: 700; }
+  body.sh-health-focus .sh-health td, body.sh-health-focus.sh-big .sh-health td { font-size: 24px; padding: 18px 20px; }
+  body.sh-health-focus .sh-health th { font-size: 16px; }
+  body.sh-film .sh-steps, body.sh-film.sh-big .sh-steps { font-size: 21px; max-height: calc(100vh - 560px); } body.sh-film { padding-bottom: 90px; } body.sh-film .sh-steps time { font-size: 15px; } body.sh-film .sh-steps .tool { font-size: 14px; }
+  .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
+  body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
+  body.sh-big .sh-steps .tool { font-size: 13px; } body.sh-big .sh-report { font-size: 17px; }
+</style>
+{% endblock %}
+
+{% block main %}
+<div class="sh-band" id="sh-band"></div>
+<div class="row">
+  <div class="col-md-12">
+
+      <div class="box" id="sh-health-card" hidden>
+        <div class="box-header"><h3 class="box-title">お店の健康診断 <span id="sh-health-meta" class="text-muted small"></span></h3></div>
+        <div class="box-body no-padding">
+          <table class="table sh-health"><thead><tr><th>項目</th><th>判定</th><th>中身</th></tr></thead><tbody id="sh-health"></tbody></table>
+        </div>
+      </div>
+
+      <div class="box" id="sh-check-card">
+        <div class="box-header"><h3 class="box-title">点検</h3></div>
+        <div class="box-body">
+          {% if connected %}
+            <p>Agent は決まった間隔で、自分でこのサーバーを調べ、弱いところを見つけて守りを固めます。この画面を開いておくと、その経過と結果がここに流れます。何もしなくて大丈夫です。</p>
+            <p>気になるセキュリティの通知があれば、URL を貼ってください。その通知がこの店に当てはまるかを調べて対応します。</p>
+            <div class="row">
+              <div class="col-sm-8"><input type="url" id="sh-advisory" class="form-control" placeholder="通知の URL https://..."></div>
+              <div class="col-sm-4">
+                <button type="button" id="sh-start" class="btn btn-primary">通知を渡す</button>
+                <button type="button" id="sh-now" class="btn btn-default">今すぐ点検する</button>
+              </div>
+            </div>
+            <p id="sh-error" class="text-danger" hidden></p>
+          {% else %}
+            <p>まだ API とつながっていません。下の「API とつなぐ」から始めてください。</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="box" id="sh-progress-card" hidden>
+        <div class="box-header"><h3 class="box-title">経過 <span id="sh-status" class="text-muted small"></span></h3></div>
+        <div class="box-body">
+          <ul class="sh-steps" id="sh-steps"></ul>
+          <div class="sh-report" id="sh-report" hidden></div>
+        </div>
+      </div>
+
+      {% if runs|length > 0 %}
+      <div class="box" id="sh-runs-card">
+        <div class="box-header"><h3 class="box-title">これまでの点検</h3></div>
+        <div class="box-body">
+          <ul class="list-unstyled">
+          {% for r in runs %}
+            <li><a href="#" class="sh-open" data-run="{{ r.run_id }}">{{ (r.created_at // 1000)|date("Y-m-d H:i") }}</a>
+              {% if r.status != 'running' %}<a href="#" class="sh-replay small" data-run="{{ r.run_id }}">▶ 再生</a>{% endif %}
+              {{ r.status == 'done' ? '完了' : (r.status == 'running' ? '実行中' : '失敗') }}
+              {% if r.advisory_url %}<span class="text-muted">({{ r.advisory_url }})</span>{% endif %}</li>
+          {% endfor %}
+          </ul>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="box" id="sh-connect-card">
+        <div class="box-header"><h3 class="box-title">API とつなぐ</h3></div>
+        <div class="box-body">
+          {% if connected %}<p>つながっています。店の ID: <code>{{ shop_id }}</code>。つなぎ直すと鍵を新しくします。</p>{% endif %}
+          <form method="post" action="{{ url('self_harden3_admin_connect') }}" class="form-horizontal">
+            <input type="hidden" name="{{ token_name }}" value="{{ token }}">
+            <div class="form-group"><label class="col-sm-3 control-label">API の URL</label>
+              <div class="col-sm-9"><input name="api_base" class="form-control" value="{{ api_base }}"></div></div>
+            <details><summary class="text-muted small">詳しい設定(ふつうは変えなくて大丈夫です)</summary>
+            <div class="form-group"><label class="col-sm-3 control-label">API から見た店の URL</label>
+              <div class="col-sm-9"><input name="self_base" class="form-control" value="{{ self_base }}"></div></div>
+            <div class="form-group"><label class="col-sm-3 control-label">外から見た店の URL</label>
+              <div class="col-sm-9"><input name="public_base" class="form-control" value="{{ public_base }}"></div></div>
+            </details>
+            <button type="submit" class="btn btn-default">{{ connected ? 'つなぎ直す' : 'API とつなぐ' }}</button>
+          </form>
+        </div>
+      </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block javascript %}
+<script>
+(function () {
+  var token = '{{ token|e('js') }}';
+  var startUrl = '{{ url('self_harden3_admin_run') }}';
+  var runsUrl = '{{ url('self_harden3_admin_runs') }}';
+  var current = null;
+  var statusBase = '{{ url('plugin_SelfHarden3_config') }}'.replace(/config$/, 'run/');
+  var stepsEl = document.getElementById('sh-steps');
+  var reportEl = document.getElementById('sh-report');
+  var statusEl = document.getElementById('sh-status');
+  var card = document.getElementById('sh-progress-card');
+  var timer = null, shown = 0;
+  var labels = { running: '実行中…', done: '完了', failed: '止まりました' };
+  var sevLabels = { high: '高', medium: '中', low: '低', info: '情報' };
+  var stLabels = { fixed: '直した', mitigated: '守りを入れた', scheduled: '次の点検で Shisa が対応', needs_human: '人の作業が必要', not_affected: '当てはまらない' };
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  // ---- お店の健康診断(報告の「見つけたこと」の項目から作る) ----
+  var HEALTH_ITEMS = [['php', 'PHP(お店を動かす土台)'], ['eccube', 'EC-CUBE(お店のソフト)'], ['packages', '中の部品(ほかの開発元のプログラム)'],
+    ['tamper', '書き換えられた跡'], ['exposure', '外から見えていた情報'], ['config', '設定の甘さ']];
+  var JUDGE = { needs_human: [5, '人の作業が必要', 'j-human'], scheduled: [4, '次の点検で Shisa が対応', 'j-next'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
+  function renderHealth(r, meta, animate) {
+    var f = (r && r.findings) || [];
+    if (!f.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
+    var card = document.getElementById('sh-health-card'), body = document.getElementById('sh-health');
+    body.textContent = ''; card.hidden = false;
+    var items = HEALTH_ITEMS.slice();
+    if (f.some(function (x) { return x.category === 'other'; })) items.push(['other', 'その他']);
+    var trs = items.map(function (it) {
+      var xs = f.filter(function (x) { return x.category === it[0]; });
+      var worst = xs.reduce(function (a, x) { var j = JUDGE[x.status] || JUDGE.not_affected; return !a || j[0] > a[0] ? j : a; }, null) || JUDGE.not_affected;
+      // 中身には、判定に使った一番重い発見を出す
+      var main = xs.filter(function (x) { return (JUDGE[x.status] || JUDGE.not_affected) === worst; })[0] || xs.filter(function (x) { return x.status !== 'not_affected'; })[0] || xs[0];
+      var tr = el('tr');
+      tr.appendChild(el('td', 'item', it[1]));
+      tr.appendChild(el('td', 'j ' + worst[2], animate ? '要確認' : worst[1]));
+      var td = el('td', null, main ? maskOf(main.title) : '見つかったものはありません');
+      if (xs.length > 1) td.appendChild(el('span', 'text-muted small ml-2', '(ほか ' + (xs.length - 1) + ' 件)'));
+      if (animate) td.style.visibility = 'hidden';
+      tr.appendChild(td); body.appendChild(tr);
+      return { tr: tr, judge: worst, td: td };
+    });
+    var when = meta && meta.at ? new Date(meta.at).toLocaleString('ja-JP') : '';
+    document.getElementById('sh-health-meta').textContent = (when ? '最後の点検: ' + when : '') + (meta && meta.interval_hours ? ' / 次の点検: ' + meta.interval_hours + ' 時間ごとに自分で' : '');
+    if (animate) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      trs.forEach(function (t, i) { setTimeout(function () { t.tr.classList.add('in'); t.tr.children[1].textContent = t.judge[1]; t.td.style.visibility = ''; }, 600 + i * 700); });
+    }
+  }
+
+  function renderReport(r) {
+    reportEl.textContent = '';
+    if (!r) return;
+    reportEl.hidden = false;
+    reportEl.appendChild(el('h3', null, 'まとめ'));
+    reportEl.appendChild(el('p', 'summary', r.summary));
+    if (r.status) { reportEl.appendChild(el('h3', null, 'いまの守り')); reportEl.appendChild(el('p', 'summary', r.status)); }
+    var sections = [
+      ['したこと', r.actions, function (a) { var li = el('li', null, a.title + ' — ' + a.target); li.appendChild(el('div', 'text-muted small', '確かめ方: ' + a.verified + (a.backup_id ? '(退避: ' + a.backup_id + ')' : ''))); return li; }],
+      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + (stLabels[f.status] || f.status) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
+      ['これから Shisa がやること', r.next_by_self_harden, function (x) { return el('li', null, x.title + (x.when ? '(' + x.when + ')' : '')); }],
+      ['お願い(依頼文つき)', r.requests, function (x) {
+        var li = el('li', null, x.title + '(宛先: ' + x.to + ')');
+        li.appendChild(el('div', 'text-muted small', x.why));
+        var pre = el('pre', 'sh-draft', x.message); li.appendChild(pre);
+        var btn = el('button', 'btn btn-sm btn-ec-regular', '依頼文をコピー'); btn.type = 'button';
+        btn.addEventListener('click', function () { try { navigator.clipboard.writeText(x.message); btn.textContent = 'コピーしました'; } catch (e) {} });
+        li.appendChild(btn); return li;
+      }],
+      ['まだ残っていること', r.remaining, function (x) { var li = el('li', null, x.title + '(' + x.who + ')'); li.appendChild(el('div', 'text-muted small', x.why)); return li; }],
+      ['長い目で見て', r.long_term, function (x) { var li = el('li', null, x.title); li.appendChild(el('div', 'text-muted small', x.why)); return li; }],
+      ['参考にした情報', r.sources, function (s) { var li = el('li'); var a = el('a', null, s.title); if (/^https?:\/\//.test(s.url)) { a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; } li.appendChild(a); return li; }]
+    ];
+    sections.forEach(function (s) {
+      if (!s[1] || !s[1].length) return;
+      reportEl.appendChild(el('h3', null, s[0]));
+      var ul = el('ul');
+      s[1].forEach(function (x) { ul.appendChild(s[2](x)); });
+      reportEl.appendChild(ul);
+    });
+  }
+
+  // 撮影のときは、貼ったお知らせの出どころ(URL とサーバー会社の名前)を出さない
+  var maskHosts = [];
+  function maskOf(t) {
+    if (!t || !document.body.classList.contains('sh-film')) return t;
+    t = String(t).replace(/https?:\/\/[^\s)」]+/g, function (u) { try { return maskHosts.indexOf(new URL(u).host) >= 0 ? '(お知らせの URL)' : u; } catch (e) { return u; } });
+    maskHosts.forEach(function (h) { var b = h.replace(/^www\./, '').split('.')[0]; if (b) t = t.replace(new RegExp(b, 'ig'), '(サーバー会社)'); });
+    return t;
+  }
+  // 撮影のとき、描いた欄の中の文字をまとめて隠す(報告の欄など)
+  function maskTree(root) {
+    if (!root || !document.body.classList.contains('sh-film')) return;
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), n;
+    while ((n = w.nextNode())) n.nodeValue = maskOf(n.nodeValue);
+    root.querySelectorAll('a[href]').forEach(function (a) { if (maskOf(a.href) !== a.href) a.removeAttribute('href'); });
+  }
+  function stepEl(s) {
+    var li = el('li', 'k-' + s.kind);
+    li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
+    var body = s.detail ? el('details') : el('span');
+    var head = s.detail ? el('summary') : body;
+    head.appendChild(el('span', null, maskOf(s.title)));
+    if (s.tool) head.appendChild(el('span', 'tool', maskOf(s.tool)));
+    if (s.result) head.appendChild(el('span', 'res', '→ ' + maskOf(s.result)));
+    if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
+    li.appendChild(body);
+    return li;
+  }
+
+  // ---- 記録の再生(動画用)。記録した経過を同じ順番で流し、大事な行で止める。Claude は呼ばない ----
+  // 字幕は、その行(または報告)に書かれていることだけから作る
+  var RESEARCH = /公開の情報|ファイルを読む|ファイルの一覧|サーバーを調べる|調べた結果|前回の点検|外から開く|退避の一覧|隔離の一覧|公式との違い|部品の弱点|照らし合わせる/;
+  function waitSec(s) { var m = /^(\d+) 秒待つ/.exec(s.tool || ''); return m ? Number(m[1]) : 0; }
+  function isResearch(s) { return (!s.tool && /^公開の情報を(探す|読む)/.test(s.title)) || RESEARCH.test(s.tool || ''); }
+  var band = document.getElementById('sh-band');
+  function showBand(text, cls) { band.className = 'sh-band show ' + (cls || ''); band.textContent = maskOf(text); }
+  function hideBand() { band.className = 'sh-band'; }
+
+  // 止める行と、その一言
+  function stopOf(s, st) {
+    var t = s.tool || '', r = s.result || '', m;
+    if (s.kind === 'decision') { if (/公開|止め|開けた/.test(s.title)) st.decidedOpen = true; return { text: s.title, cls: 'good' }; }
+    if (st.adv && !st.readAdv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0) { st.readAdv = true; return { text: '届いたお知らせを読む' }; }
+    if (/小部屋で試す/.test(t) && !/空に|片付け/.test(s.title)) {
+      var f = (/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      if (/500|壊れる/.test(r)) { st.broke = f; return { text: '試験場で ' + f + ' を試す → 500 でお店が止まる書き方だった', cls: 'warn' }; }
+      if (st.broke && f && f !== st.broke && /HTTP 200/.test(r) && !st.switched) { st.switched = true; return { text: '別の手(' + f + ')に切り替え → 効いた', cls: 'good' }; }
+    }
+    if (/本番に入れる/.test(t) && /入れた/.test(r)) {
+      var g = (/root\/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
+      return { text: '本番の ' + g + ' に入れて、お店を開いて確かめた', cls: 'good' };
+    }
+    if (/照らし合わせる/.test(t) && !/当てた修正/.test(r) && (m = /違う (\d+) 件/.exec(r)) && m[1] !== '0' && !st.foundTamper) { st.foundTamper = true; return { text: '公式の配布物と見比べて、書き換えられたファイルを見つけた', cls: 'warn' }; }
+    if (/公式の中身に戻す/.test(t) && /戻した/.test(r) && !/開けなく/.test(r)) return { text: '書き換えられたファイルを、公式の中身に戻した', cls: 'good' };
+    if (/隔離する/.test(t) && /隔離した/.test(r)) return { text: '覚えのないファイルを隔離した(消さずに)', cls: 'good' };
+    if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) {
+      var fr = (/ @ (\S+)$/.exec(t) || [])[1] || '';
+      return /^v/.test(fr) ? { text: '中の部品を、公式の修正版 ' + fr + ' に差し替えた', cls: 'good' } : { text: 'EC-CUBE を、公式の修正版 ' + fr + ' に上げた(お店は開けたまま)', cls: 'good' };
+    }
+    if (/公式のリリースに上げる/.test(t) && /置いた/.test(r)) return { text: 'EC-CUBE を、部品ごと公式の修正版 ' + t.replace(/^.*: /, '') + ' に上げた', cls: 'good' };
+    return null;
+  }
+
+  function stepRow(s) {
+    if (s.research) { var li = el('li', 'k-tool sh-research'); li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP'))); li.appendChild(el('span', null, s.title)); return li; }
+    var w = waitSec(s);
+    if (w) { var lw = el('li', 'k-tool'); lw.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP'))); lw.appendChild(el('span', null, '⏩ ' + Math.round(w / 60) + ' 分待つ(設定が効くまで)')); return lw; }
+    return stepEl(s);
+  }
+
+  function compactSteps(steps, st) {
+    var out = [], n = 0, first = null;
+    function flush() { if (n > 1) out.push({ at: first.at, research: true, title: '調べ物 ' + n + ' 件' }); else if (n === 1) out.push(first); n = 0; first = null; }
+    steps.forEach(function (s) {
+      var isAdvRead = st.adv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0;
+      // 照らし合わせで書き換えが見つかった行は、まとめずに出す(あとで戻すところの前振り)
+      var foundTamper = /照らし合わせる/.test(s.tool || '') && !/当てた修正/.test(s.result || '') && /違う [1-9]/.test(s.result || '');
+      // 撮影のときは、調べ物もまとめずに流す(自分で調べて見つけたことが見えるように)
+      if (isResearch(s) && !isAdvRead && !foundTamper && !FILM_FLOW) { if (!n) first = s; n++; } else { flush(); out.push(s); }
+    });
+    flush();
+    return out;
+  }
+
+  function advOf(d) {
+    if (d.advisory_url) return d.advisory_url;
+    for (var i = 0; i < d.steps.length; i++) { var m = /通知の URL を受け取った: (\S+)/.exec(d.steps[i].title); if (m) return m[1]; }
+    return null;
+  }
+
+  function replay(runId) {
+    clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
+    statusEl.textContent = '';
+    var badge = el('span', 'sh-replay-badge', '実際の動作(記録の早送り)');
+    statusEl.appendChild(badge);
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
+        var st = { adv: advOf(d) };
+        try { if (st.adv) maskHosts.push(new URL(st.adv).host); } catch (e) {}
+        var list = compactSteps(d.steps.filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
+        (function next() {
+          if (i >= list.length) {
+            // 報告の前に、報告に書かれた「公開を止めることは選ばなかった」判断を出す
+            // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
+            var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
+            var finish = function () {
+              renderReport(r); maskTree(reportEl); badge.textContent = '実際の動作(記録の早送り)・終わり';
+              if (r.findings && r.findings.some(function (x) { return x.category; })) {
+                showBand('お店の健康診断: 項目ごとに、効く手を打った', 'good');
+                // 撮影のときは、健康診断の表だけを大きく出す
+                if (document.body.classList.contains('sh-film')) document.body.classList.add('sh-health-focus');
+                renderHealth(r, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, true);
+              } else {
+                showBand('報告: 直したこと / これから自分でやること / 人へのお願い', 'good');
+                reportEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }
+            };
+            if (notStop) { showBand('お知らせにある「公開を止める」は選ばなかった(お店は開けたまま)', 'good'); setTimeout(finish, 2600); } else finish();
+            return;
+          }
+          var s = list[i++], li = stepRow(s), c = s.research ? null : stopOf(s, st);
+          if (c) { li.classList.add('key'); showBand(c.text, c.cls); }
+          stepsEl.appendChild(li);
+          stepsEl.scrollTop = stepsEl.scrollHeight;
+          if (c) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: c.text }); }
+          var hold = c ? (FILM_HOLDS[stopNo++] || FILM_HOLD) : 0;
+          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? hold : (s.research || (FILM_FLOW && isResearch(s))) ? (FILM_FLOW ? FILM_RS : 400) : waitSec(s) ? 1000 : (FILM_FLOW ? 350 : 600));
+        })();
+      });
+  }
+
+  function poll(runId) {
+    fetch(statusBase + encodeURIComponent(runId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
+        statusEl.textContent = labels[d.status] || d.status;
+        d.steps.slice(shown).forEach(function (s) { stepsEl.appendChild(stepEl(s)); });
+        shown = d.steps.length;
+        stepsEl.scrollTop = stepsEl.scrollHeight;
+        if (d.status === 'running') { timer = setTimeout(function () { poll(runId); }, 2500); }
+        else { renderReport(d.report); renderHealth(d.report, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, false); timer = setTimeout(watchNew, 10000); }
+      })
+      .catch(function () { timer = setTimeout(function () { poll(runId); }, 5000); });
+  }
+
+  function open(runId) {
+    clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
+    poll(runId);
+  }
+
+  // 画面を開いたら最新の点検を出す。API が新しい点検を始めたら、それに切り替えて流す
+  function watchNew() {
+    fetch(runsUrl, { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var latest = d.ok && d.runs && d.runs[0];
+        if (latest && latest.run_id !== current) open(latest.run_id);
+        else timer = setTimeout(watchNew, 10000);
+      })
+      .catch(function () { timer = setTimeout(watchNew, 15000); });
+  }
+
+  function begin(btn, advisory) {
+    var err = document.getElementById('sh-error'); err.hidden = true;
+    if (advisory === '') { err.textContent = '通知の URL を貼ってください'; err.hidden = false; return; }
+    btn.disabled = true;
+    var body = new URLSearchParams({ advisory_url: advisory || '', _token: token });
+    fetch(startUrl, { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { btn.disabled = false; if (d.ok) open(d.run_id); else { err.textContent = d.detail || d.error || '始められませんでした'; err.hidden = false; } })
+      .catch(function () { btn.disabled = false; err.textContent = '始められませんでした'; err.hidden = false; });
+  }
+  var start = document.getElementById('sh-start');
+  // 撮影用: ?film=<記録> を付けて開くと、「通知を渡す」で本物の点検は始めず、その記録を早送りで流す(画面に「記録を早送りで再生」が出る)
+  var filmRun = new URLSearchParams(location.search).get('film');
+  // 撮影: hold=<ミリ秒> で止めどころの長さ(ナレーションに合わせる)。film のときは、お知らせの出どころを画面に出さず、経過の欄に寄せる
+  var FILM_HOLD = Math.min(15000, Math.max(1000, Number(new URLSearchParams(location.search).get('hold')) || 2500));
+  // holds=<ms>,<ms>,... で止めどころごとの長さ(n 番目の止めどころ)。書いていない止めどころは hold
+  var FILM_HOLDS = (new URLSearchParams(location.search).get('holds') || '').split(',').map(function (x) { return Math.min(20000, Math.max(0, Number(x) || 0)); });
+  var stopNo = 0;
+  var FILM_FLOW = !!new URLSearchParams(location.search).get('film');
+  var FILM_RS = Math.min(1000, Math.max(80, Number(new URLSearchParams(location.search).get('rs')) || 180));
+  if (filmRun) document.body.classList.add('sh-film');
+  if (new URLSearchParams(location.search).get('big') === '1') document.body.classList.add('sh-big');
+  if (start) start.addEventListener('click', function () {
+    var adv = document.getElementById('sh-advisory').value.trim();
+    if (filmRun && /^run_[0-9a-f]{8,32}$/.test(filmRun)) { if (adv) replay(filmRun); return; }
+    begin(start, adv);
+  });
+  var now = document.getElementById('sh-now');
+  if (now) now.addEventListener('click', function () { begin(now, null); });
+  {% if connected %}if (!new URLSearchParams(location.search).get('replay') && !new URLSearchParams(location.search).get('film')) watchNew();{% endif %}
+  document.querySelectorAll('.sh-open').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); open(a.getAttribute('data-run')); }); });
+  document.querySelectorAll('.sh-replay').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); replay(a.getAttribute('data-run')); }); });
+  // ?replay=<run_id>&seconds=<全体の秒数> で開くと、すぐに再生する(撮影用)
+  var q = new URLSearchParams(location.search);
+  if (q.get('replay') && /^run_[0-9a-f]{8,32}$/.test(q.get('replay'))) replay(q.get('replay'));
+})();
+</script>
+{% endblock %}
