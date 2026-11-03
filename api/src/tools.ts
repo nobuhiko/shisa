@@ -122,6 +122,19 @@ export const CLIENT_TOOLS: Tool[] = [
     ),
   },
   {
+    name: "apply_official_release",
+    description:
+      "Update EC-CUBE to a newer official release of the same line (for example a patch release such as 4.0.6 -> 4.0.6-p5) as one unit, including the Composer packages under vendor/ and composer.lock, without running Composer. You only give the release tag; the API compares the official release archives of the installed version and of that tag and computes every file that changed. The receiver downloads the official release archive itself from the EC-CUBE GitHub releases, checks it against the release's official checksum and each file against the expected hash, backs up and writes all files, opens the shop pages, and rolls back everything if the shop breaks. Refused when the release changes the database schema (migrations or entities), or when a file to be replaced differs from the official release of the installed version (the shop's own customization). Use this for official patch releases, including ones that apply_official_fix refuses because of Composer package changes.",
+    input_schema: obj(
+      {
+        ref: { type: "string", description: "Release tag of the same line, newer than the installed version" },
+        reason: { type: "string", description: "Why (which official fixes this release contains, with source URL)" },
+        extra_verify_paths: { type: "array", items: { type: "string" } },
+      },
+      ["ref", "reason"],
+    ),
+  },
+  {
     name: "quarantine",
     description:
       "Move a suspicious file out of the web-reachable tree into the receiver's quarantine (not deleted; it can be released back). After moving, the receiver opens the shop pages and moves the file back if the shop breaks.",
@@ -495,7 +508,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           const scope = await officialFixScope(await installedVersion(shop), String(input.ref));
           const missing = scope.files.filter((f) => !paths.includes(f));
           if (scope.blockers.length) {
-            return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages; it cannot be applied with these tools. Apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+            return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages. If it is an official release of the same line, use apply_official_release (it handles Composer packages; it refuses database changes). Otherwise apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           }
           // お店の改造を上書きしない: 当てる先が、今の版の公式の中身と違えば(self-harden が当てたものを除く)断る
           const version = await installedVersion(shop);
@@ -529,6 +542,56 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         );
       }
       return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
+    }
+    case "apply_official_release": {
+      const ref = String(input.ref ?? "");
+      const title = `公式のリリースに上げる: ${ref}`;
+      try {
+        const installed = await installedVersion(shop);
+        const line = (v: string) => (/^(4\.\d+)\./.exec(v) ?? [])[1];
+        if (!line(ref) || line(ref) !== line(installed)) {
+          return { content: j({ ok: false, error: "bad_ref", detail: `Only a newer release tag of the same line as the installed version (${installed}).` }), isError: true, title };
+        }
+        const from = await manifest(installed);
+        const to = await manifest(ref);
+        const mine = await shopHashes(shop);
+        const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
+        const writable = (p: string) =>
+          p === "composer.json" || p === "composer.lock" ||
+          ((/^(src|app|html|vendor)\//.test(p) || !p.includes("/")) && !/(^|\/)\.env/.test(p) && p !== "self-harden.php");
+        const changed = Object.keys(to.files).filter((p) => to.files[p] !== from.files[p]);
+        const blockers = changed.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p));
+        if (blockers.length) {
+          return { content: j({ ok: false, error: "needs_db_change", detail: "This release changes the database schema; it cannot be applied with these tools. Apply nothing and report it.", blockers: blockers.slice(0, 20) }), isError: true, title };
+        }
+        // 店から消されているファイル(公式の前の版にあったもの)は置き直さない。書けない場所は外す
+        const skippedRemoved = changed.filter((p) => p in from.files && !(p in mine));
+        const notWritable = changed.filter((p) => !writable(p));
+        const paths = changed.filter((p) => writable(p) && !skippedRemoved.includes(p));
+        // お店の改造を上書きしない
+        const customized = paths.filter((p) => p in mine && p in from.files && mine[p] !== from.files[p] && mine[p] !== to.files[p] && !applied.some((a) => a.path === p && a.sha256 === mine[p]));
+        if (customized.length) {
+          return { content: j({ ok: false, error: "customized_files", detail: "Nothing was written. These files differ from the official release of the installed version (likely the shop's own customization); applying the release would erase it. Report it to a person instead.", customized: customized.slice(0, 50), count: customized.length }), isError: true, title };
+        }
+        const todo = paths.filter((p) => mine[p] !== to.files[p]);
+        if (!todo.length) return { content: j({ ok: true, detail: "Already identical to the release." }), title };
+        const expected: Record<string, string> = {};
+        for (const p of todo) expected[p] = to.files[p];
+        const r = await callReceiver(shop, "apply_official_release", {
+          ref, paths: todo, expected_sha256: expected,
+          verify: { paths: verifyPaths(shop, input.extra_verify_paths ?? ["/admin/login"]), timeout_sec: 8 },
+        }, 170_000);
+        if (r.ok && !r.result.rolled_back && ctx) {
+          await ctx.store.addApplied(shop.shop_id, (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now() })));
+        }
+        const by = (ps: string[]) => ps.reduce<Record<string, number>>((a, p) => ((a[p.split("/")[0]] = (a[p.split("/")[0]] ?? 0) + 1), a), {});
+        const summary = r.ok
+          ? { ok: true, result: { ref, from: installed, written: r.result.applied.length, by_top: by(todo), composer_lock: todo.includes("composer.lock"), rolled_back: r.result.rolled_back, verify: r.result.verify, rollback_verify: r.result.rollback_verify, skipped_removed_in_shop: skippedRemoved.length, not_writable: notWritable.slice(0, 20), source: to.source } }
+          : r;
+        return { content: j(summary), isError: !r.ok, title };
+      } catch (e) {
+        return { content: j({ ok: false, error: "release_unknown", detail: `${(e as Error).message}. Nothing was written.` }), isError: true, title };
+      }
     }
     case "quarantine": {
       const r = await callReceiver(shop, "quarantine", { path: input.path, verify: { paths: verifyPaths(shop, null), timeout_sec: 8 } });

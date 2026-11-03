@@ -5,7 +5,7 @@ import type { Shop } from "./store.js";
 
 export type ReceiverResult = { ok: true; result: any } | { ok: false; error: string; detail?: string };
 
-export async function callReceiver(shop: Shop, op: string, args: Record<string, unknown> = {}): Promise<ReceiverResult> {
+export async function callReceiver(shop: Shop, op: string, args: Record<string, unknown> = {}, timeoutMs = 28_000): Promise<ReceiverResult> {
   const url = new URL(shop.receiver_url);
   const body = JSON.stringify({ op, args });
   const headers = await signRequest(shop.secret, "POST", url.pathname, shop.shop_id, body);
@@ -16,7 +16,7 @@ export async function callReceiver(shop: Shop, op: string, args: Record<string, 
       headers: { "Content-Type": "application/json", ...headers },
       body,
       redirect: "manual",
-      signal: AbortSignal.timeout(28_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
     return { ok: false, error: "unreachable", detail: `受け口につながりません: ${(e as Error).message}` };
