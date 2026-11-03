@@ -942,8 +942,9 @@ const PAGE = String.raw`<!doctype html>
   if (q('clean') === '1') document.body.classList.add('clean');
   // 上の帯の名前は story.json の name.short(決まっていなければ self-harden のまま)
   fetch('/demo/story').then(function (r) { return r.json(); }).then(function (st) { if (st.name && st.name.short) document.getElementById('title').textContent = st.name.short; }).catch(function () {});
-  fetch('/demo/runs').then(function (r) { return r.json(); }).then(function (runs) {
-    controls(runs);
+  // 場面はすぐに始める(記録の一覧は撮影の操作の欄にだけ使う。記録が増えると一覧の返事が遅いので待たない)
+  fetch('/demo/runs').then(function (r) { return r.json(); }).then(function (runs) { controls(runs); }).catch(function () {});
+  (function (runs) {
     var k = q('scene');
     var ids = (k === 'B' ? [q('a'), q('b')] : (q('runs') || q('run') || '').split(',')).filter(Boolean);
     if (k === 'all') all();
@@ -953,7 +954,6 @@ const PAGE = String.raw`<!doctype html>
     else if (k === 'S') scenes.S((q('runs') || '').split(',').filter(Boolean), { pickedOnly: q('picked') === '1' });
     else if (k === 'H') scenes.H((q('runs') || '').split(',').filter(Boolean));
     else if (k && scenes[k] && ids.length) scenes[k](ids);
-    else if (!runs.length) main.appendChild(el('p', null, '記録がまだありません'));
-  });
+  })([]);
 })();
 </script></body></html>`;

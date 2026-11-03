@@ -34,6 +34,9 @@ sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, Array(30)
 const order = JSON.parse(readFileSync(join(dry, "marks.json"), "utf8")).stops.map((s) => s.text);
 const MAP = {}; const used = new Set();
 for (const [re, keys] of RULES) { const i = order.findIndex((t, j) => re.test(t) && !used.has(j)); if (i < 0) throw new Error("止めどころが無い: " + re); used.add(i); MAP[i] = keys; }
+// 「この間、お店は開けたまま」(sho6)は、本番に入れた話(sho5)のあとでないと意味が通らない。判断の行が先に来た点検では、sho5 の続きで読む
+{ const at = (k) => Number(Object.keys(MAP).find((i) => MAP[i].includes(k)));
+  if (at("sho6") < at("sho5")) { MAP[at("sho6")] = MAP[at("sho6")].filter((k) => k !== "sho6"); if (!MAP[at("sho6")]?.length) delete MAP[at("sho6")]; MAP[at("sho5")].push("sho6"); } }
 const holds = order.map((_, i) => (MAP[i] ? Math.round(MAP[i].reduce((a, k) => a + clip[k].d, 0) * 1000 + 300) : 1200));
 console.log(order.map((t, i) => `${i} ${MAP[i] ? MAP[i].join("+") : "-"} ${t}`).join("\n"));
 const fdir = join(out, "film"); execFileSync("rm", ["-rf", fdir]);
@@ -45,7 +48,7 @@ const webm = join(fdir, readdirSync(fdir).find((f) => f.endsWith(".webm")));
 const S = Math.max(0, marks.start - 0.3);
 const k0 = clip.ketsu0.d;
 // 健康診断の表は 0.7 秒ずつ行が埋まる(7 行で約 5.5 秒)。埋まりきって少し置くまで流す
-const E = Math.min(marks.total - 0.3, marks.end + Math.max(k0 + 1.0, 12));
+const E = Math.min(marks.total - 0.3, marks.end + Math.max(k0 + 1.0, 11));
 const place = [];
 for (const [i, keys] of Object.entries(MAP)) { let t = marks.stops[i].at - S + 0.15; for (const k of keys) { place.push({ at: t, k }); t += clip[k].d; } }
 place.push({ at: marks.end - S + 0.3, k: "ketsu0" });
