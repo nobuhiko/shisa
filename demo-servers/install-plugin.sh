@@ -1,10 +1,10 @@
 #!/bin/sh
 # デモの店に plugin/SelfHarden を入れて有効にする
-#   ./install-plugin.sh server-a|server-b|server-c|server-d|all
+#   ./install-plugin.sh server-a|server-b|server-c|server-d|server-e|server-f|all
 set -eu
 cd "$(dirname "$0")"
 one() {
-  case "$1" in server-a) C=self-harden-demo-server-a-1;; server-c) C=self-harden-demo-server-c-1;; server-d) C=self-harden-demo-server-d-1;; server-b) C=self-harden-demo-server-b-php-1;; *) echo "server-a|server-b|server-c|server-d|all"; exit 1;; esac
+  case "$1" in server-a) C=self-harden-demo-server-a-1;; server-c) C=self-harden-demo-server-c-1;; server-d) C=self-harden-demo-server-d-1;; server-e) C=self-harden-demo-server-e-1;; server-f) C=self-harden-demo-server-f-1;; server-b) C=self-harden-demo-server-b-php-1;; *) echo "server-a|server-b|server-c|server-d|server-e|server-f|all"; exit 1;; esac
   copy() {
     docker exec "$C" rm -rf /var/www/html/app/Plugin/SelfHarden
     docker cp ../plugin/SelfHarden "$C:/var/www/html/app/Plugin/SelfHarden"

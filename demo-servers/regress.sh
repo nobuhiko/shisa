@@ -1,12 +1,12 @@
 #!/bin/sh
 # 回帰の点検: デモのお店をまっさらにし、同じお知らせの URL で一斉に点検を走らせ、終わったら結果を表にする
-#   ./regress.sh [server-a server-b server-c server-d]   (省略で全部)
+#   ./regress.sh [server-a server-b server-c server-d server-e server-f]   (省略で server-a〜server-d)
 #   費用: 1 店あたり初回の上限まで($12)。終わるまで 10〜20 分
 set -eu
 cd "$(dirname "$0")"
 ADV="${ADV:-https://www.kagoya.jp/news/2026102337094/}"
 SERVERS="${*:-server-a server-b server-c server-d}"
-port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; server-c) echo 8083;; server-d) echo 8084;; esac; }
+port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; server-c) echo 8083;; server-d) echo 8084;; server-e) echo 8085;; server-f) echo 8086;; esac; }
 vols() { case "$1" in server-b) echo "server-b server-b-php";; *) echo "$1";; esac; }
 
 (cd ../api && SH_AUTO_ON_CONNECT=0 docker compose up -d --build >/dev/null 2>&1)

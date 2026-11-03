@@ -2,7 +2,7 @@
 name: self-harden-demo
 
 x-trusted: &trusted
-  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$,^server-d$$'
+  TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$,^server-d$$,^server-e$$,^server-f$$'
   PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:
@@ -82,11 +82,37 @@ services:
     volumes: ["server-d-docroot:/var/www/html"]
     networks: [self-harden]
 
+  server-e:
+    build: { context: ., dockerfile: server-e/Dockerfile }
+    image: self-harden/server-e:dev
+    hostname: server-e
+    environment:
+      <<: *trusted
+      SELF_HARDEN_SELF_BASE: http://server-e
+      PLANT_DEMO: "0"   # 4.1 系。同じ系のパッチ版への上げを見るための台
+    ports: ["127.0.0.1:8085:80"]
+    volumes: ["server-e-docroot:/var/www/html"]
+    networks: [self-harden]
+
+  server-f:
+    build: { context: ., dockerfile: server-f/Dockerfile }
+    image: self-harden/server-f:dev
+    hostname: server-f
+    environment:
+      <<: *trusted
+      SELF_HARDEN_SELF_BASE: http://server-f
+      PLANT_DEMO: "0"   # 4.3 系。同じ系の新しい版への上げを見るための台
+    ports: ["127.0.0.1:8086:80"]
+    volumes: ["server-f-docroot:/var/www/html"]
+    networks: [self-harden]
+
 volumes:
   server-a-docroot:
   server-b-docroot:
   server-c-docroot:
   server-d-docroot:
+  server-e-docroot:
+  server-f-docroot:
 
 networks:
   self-harden:
