@@ -31,7 +31,8 @@ const { chromium } = require(process.env.PW || "playwright");
 
   // 有効にする
   mark("enable");
-  const en = page.locator('a[href$="/enable"]').first();
+  // 最初から入っているプラグインもあるので、Shisa の行の「有効にする」を押す
+  const en = page.locator("tr", { hasText: "Shisa" }).locator('a[href$="/enable"]').first();
   await en.scrollIntoViewIfNeeded();
   await pause(800);
   await en.click();
