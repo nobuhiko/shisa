@@ -44,7 +44,8 @@ async function tick() {
     if (shop.status !== "connected") continue;
     const runs = await store.listRuns(shop.shop_id);
     if (runs.some((r) => r.status === "running")) continue;
-    const last = runs[0]?.created_at ?? 0;
+    // まだ点検していない店は、つないだ時刻から数える(最初の点検は「つないだら始める」か、店の人が始める)
+    const last = runs[0]?.created_at ?? shop.created_at;
     if (Date.now() - last < INTERVAL_MS) continue;
     if (dailyQuotaExceeded(runs)) continue;
     const run = newRun(`run_${randomHex(8)}`, shop, null, "schedule", isFirstRun(runs));
