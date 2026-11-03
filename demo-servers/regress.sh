@@ -9,7 +9,7 @@ SERVERS="${*:-server-a server-b server-c server-d}"
 port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; server-c) echo 8083;; server-d) echo 8084;; esac; }
 vols() { case "$1" in server-b) echo "server-b server-b-php";; *) echo "$1";; esac; }
 
-(cd ../api && SH_AUTO_ON_CONNECT=0 docker compose up -d >/dev/null 2>&1)
+(cd ../api && SH_AUTO_ON_CONNECT=0 docker compose up -d --build >/dev/null 2>&1)
 for s in $SERVERS; do
   docker compose rm -sf $(vols "$s") >/dev/null 2>&1
   docker volume rm "self-harden-demo_${s}-docroot" >/dev/null 2>&1 || true
