@@ -41,31 +41,23 @@ class PluginManager extends AbstractPluginManager
     }
 
     /**
-     * 有効にしたあと、管理画面の経路が読まれないことがある(EC-CUBE がキャッシュを作り直す時点では、まだ有効として記録されていない)。
-     * そこで、このやり取りが全部終わってから(有効の記録が済んでから)、キャッシュを付け替えて、次の画面で作り直させる。
-     * 店の人が「キャッシュを削除」を押さなくても、すぐに設定の画面が開けるようにするため
+     * 有効にしたあと、管理画面の経路が読まれないことがある(EC-CUBE が有効の処理の途中で組み立て直す設定(コンテナ)に、まだこのプラグインが入っていない)。
+     * そこで、このやり取りが全部終わってから(有効の記録が済んでから)、設定の読み込み口(*Container.php)と経路の控え(url_*_routes.php)だけを消し、
+     * 次のやり取りで組み立て直させる。キャッシュのフォルダごと消すと、すでに走り出している次の画面が読むファイルまで消えて 500 になり、
+     * EC-CUBE の自動のメンテナンスが解除されないまま残る
      */
     private static function clearCacheAfterRequest($root)
     {
         $env = getenv('APP_ENV') ?: (isset($_SERVER['APP_ENV']) ? $_SERVER['APP_ENV'] : 'prod');
         $dir = $root.'/var/cache/'.preg_replace('/[^a-z0-9_]/i', '', (string) $env);
         register_shutdown_function(function () use ($dir) {
-            if (!is_dir($dir) || is_link($dir)) {
-                return;
-            }
-            $old = dirname($dir).'/.sh-old-'.bin2hex(random_bytes(4));
-            if (!@rename($dir, $old)) {
-                return;
-            }
-            $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($old, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
-            foreach ($it as $f) {
-                if ($f->isLink() || $f->isFile()) {
-                    @unlink($f->getPathname());
-                } elseif ($f->isDir()) {
-                    @rmdir($f->getPathname());
+            $files = array_merge((array) glob($dir.'/*Container.php'), (array) glob($dir.'/*Container.php.meta'), (array) glob($dir.'/*Container.preload.php'),
+                array($dir.'/url_generating_routes.php', $dir.'/url_generating_routes.php.meta', $dir.'/url_matching_routes.php', $dir.'/url_matching_routes.php.meta'));
+            foreach ($files as $p) {
+                if (is_string($p) && is_file($p) && !is_link($p)) {
+                    @unlink($p);
                 }
             }
-            @rmdir($old);
         });
     }
 

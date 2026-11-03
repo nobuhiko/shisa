@@ -10,7 +10,8 @@ const { chromium } = require(process.env.PW || "playwright");
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, recordVideo: { dir: out, size: { width: 1920, height: 1080 } } });
   const page = await ctx.newPage();
   const t0 = Date.now();
-  const mark = (name) => console.log("MARK", name, ((Date.now() - t0) / 1000).toFixed(1));
+  const marks = {};
+  const mark = (name) => { marks[name] = +((Date.now() - t0) / 1000).toFixed(1); console.log("MARK", name, marks[name]); require("node:fs").writeFileSync(`${out}/marks.json`, JSON.stringify(marks)); };
   const pause = (ms) => page.waitForTimeout(ms);
 
   await page.goto(`${base}/admin/login`);
@@ -35,9 +36,17 @@ const { chromium } = require(process.env.PW || "playwright");
   const en = page.locator("tr", { hasText: "Shisa" }).locator('a[href$="/enable"]').first();
   await en.scrollIntoViewIfNeeded();
   await pause(800);
+  // EC-CUBE 4.2.3 以降は、有効にすると自動でメンテナンス中にし、一覧の画面の JS が解除する。その解除が済むまで待つ(済まないとお店が 503 のまま)
+  const released = page.waitForResponse((r) => /disable_maintenance/.test(r.url()), { timeout: 60000 }).catch(() => null);
   await en.click();
   await page.waitForLoadState("networkidle", { timeout: 120000 });
-  await pause(2000);
+  await released;
+  await pause(2500);
+  for (let i = 0; i < 20; i++) {
+    const st = await page.context().request.get(`${base}/`).then((r) => r.status()).catch(() => 0);
+    if (st === 200) break;
+    await pause(1000);
+  }
 
   // プラグインの画面で API とつなぐ
   await page.goto(`${base}/admin/store/plugin/SelfHarden/config`);
