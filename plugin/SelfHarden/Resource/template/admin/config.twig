@@ -3,8 +3,8 @@
 
 {% set menus = ['store', 'plugin', 'plugin_list'] %}
 
-{% block title %}self-harden{% endblock %}
-{% block sub_title %}自分で考えて守りを固める{% endblock %}
+{% block title %}Shisa{% endblock %}
+{% block sub_title %}お店の守り神{% endblock %}
 
 {% block stylesheet %}
 <style>
@@ -42,6 +42,9 @@
   .sh-health .j-ok { color: #2e7d32; } .sh-health .j-fixed { color: #2e7d32; } .sh-health .j-mit { color: #1565c0; } .sh-health .j-human { color: #b26a00; }
   .sh-health tr { transition: background .4s; } .sh-health tr.in { background: #f1f8e9; }
   body.sh-big .sh-health td { font-size: 17px; }
+  body.sh-film #sh-runs-card, body.sh-film #sh-connect-card { display: none; }
+  body.sh-film #sh-advisory { filter: blur(6px); }
+  body.sh-film .sh-steps { font-size: 21px; max-height: 66vh; } body.sh-film .sh-steps time { font-size: 15px; } body.sh-film .sh-steps .tool { font-size: 14px; }
   .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
   body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
   body.sh-big .sh-steps .tool { font-size: 13px; } body.sh-big .sh-report { font-size: 17px; }
@@ -88,7 +91,7 @@
       </div>
 
       {% if runs|length > 0 %}
-      <div class="card rounded border-0 mb-4">
+      <div class="card rounded border-0 mb-4" id="sh-runs-card">
         <div class="card-header"><span>これまでの点検</span></div>
         <div class="card-body">
           <ul class="list-unstyled mb-0">
@@ -103,7 +106,7 @@
       </div>
       {% endif %}
 
-      <div class="card rounded border-0 mb-4">
+      <div class="card rounded border-0 mb-4" id="sh-connect-card">
         <div class="card-header"><span>API とつなぐ</span></div>
         <div class="card-body">
           {% if connected %}<p>つながっています。店の ID: <code>{{ shop_id }}</code>。つなぎ直すと鍵を新しくします。</p>{% endif %}
@@ -210,14 +213,22 @@
     });
   }
 
+  // 撮影のときは、貼ったお知らせの出どころ(URL とサーバー会社の名前)を出さない
+  var maskHosts = [];
+  function maskOf(t) {
+    if (!t || !document.body.classList.contains('sh-film')) return t;
+    t = String(t).replace(/https?:\/\/[^\s)」]+/g, function (u) { try { return maskHosts.indexOf(new URL(u).host) >= 0 ? '(お知らせの URL)' : u; } catch (e) { return u; } });
+    maskHosts.forEach(function (h) { var b = h.replace(/^www\./, '').split('.')[0]; if (b) t = t.replace(new RegExp(b, 'ig'), '(サーバー会社)'); });
+    return t;
+  }
   function stepEl(s) {
     var li = el('li', 'k-' + s.kind);
     li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
     var body = s.detail ? el('details') : el('span');
     var head = s.detail ? el('summary') : body;
-    head.appendChild(el('span', null, s.title));
-    if (s.tool) head.appendChild(el('span', 'tool', s.tool));
-    if (s.result) head.appendChild(el('span', 'res', '→ ' + s.result));
+    head.appendChild(el('span', null, maskOf(s.title)));
+    if (s.tool) head.appendChild(el('span', 'tool', maskOf(s.tool)));
+    if (s.result) head.appendChild(el('span', 'res', '→ ' + maskOf(s.result)));
     if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
     li.appendChild(body);
     return li;
@@ -229,7 +240,7 @@
   function waitSec(s) { var m = /^(\d+) 秒待つ/.exec(s.tool || ''); return m ? Number(m[1]) : 0; }
   function isResearch(s) { return (!s.tool && /^公開の情報を(探す|読む)/.test(s.title)) || RESEARCH.test(s.tool || ''); }
   var band = document.getElementById('sh-band');
-  function showBand(text, cls) { band.className = 'sh-band show ' + (cls || ''); band.textContent = text; }
+  function showBand(text, cls) { band.className = 'sh-band show ' + (cls || ''); band.textContent = maskOf(text); }
   function hideBand() { band.className = 'sh-band'; }
 
   // 止める行と、その一言
@@ -246,6 +257,14 @@
       var g = (/root\/(\.htaccess|\.user\.ini)/.exec(t) || [])[1] || '';
       return { text: '本番の ' + g + ' に入れて、お店を開いて確かめた', cls: 'good' };
     }
+    if (/照らし合わせる/.test(t) && !/当てた修正/.test(r) && (m = /違う (\d+) 件/.exec(r)) && m[1] !== '0' && !st.foundTamper) { st.foundTamper = true; return { text: '公式の配布物と見比べて、書き換えられたファイルを見つけた', cls: 'warn' }; }
+    if (/公式の中身に戻す/.test(t) && /戻した/.test(r) && !/開けなく/.test(r)) return { text: '書き換えられたファイルを、公式の中身に戻した', cls: 'good' };
+    if (/隔離する/.test(t) && /隔離した/.test(r)) return { text: '覚えのないファイルを隔離した(消さずに)', cls: 'good' };
+    if (/公式の修正を当てる/.test(t) && /そろえて当てた/.test(r)) {
+      var fr = (/ @ (\S+)$/.exec(t) || [])[1] || '';
+      return /^v/.test(fr) ? { text: '中の部品を、公式の修正版 ' + fr + ' に差し替えた', cls: 'good' } : { text: 'EC-CUBE を、公式の修正版 ' + fr + ' に上げた(お店は開けたまま)', cls: 'good' };
+    }
+    if (/公式のリリースに上げる/.test(t) && /置いた/.test(r)) return { text: 'EC-CUBE を、部品ごと公式の修正版 ' + t.replace(/^.*: /, '') + ' に上げた', cls: 'good' };
     return null;
   }
 
@@ -284,6 +303,7 @@
       .then(function (d) {
         if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
         var st = { adv: advOf(d) };
+        try { if (st.adv) maskHosts.push(new URL(st.adv).host); } catch (e) {}
         var list = compactSteps(d.steps.filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
         (function next() {
           if (i >= list.length) {
@@ -307,7 +327,9 @@
           if (c) { li.classList.add('key'); showBand(c.text, c.cls); }
           stepsEl.appendChild(li);
           stepsEl.scrollTop = stepsEl.scrollHeight;
-          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? 2500 : s.research ? 400 : waitSec(s) ? 1000 : 600);
+          if (c) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: c.text }); }
+          var hold = c ? (FILM_HOLDS[stopNo++] || FILM_HOLD) : 0;
+          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? hold : s.research ? 400 : waitSec(s) ? 1000 : 600);
         })();
       });
   }
@@ -357,6 +379,12 @@
   var start = document.getElementById('sh-start');
   // 撮影用: ?film=<記録> を付けて開くと、「通知を渡す」で本物の点検は始めず、その記録を早送りで流す(画面に「記録を早送りで再生」が出る)
   var filmRun = new URLSearchParams(location.search).get('film');
+  // 撮影: hold=<ミリ秒> で止めどころの長さ(ナレーションに合わせる)。film のときは、お知らせの出どころを画面に出さず、経過の欄に寄せる
+  var FILM_HOLD = Math.min(15000, Math.max(1000, Number(new URLSearchParams(location.search).get('hold')) || 2500));
+  // holds=<ms>,<ms>,... で止めどころごとの長さ(n 番目の止めどころ)。書いていない止めどころは hold
+  var FILM_HOLDS = (new URLSearchParams(location.search).get('holds') || '').split(',').map(function (x) { return Math.min(20000, Math.max(0, Number(x) || 0)); });
+  var stopNo = 0;
+  if (filmRun) document.body.classList.add('sh-film');
   if (new URLSearchParams(location.search).get('big') === '1') document.body.classList.add('sh-big');
   if (start) start.addEventListener('click', function () {
     var adv = document.getElementById('sh-advisory').value.trim();
