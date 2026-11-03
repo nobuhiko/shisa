@@ -280,7 +280,10 @@
     function flush() { if (n > 1) out.push({ at: first.at, research: true, title: '調べ物 ' + n + ' 件' }); else if (n === 1) out.push(first); n = 0; first = null; }
     steps.forEach(function (s) {
       var isAdvRead = st.adv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0;
-      if (isResearch(s) && !isAdvRead) { if (!n) first = s; n++; } else { flush(); out.push(s); }
+      // 照らし合わせで書き換えが見つかった行は、まとめずに出す(あとで戻すところの前振り)
+      var foundTamper = /照らし合わせる/.test(s.tool || '') && !/当てた修正/.test(s.result || '') && /違う [1-9]/.test(s.result || '');
+      // 撮影のときは、調べ物もまとめずに流す(自分で調べて見つけたことが見えるように)
+      if (isResearch(s) && !isAdvRead && !foundTamper && !FILM_FLOW) { if (!n) first = s; n++; } else { flush(); out.push(s); }
     });
     flush();
     return out;
@@ -329,7 +332,7 @@
           stepsEl.scrollTop = stepsEl.scrollHeight;
           if (c) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: c.text }); }
           var hold = c ? (FILM_HOLDS[stopNo++] || FILM_HOLD) : 0;
-          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? hold : s.research ? 400 : waitSec(s) ? 1000 : 600);
+          timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? hold : (s.research || (FILM_FLOW && isResearch(s))) ? (FILM_FLOW ? FILM_RS : 400) : waitSec(s) ? 1000 : (FILM_FLOW ? 350 : 600));
         })();
       });
   }
@@ -384,6 +387,8 @@
   // holds=<ms>,<ms>,... で止めどころごとの長さ(n 番目の止めどころ)。書いていない止めどころは hold
   var FILM_HOLDS = (new URLSearchParams(location.search).get('holds') || '').split(',').map(function (x) { return Math.min(20000, Math.max(0, Number(x) || 0)); });
   var stopNo = 0;
+  var FILM_FLOW = !!new URLSearchParams(location.search).get('film');
+  var FILM_RS = Math.min(1000, Math.max(80, Number(new URLSearchParams(location.search).get('rs')) || 180));
   if (filmRun) document.body.classList.add('sh-film');
   if (new URLSearchParams(location.search).get('big') === '1') document.body.classList.add('sh-big');
   if (start) start.addEventListener('click', function () {
