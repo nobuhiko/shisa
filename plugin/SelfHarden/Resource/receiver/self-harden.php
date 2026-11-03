@@ -26,6 +26,7 @@ const SH_MAPS = [
     'eccube4' => [
         'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
         'var_dir' => 'var/self-harden',
+        'vendor_dir' => 'vendor',
         'cache' => ['base' => 'var/cache', 'dirs' => ['prod']],
         'secrets' => [],
         'version_file' => 'src/Eccube/Common/Constant.php',
@@ -39,6 +40,7 @@ const SH_MAPS = [
     'eccube3' => [
         'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
         'var_dir' => 'app/self-harden',
+        'vendor_dir' => 'vendor',
         'cache' => ['base' => 'app/cache', 'dirs' => ['twig', 'doctrine', 'eccube', 'plugin', 'translator', 'prod']],
         'secrets' => ['app/config/eccube/config.yml', 'app/config/eccube/database.yml', 'app/config/eccube/mail.yml'],
         'version_file' => 'src/Eccube/Common/Constant.php',
@@ -53,6 +55,7 @@ const SH_MAPS = [
     'eccube2' => [
         'code_tops' => ['', 'data', 'html'],
         'var_dir' => 'data/self-harden',
+        'vendor_dir' => 'data/vendor',
         'cache' => null,
         'secrets' => ['data/config/config.php'],
         'version_file' => 'data/class/SC_Initial.php',
@@ -909,12 +912,13 @@ function sh_official_url($rel, $ref)
         throw new ShError('bad_ref', 'ref がありません');
     }
     $sha = (bool) preg_match('/^[0-9a-f]{40}$/', $ref);
-    if (strpos($rel, 'vendor/') === 0) {
-        $parts = explode('/', $rel, 4);
-        if (count($parts) < 4) {
-            throw new ShError('bad_target', 'vendor/<vendor>/<package>/<file> の形にしてください');
+    $vd = sh_map()['vendor_dir'];
+    if (strpos($rel, $vd . '/') === 0) {
+        $parts = explode('/', substr($rel, strlen($vd) + 1), 3);
+        if (count($parts) < 3) {
+            throw new ShError('bad_target', $vd . '/<vendor>/<package>/<file> の形にしてください');
         }
-        $name = $parts[1] . '/' . $parts[2];
+        $name = $parts[0] . '/' . $parts[1];
         $lock = json_decode((string) @file_get_contents(sh_root() . '/composer.lock'), true);
         $pkg = null;
         foreach (['packages', 'packages-dev'] as $k) {
@@ -936,7 +940,7 @@ function sh_official_url($rel, $ref)
                 throw new ShError('bad_ref', '部品はロックされた版か、同じメジャー版の新しいタグだけにできます(ロック: ' . $pkg['version'] . ')');
             }
         }
-        return SH_OFFICIAL_RAW . $m[1] . '/' . $m[2] . '/' . $ref . '/' . $parts[3];
+        return SH_OFFICIAL_RAW . $m[1] . '/' . $m[2] . '/' . $ref . '/' . $parts[2];
     }
     $installed = sh_eccube_version();
     if ($sha) {
@@ -1026,7 +1030,7 @@ function op_apply_official_fix(array $cfg, array $args)
     $ref = isset($args['ref']) ? $args['ref'] : null;
     $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
     // 本体の修正は 30 件まで。部品(vendor/ の 1 つの部品)の修正は 100 件まで
-    $one_pkg = $paths && preg_match('#^vendor/[^/]+/[^/]+/#', (string) $paths[0], $pm) && count(array_filter($paths, function ($p) use ($pm) { return strpos((string) $p, $pm[0]) === 0; })) === count($paths);
+    $one_pkg = $paths && preg_match('#^' . preg_quote(sh_map()['vendor_dir'], '#') . '/[^/]+/[^/]+/#', (string) $paths[0], $pm) && count(array_filter($paths, function ($p) use ($pm) { return strpos((string) $p, $pm[0]) === 0; })) === count($paths);
     if (!$paths || count($paths) > ($one_pkg ? 100 : 30) || count(array_unique($paths)) !== count($paths)) {
         throw new ShError('bad_request', 'paths は 1〜30 件(1 つの部品なら 100 件)の重ならないファイルにしてください');
     }

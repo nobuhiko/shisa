@@ -114,5 +114,17 @@ check('2 系: 書き換えられた html/index.php を公式のタグ eccube-2.1
 $r = call('apply_official_release', ['ref' => 'eccube-2.17.1', 'paths' => ['data/x.php'], 'expected_sha256' => ['data/x.php' => str_repeat('0', 64)]]);
 check('2 系: 古い版への配布物は断る', err($r) === 'bad_ref', $r['body']);
 
+// 部品のフォルダは data/vendor/
+file_put_contents($shop . '/composer.lock', json_encode(['packages' => [['name' => 'smarty/smarty', 'version' => 'v3.1.40', 'source' => ['type' => 'git', 'url' => 'https://github.com/smarty-php/smarty.git', 'reference' => str_repeat('a', 40)]]]]));
+@mkdir($shop . '/data/vendor/smarty/smarty/libs', 0777, true);
+file_put_contents($shop . '/data/vendor/smarty/smarty/libs/Smarty.class.php', "<?php // tampered\n");
+$r = call('restore_official', ['path' => 'data/vendor/smarty/smarty/libs/Smarty.class.php', 'ref' => 'v2.6.0']);
+check('2 系: 部品は data/vendor/ の下として読み、別のメジャー版のタグは断る', err($r) === 'bad_ref' && strpos($r['body'], 'v3.1.40') !== false, $r['body']);
+$r = call('restore_official', ['path' => 'vendor/smarty/smarty/libs/Smarty.class.php', 'ref' => 'v3.1.48']);
+check('2 系: data/ の外の vendor/ には書かない', isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
+$many = array_map(function ($i) { return 'data/vendor/smarty/smarty/libs/F' . $i . '.php'; }, range(1, 31));
+$r = call('apply_official_fix', ['ref' => 'v3.1.48', 'paths' => $many]);
+check('2 系: 1 つの部品(data/vendor/)なら 31 件でも件数では断らない', err($r) !== 'bad_request', $r['body']);
+
 echo "\n$pass ok, $fail fail\n";
 exit($fail === 0 ? 0 : 1);

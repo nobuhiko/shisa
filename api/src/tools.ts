@@ -291,14 +291,28 @@ const LAB_PATH = { ".htaccess": "self-harden-lab/.htaccess", ".user.ini": "self-
 const PHP_LIKE = /\.(php[0-9]?|phtml|phar|inc)$/i;
 
 // 店の公開の場所(本体の一番上からの相対)。4 系は ""、3 系・2 系は "html"。窓口が自分の居場所から決めたものを聞く
-const pubCache = new Map<string, string>();
-async function pubDir(shop: Shop): Promise<string> {
-  const hit = pubCache.get(shop.shop_id);
-  if (hit !== undefined) return hit;
+const layoutCache = new Map<string, { pub: string; map: string }>();
+async function layoutOf(shop: Shop): Promise<{ pub: string; map: string }> {
+  const hit = layoutCache.get(shop.shop_id);
+  if (hit) return hit;
   const r = await callReceiver(shop, "inspect", { sections: ["paths"] });
-  const p = r.ok && typeof r.result.paths?.public === "string" ? r.result.paths.public : "";
-  if (r.ok) pubCache.set(shop.shop_id, p);
-  return p;
+  const l = { pub: r.ok && typeof r.result.paths?.public === "string" ? r.result.paths.public : "", map: (r.ok && r.result.paths?.map) || "eccube4" };
+  if (r.ok) layoutCache.set(shop.shop_id, l);
+  return l;
+}
+async function pubDir(shop: Shop): Promise<string> {
+  return (await layoutOf(shop)).pub;
+}
+// 部品のフォルダ(2 系は data/vendor)
+async function vendorDir(shop: Shop): Promise<string> {
+  return (await layoutOf(shop)).map === "eccube2" ? "data/vendor" : "vendor";
+}
+// 書いたあとに開いて確かめるページ(版の系統ごと)
+async function verifyPathsFor(shop: Shop, extra: unknown): Promise<string[]> {
+  const receiverPath = new URL(shop.receiver_url).pathname;
+  const ex = Array.isArray(extra) ? extra.filter((p): p is string => typeof p === "string" && p.startsWith("/")).slice(0, 2) : [];
+  const pages = (await layoutOf(shop)).map === "eccube2" ? ["/", "/products/list.php", "/cart/"] : ["/", "/products/list", "/cart"];
+  return [...pages, receiverPath, ...ex].slice(0, 6);
 }
 const underPub = (pub: string, rel: string) => (pub === "" ? rel : `${pub}/${rel}`);
 
@@ -378,11 +392,6 @@ async function shopHashes(shop: Shop): Promise<Record<string, string>> {
   throw new Error("ファイルが多すぎて一覧を取り切れませんでした");
 }
 
-function verifyPaths(shop: Shop, extra: unknown): string[] {
-  const receiverPath = new URL(shop.receiver_url).pathname;
-  const ex = Array.isArray(extra) ? extra.filter((p): p is string => typeof p === "string" && p.startsWith("/")).slice(0, 2) : [];
-  return ["/", "/products/list", "/cart", receiverPath, ...ex].slice(0, 6);
-}
 
 const j = (v: unknown) => JSON.stringify(v);
 
@@ -411,7 +420,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     }
     case "check_packages": {
       try {
-        return { content: j(await checkPackages(shop, ctx ? await ctx.store.getApplied(shop.shop_id) : [])), title: "部品の弱点を Packagist で照らし合わせる" };
+        return { content: j(await checkPackages(shop, ctx ? await ctx.store.getApplied(shop.shop_id) : [], await vendorDir(shop))), title: "部品の弱点を Packagist で照らし合わせる" };
       } catch (e) {
         return { content: j({ error: (e as Error).message }), isError: true, title: "部品の弱点を Packagist で照らし合わせる" };
       }
@@ -490,7 +499,12 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     }
     case "diff_with_official": {
       try {
-        const version = await installedVersion(shop);
+        const installed = await installedVersion(shop);
+        // 公式の修正で版が変わった店は、元の版の配布物と比べる(照らし合わせと同じ基準)
+        const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
+        const lastRelease = applied.filter((a) => a.via === "release").sort((a, b) => b.at - a.at)[0];
+        const fixBase = applied.filter((a) => a.via === "fix" && a.from_version && (!lastRelease || a.at > lastRelease.at)).sort((a, b) => a.at - b.at)[0]?.from_version;
+        const version = fixBase && fixBase !== installed && !applied.some((a) => a.path === input.path && a.via === "fix") ? fixBase : installed;
         const r = await callReceiver(shop, "read_file", { path: input.path });
         if (!r.ok) return { content: j(r), isError: true, title: `公式との違いを見る: ${input.path}` };
         const off = await officialContent(version, input.path);
@@ -503,7 +517,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       }
     }
     case "restore_official": {
-      const args: Record<string, unknown> = { path: input.path, ref: input.ref, verify: { paths: verifyPaths(shop, input.extra_verify_paths), timeout_sec: 8 } };
+      const args: Record<string, unknown> = { path: input.path, ref: input.ref, verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 } };
       try {
         // 入っている版と同じタグに戻すときは、公式リリースの SHA-256 と一致することも受け口に確かめさせる
         const version = await installedVersion(shop);
@@ -528,15 +542,16 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     case "apply_official_fix": {
       const paths: string[] = Array.isArray(input.paths) ? input.paths.map(String) : [];
       // 部品の修正も、その部品の公式リポジトリの差分で「全部のファイル」がそろっているかを確かめてから当てる
-      const vpkg = (/^vendor\/([^/]+\/[^/]+)\//.exec(paths[0] ?? "") ?? [])[1];
+      const vd = await vendorDir(shop);
+      const vpkg = (new RegExp(`^${vd.replace("/", "\\/")}\\/([^/]+\\/[^/]+)\\/`).exec(paths[0] ?? "") ?? [])[1];
       if (vpkg) {
         try {
-          if (!paths.every((p) => p.startsWith(`vendor/${vpkg}/`))) return { content: j({ ok: false, error: "mixed_packages", detail: "Apply one package per call." }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          if (!paths.every((p) => p.startsWith(`${vd}/${vpkg}/`))) return { content: j({ ok: false, error: "mixed_packages", detail: "Apply one package per call." }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           const ins = await callReceiver(shop, "inspect", { sections: ["app"] });
           const pkg = ((ins.ok ? ins.result.app?.packages : []) as any[]).find((p) => p.name === vpkg);
           if (!pkg) return { content: j({ ok: false, error: "unknown_package", detail: `${vpkg} is not in composer.lock` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           const mine = new Set(Object.keys(await shopHashes(shop)));
-          const scope = await vendorFixScope(pkg, String(input.ref), mine);
+          const scope = await vendorFixScope(pkg, String(input.ref), mine, vd);
           const missing = scope.files.filter((f) => !paths.includes(f));
           if (scope.files.length > 100) return { content: j({ ok: false, error: "too_many_files", detail: `This update changes ${scope.files.length} files of ${vpkg}; too many for one unit. Report it.`, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           if (missing.length) return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change of this package includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
@@ -545,7 +560,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         }
       }
       // EC-CUBE 本体の修正は、公式のデータで「全部のファイル」がそろっているかを確かめてから当てる(半端に置かない)
-      if (!paths.some((p) => p.startsWith("vendor/"))) {
+      if (!vpkg) {
         try {
           const scope = await officialFixScope(await installedVersion(shop), String(input.ref));
           const missing = scope.files.filter((f) => !paths.includes(f));
@@ -577,7 +592,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       const r = await callReceiver(shop, "apply_official_fix", {
         ref: input.ref,
         paths: input.paths,
-        verify: { paths: verifyPaths(shop, input.extra_verify_paths), timeout_sec: 8 },
+        verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 },
       }, vpkg ? 100_000 : 28_000);
       if (r.ok && !r.result.rolled_back && ctx) {
         await ctx.store.addApplied(
@@ -623,7 +638,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         for (const p of todo) expected[p] = to.files[p];
         const r = await callReceiver(shop, "apply_official_release", {
           ref, paths: todo, expected_sha256: expected,
-          verify: { paths: verifyPaths(shop, input.extra_verify_paths ?? ["/admin/login"]), timeout_sec: 8 },
+          verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths ?? ["/admin/login"]), timeout_sec: 8 },
         }, 170_000);
         if (r.ok && !r.result.rolled_back && ctx) {
           await ctx.store.addApplied(shop.shop_id, (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: installed, via: "release" as const })));
@@ -638,7 +653,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       }
     }
     case "quarantine": {
-      const r = await callReceiver(shop, "quarantine", { path: input.path, verify: { paths: verifyPaths(shop, null), timeout_sec: 8 } });
+      const r = await callReceiver(shop, "quarantine", { path: input.path, verify: { paths: await verifyPathsFor(shop, null), timeout_sec: 8 } });
       return { content: j(r), isError: !r.ok, title: `隔離する: ${input.path}` };
     }
     case "release_quarantine": {
@@ -646,7 +661,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       return { content: j(r), isError: !r.ok, title: `隔離から戻す: ${input.quarantine_id}` };
     }
     case "clear_cache": {
-      const r = await callReceiver(shop, "clear_cache", { verify: { paths: verifyPaths(shop, ["/admin/login"]), timeout_sec: 8 } });
+      const r = await callReceiver(shop, "clear_cache", { verify: { paths: await verifyPathsFor(shop, ["/admin/login"]), timeout_sec: 8 } });
       return { content: j(r), isError: !r.ok, title: "キャッシュを消す" };
     }
     case "list_quarantine": {

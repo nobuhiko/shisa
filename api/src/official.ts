@@ -179,7 +179,7 @@ export async function officialFixScope(installed: string, ref: string): Promise<
 export interface VendorScope { files: string[]; source: string }
 const TEST_LIKE = /(^|\/)(tests?|Tests?|docs?|\.github|\.git[a-z]*)(\/|$)|^\./;
 
-export async function vendorFixScope(pkg: { name: string; source: string | null; reference: string | null }, toTag: string, shopFiles: Set<string>): Promise<VendorScope> {
+export async function vendorFixScope(pkg: { name: string; source: string | null; reference: string | null }, toTag: string, shopFiles: Set<string>, vendorDir = "vendor"): Promise<VendorScope> {
   const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(\.git)?$/.exec(pkg.source ?? "");
   if (!m || !pkg.reference || !/^[0-9a-f]{40}$/.test(pkg.reference)) throw new Error(`composer.lock に GitHub の公式の置き場が書かれていない部品です: ${pkg.name}`);
   if (!/^v?[0-9]+\.[0-9]+\.[0-9]+$/.test(toTag)) throw new Error(`部品の版の形が正しくありません: ${toTag}`);
@@ -187,7 +187,7 @@ export async function vendorFixScope(pkg: { name: string; source: string | null;
   const res = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "self-harden" }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`部品の修正の範囲を取れませんでした: HTTP ${res.status}`);
   const data = (await res.json()) as { files?: { filename: string; status: string }[] };
-  const base = `vendor/${pkg.name}/`;
+  const base = `${vendorDir}/${pkg.name}/`;
   // 店に置かれている部品の中身だけ(テストや文書など、配布物から外されるものは除く)。消されたファイルは置かない
   const files = (data.files ?? [])
     .filter((f) => f.status !== "removed")
