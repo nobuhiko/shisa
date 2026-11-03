@@ -20,7 +20,35 @@ const SH_MAX_OFFICIAL = 4194304;
 const SH_AUDIT_MAX = 1048576;
 // 本体のファイルを書くときに中身を取ってきてよい、決まった公式の場所(受け口が自分で組み立てる。API からは URL を渡せない)
 const SH_OFFICIAL_RAW = 'https://raw.githubusercontent.com/';
-const SH_ECCUBE_REPO = 'EC-CUBE/ec-cube';
+// 地図: 仕組み(アプリと版の系統)ごとの違いをここにまとめる。書いてよい場所、版の読み方、公式の置き場、版の形。
+// どの地図を使うかは、窓口が自分の居場所を見て決める。API からは選べない(鍵が漏れても、ゆるい地図を選ばせない)
+const SH_MAPS = [
+    'eccube4' => [
+        'detect' => 'src/Eccube/Kernel.php',
+        'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
+        'version_file' => 'src/Eccube/Common/Constant.php',
+        'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
+        'repo' => 'EC-CUBE/ec-cube',
+        'tag_re' => '/^4\\.[0-9]+\\.[0-9]+(-p[0-9]+)?$/',
+        'line_re' => '/^(4\\.[0-9]+)\\./',
+        'release_asset' => 'eccube-%s.tar.gz',
+    ],
+];
+
+function sh_map()
+{
+    static $m = null;
+    if ($m === null) {
+        foreach (SH_MAPS as $name => $x) {
+            if (is_file(sh_root() . '/' . $x['detect'])) {
+                return $m = ['name' => $name] + $x;
+            }
+        }
+        // 見分けがつかないときは、今ある唯一の地図(4 系)を使う
+        $m = ['name' => 'eccube4'] + SH_MAPS['eccube4'];
+    }
+    return $m;
+}
 
 // 小部屋に置く固定の確認用 PHP。API からは中身を変えられない
 const SH_PROBE = <<<'PROBE'
@@ -557,7 +585,7 @@ function sh_redact_value($v)
 
 function op_ping()
 {
-    return ['receiver_version' => SH_VERSION, 'php_version' => PHP_VERSION, 'time' => time()];
+    return ['receiver_version' => SH_VERSION, 'php_version' => PHP_VERSION, 'time' => time(), 'map' => sh_map()['name']];
 }
 
 function op_inspect(array $args)
@@ -593,11 +621,7 @@ function op_inspect(array $args)
         $r['server'] = $s;
     }
     if (in_array('app', $sections, true)) {
-        $app = ['eccube_version' => null, 'packages' => [], 'env' => null];
-        $c = @file_get_contents(sh_root() . '/src/Eccube/Common/Constant.php');
-        if (is_string($c) && preg_match("/const\s+VERSION\s*=\s*'([^']+)'/", $c, $m)) {
-            $app['eccube_version'] = $m[1];
-        }
+        $app = ['map' => sh_map()['name'], 'eccube_version' => sh_eccube_version(), 'packages' => [], 'env' => null];
         $lock = json_decode((string) @file_get_contents(sh_root() . '/composer.lock'), true);
         if (is_array($lock)) {
             foreach (['packages', 'packages-dev'] as $k) {
@@ -675,7 +699,7 @@ function op_read_file(array $args)
     $named = in_array($base, ['.htaccess', '.user.ini', 'composer.json', 'composer.lock', 'web.config', 'robots.txt'], true);
     $allowed = $is_backup
         || ($named && (!sh_is_protected($relnorm) || in_array($relnorm, ['composer.json', 'composer.lock'], true) || strpos($relnorm, SH_LAB_DIR . '/') === 0))
-        || (in_array($top, ['', 'src', 'app', 'html', 'vendor'], true) && !sh_is_protected($relnorm));
+        || (in_array($top, sh_map()['code_tops'], true) && !sh_is_protected($relnorm));
     if (!$allowed) {
         throw new ShError('not_readable', 'このファイルは読めません');
     }
@@ -771,7 +795,7 @@ function sh_code_path($rel, &$missing_dirs = null)
     $abs = sh_safe_path($rel, false);
     $r = sh_rel($abs);
     $top = strpos($r, '/') === false ? '' : substr($r, 0, strpos($r, '/'));
-    if (!in_array($top, ['', 'src', 'app', 'html', 'vendor'], true) || sh_is_protected($r)) {
+    if (!in_array($top, sh_map()['code_tops'], true) || sh_is_protected($r)) {
         throw new ShError('bad_target', 'そのファイルは受け口からは書けません: ' . $r);
     }
     // 親フォルダは root の中に実在すること(シンボリックリンクはたどらない)。
@@ -807,8 +831,8 @@ function sh_code_path($rel, &$missing_dirs = null)
 
 function sh_eccube_version()
 {
-    $c = @file_get_contents(sh_root() . '/src/Eccube/Common/Constant.php');
-    return is_string($c) && preg_match("/const\s+VERSION\s*=\s*'([^']+)'/", $c, $m) ? $m[1] : null;
+    $c = @file_get_contents(sh_root() . '/' . sh_map()['version_file']);
+    return is_string($c) && preg_match(sh_map()['version_re'], $c, $m) ? $m[1] : null;
 }
 
 // どこから取ってくるかを、受け口が自分で決める。API が渡せるのは「どの版か(ref)」だけ
@@ -850,17 +874,17 @@ function sh_official_url($rel, $ref)
     $installed = sh_eccube_version();
     if ($sha) {
         // コミットの番号なら、その時点の公式の Constant.php を受け口が自分で取り、版が今より古くないかを確かめる
-        $c = sh_fetch_official(SH_OFFICIAL_RAW . SH_ECCUBE_REPO . '/' . $ref . '/src/Eccube/Common/Constant.php');
-        if (!preg_match("/const\s+VERSION\s*=\s*'([^']+)'/", $c, $m) || $installed === null || version_compare($m[1], $installed, '<')) {
+        $c = sh_fetch_official(SH_OFFICIAL_RAW . sh_map()['repo'] . '/' . $ref . '/' . sh_map()['version_file']);
+        if (!preg_match(sh_map()['version_re'], $c, $m) || $installed === null || version_compare($m[1], $installed, '<')) {
             throw new ShError('bad_ref', 'そのコミットの版(' . (isset($m[1]) ? $m[1] : '不明') . ')は今の版(' . $installed . ')より古いので使えません');
         }
     }
     if (!$sha) {
-        if (!preg_match('/^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/', $ref) || $installed === null || version_compare($ref, $installed, '<')) {
+        if (!preg_match(sh_map()['tag_re'], $ref) || $installed === null || version_compare($ref, $installed, '<')) {
             throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号(40 文字の 16 進数。短い形は不可)だけにできます');
         }
     }
-    return SH_OFFICIAL_RAW . SH_ECCUBE_REPO . '/' . $ref . '/' . $rel;
+    return SH_OFFICIAL_RAW . sh_map()['repo'] . '/' . $ref . '/' . $rel;
 }
 
 function sh_fetch_official($url)
@@ -1051,7 +1075,7 @@ const SH_MAX_RELEASE = 104857600;
 
 function sh_release_get($url, $dest)
 {
-    if (strpos($url, 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/') !== 0 || !function_exists('curl_init')) {
+    if (strpos($url, 'https://github.com/' . sh_map()['repo'] . '/releases/download/') !== 0 || !function_exists('curl_init')) {
         throw new ShError('no_official_source', '公式のリリースから取れません');
     }
     $fp = $dest !== null ? @fopen($dest, 'wb') : null;
@@ -1099,7 +1123,7 @@ function sh_release_tarball($ref)
     if (!is_dir($dir) && !@mkdir($dir, 0700)) {
         throw new ShError('io', '配布物の置き場を作れませんでした');
     }
-    $base = 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/' . $ref . '/eccube-' . $ref . '.tar.gz';
+    $base = 'https://github.com/' . sh_map()['repo'] . '/releases/download/' . $ref . '/' . sprintf(sh_map()['release_asset'], $ref);
     $path = $dir . '/eccube-' . $ref . '.tar.gz';
     $sum = strtolower(trim(strtok(sh_release_get($base . '.checksum.sha256', null), " \t\r\n")));
     if (!preg_match('/^[0-9a-f]{64}$/', $sum)) {
@@ -1194,8 +1218,8 @@ function op_apply_official_release(array $cfg, array $args)
     $ref = isset($args['ref']) ? $args['ref'] : null;
     $installed = sh_eccube_version();
     // 同じ系列(4.x.y の x.y が同じ)で、今の版より新しいリリースのタグだけ
-    if (!is_string($ref) || !preg_match('/^(4\.[0-9]+)\.([0-9]+)(-p[0-9]+)?$/', $ref, $rm) || $installed === null
-        || !preg_match('/^(4\.[0-9]+)\./', $installed, $im) || $rm[1] !== $im[1] || version_compare($ref, $installed, '<=')) {
+    if (!is_string($ref) || !preg_match(sh_map()['tag_re'], $ref) || !preg_match(sh_map()['line_re'], $ref, $rm) || $installed === null
+        || !preg_match(sh_map()['line_re'], $installed, $im) || $rm[1] !== $im[1] || version_compare($ref, $installed, '<=')) {
         throw new ShError('bad_ref', 'リリースは、今の版(' . $installed . ')と同じ系列の新しいタグだけにできます');
     }
     $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
@@ -1225,7 +1249,7 @@ function op_apply_official_release(array $cfg, array $args)
     $gz = sh_release_tarball($ref);
     $got = sh_tar_pick($gz, $rels);
     $items = [];
-    $url = 'https://github.com/' . SH_ECCUBE_REPO . '/releases/download/' . $ref . '/eccube-' . $ref . '.tar.gz';
+    $url = 'https://github.com/' . sh_map()['repo'] . '/releases/download/' . $ref . '/' . sprintf(sh_map()['release_asset'], $ref);
     foreach ($rels as $r => $p) {
         if (!isset($got[$r])) {
             throw new ShError('official_fetch_failed', '公式の配布物に無いファイルがあるので、何も置いていません: ' . $r);

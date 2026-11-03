@@ -505,6 +505,12 @@ foreach (['var/self-harden/.htaccess', 'var/other/composer.json', 'var/self-hard
 // ---- 受け口に危ない関数が無いこと ----
 echo "受け口のコード\n";
 $src = file_get_contents($receiver);
+// ---- 地図(窓口が自分の居場所を見て決める) ----
+$r = call('ping');
+check('ping は使っている地図の名前を返す', !empty($r['json']['ok']) && $r['json']['result']['map'] === 'eccube4', $r['body']);
+$r = call('inspect', ['sections' => ['app'], 'map' => 'loose']);
+check('地図は API から選べない(渡しても無視する)', !empty($r['json']['ok']) && $r['json']['result']['app']['map'] === 'eccube4', $r['body']);
+
 // ---- 部品の修正は 1 つの部品なら 100 件まで ----
 $many = array_map(function ($i) { return 'vendor/acme/pkg/src/F' . $i . '.php'; }, range(1, 31));
 $r = call('apply_official_fix', ['ref' => 'v1.0.1', 'paths' => $many]);
