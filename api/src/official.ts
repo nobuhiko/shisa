@@ -8,12 +8,16 @@ import { createHash } from "node:crypto";
 
 const RELEASE_BASE = "https://github.com/EC-CUBE/ec-cube/releases/download/";
 const VERSION_RE = /^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
+// 3 系(3.0.x)は GitHub のリリースに配布物が添付されていない。公式リポジトリのタグのソース一式を正本にする(vendor/ は含まれない)
+const V3_RE = /^3\.0\.[0-9]+(-p[0-9]+)?$/;
+const V3_ARCHIVE = "https://github.com/EC-CUBE/ec-cube/archive/refs/tags/";
 
 export interface Manifest {
   version: string;
   source: string;
   tarball_sha256: string;
   files: Record<string, string>; // path -> sha256
+  source_only?: boolean; // タグのソース一式から作った一覧(vendor/ を含まない。3 系)
 }
 
 const dir = () => join(process.env.SH_DATA_DIR ?? "./data", "official");
@@ -26,6 +30,20 @@ async function download(url: string): Promise<Buffer> {
 }
 
 async function tarball(version: string): Promise<{ buf: Buffer; sha: string; source: string }> {
+  if (V3_RE.test(version)) {
+    await mkdir(dir(), { recursive: true });
+    const path = join(dir(), `eccube-src-${version}.tar.gz`);
+    const source = `${V3_ARCHIVE}${version}.tar.gz`;
+    let buf: Buffer;
+    try {
+      buf = await readFile(path);
+    } catch {
+      // タグのソース一式にはチェックサムが無い。取るのは公式リポジトリ(https の github.com)だけ
+      buf = await download(source);
+      await writeFile(path, buf);
+    }
+    return { buf, sha: createHash("sha256").update(buf).digest("hex"), source };
+  }
   if (!VERSION_RE.test(version)) throw new Error(`版の形が正しくありません: ${version}`);
   await mkdir(dir(), { recursive: true });
   const path = join(dir(), `eccube-${version}.tar.gz`);
@@ -84,7 +102,7 @@ export async function manifest(version: string): Promise<Manifest> {
   const { buf, sha, source } = await tarball(version);
   const files: Record<string, string> = {};
   for (const e of entries(gunzipSync(buf))) files[e.path] = createHash("sha256").update(e.data).digest("hex");
-  const m: Manifest = { version, source, tarball_sha256: sha, files };
+  const m: Manifest = { version, source, tarball_sha256: sha, files, ...(V3_RE.test(version) ? { source_only: true } : {}) };
   await writeFile(cache, JSON.stringify(m));
   return m;
 }

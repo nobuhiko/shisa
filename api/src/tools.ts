@@ -442,7 +442,10 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const added: string[] = [];
         const intended: unknown[] = [];
         let addedOther = 0;
+        // タグのソースから作った一覧(3 系)には vendor/ が無い。部品は check_packages で見る
+        let vendorNotCompared = 0;
         for (const [p, sha] of Object.entries(mine)) {
+          if (m.source_only && p.startsWith("vendor/")) { vendorNotCompared++; continue; }
           const fx = intendedBy.get(p);
           if (fx && fx.sha256 === sha) {
             intended.push({ path: p, ref: fx.ref, reason: fx.reason, applied_at: new Date(fx.at).toISOString() });
@@ -459,6 +462,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         return {
           content: j({
             official: { version, compared_with: baseVersion, note: baseVersion !== version ? `The shop was moved to ${version} by official fixes applied by self-harden; compared with the ${baseVersion} release plus those fixes.` : undefined, source: m.source, tarball_sha256: m.tarball_sha256, files: Object.keys(m.files).length },
+            vendor_not_compared: m.source_only ? { count: vendorNotCompared, note: "the official source for this version has no vendor/; check Composer packages with check_packages" } : undefined,
             left_from_previous_release: leftover.length ? { count: leftover.length, from: lastRelease?.from_version, note: "unchanged files of the previous official release that the update did not remove; not traces of intrusion", by_top: byTop(leftover) } : undefined,
             shop_files: Object.keys(mine).length,
             intended: { count: intended.length, note: "official fixes applied by self-harden, still as written", items: intended },
