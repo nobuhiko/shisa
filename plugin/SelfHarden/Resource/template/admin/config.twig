@@ -171,7 +171,7 @@
       var tr = el('tr');
       tr.appendChild(el('td', 'item', it[1]));
       tr.appendChild(el('td', 'j ' + worst[2], animate ? '要確認' : worst[1]));
-      var td = el('td', null, main ? main.title : '見つかったものはありません');
+      var td = el('td', null, main ? maskOf(main.title) : '見つかったものはありません');
       if (xs.length > 1) td.appendChild(el('span', 'text-muted small ml-2', '(ほか ' + (xs.length - 1) + ' 件)'));
       if (animate) td.style.visibility = 'hidden';
       tr.appendChild(td); body.appendChild(tr);
@@ -224,6 +224,13 @@
     t = String(t).replace(/https?:\/\/[^\s)」]+/g, function (u) { try { return maskHosts.indexOf(new URL(u).host) >= 0 ? '(お知らせの URL)' : u; } catch (e) { return u; } });
     maskHosts.forEach(function (h) { var b = h.replace(/^www\./, '').split('.')[0]; if (b) t = t.replace(new RegExp(b, 'ig'), '(サーバー会社)'); });
     return t;
+  }
+  // 撮影のとき、描いた欄の中の文字をまとめて隠す(報告の欄など)
+  function maskTree(root) {
+    if (!root || !document.body.classList.contains('sh-film')) return;
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), n;
+    while ((n = w.nextNode())) n.nodeValue = maskOf(n.nodeValue);
+    root.querySelectorAll('a[href]').forEach(function (a) { if (maskOf(a.href) !== a.href) a.removeAttribute('href'); });
   }
   function stepEl(s) {
     var li = el('li', 'k-' + s.kind);
@@ -318,7 +325,7 @@
             // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
             var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
             var finish = function () {
-              renderReport(r); badge.textContent = '実際の動作(記録の早送り)・終わり';
+              renderReport(r); maskTree(reportEl); badge.textContent = '実際の動作(記録の早送り)・終わり';
               if (r.findings && r.findings.some(function (x) { return x.category; })) {
                 showBand('お店の健康診断: 項目ごとに、効く手を打った', 'good');
                 // 撮影のときは、健康診断の表だけを大きく出す

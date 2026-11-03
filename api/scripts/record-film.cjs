@@ -39,7 +39,7 @@ const { writeFileSync } = require("node:fs");
   const h = page.locator("#sh-health-card");
   if (await h.count()) await h.scrollIntoViewIfNeeded();
   marks.end = sec(Date.now());
-  await page.waitForTimeout(9000);
+  await page.waitForTimeout(14000);
   const stops = await page.evaluate(() => window.__shStops || []);
   marks.stops = stops.map((s) => ({ at: sec(s.t), text: s.text }));
   marks.total = sec(Date.now());

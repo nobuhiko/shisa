@@ -43,7 +43,8 @@ const webm = join(fdir, readdirSync(fdir).find((f) => f.endsWith(".webm")));
 // 3. 承・転: 録画の「貼る前」から「健康診断の表 + 結の 1 行目」まで。止めどころに行を置く
 const S = Math.max(0, marks.ready - 0.4);
 const k0 = clip.ketsu0.d;
-const E = marks.end + k0 + 0.8;
+// 健康診断の表は 0.7 秒ずつ行が埋まる(7 行で約 5.5 秒)。埋まりきって少し置くまで流す
+const E = Math.min(marks.total - 0.3, marks.end + Math.max(k0 + 1.0, 12));
 const place = [{ at: marks.paste - S, k: "sho0" }];
 for (const [i, keys] of Object.entries(MAP)) { let t = marks.stops[i].at - S + 0.15; for (const k of keys) { place.push({ at: t, k }); t += clip[k].d; } }
 place.push({ at: marks.end - S + 0.3, k: "ketsu0" });
