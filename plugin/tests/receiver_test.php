@@ -505,6 +505,17 @@ foreach (['var/self-harden/.htaccess', 'var/other/composer.json', 'var/self-hard
 // ---- 受け口に危ない関数が無いこと ----
 echo "受け口のコード\n";
 $src = file_get_contents($receiver);
+// ---- 部品の修正は 1 つの部品なら 100 件まで ----
+$many = array_map(function ($i) { return 'vendor/acme/pkg/src/F' . $i . '.php'; }, range(1, 31));
+$r = call('apply_official_fix', ['ref' => 'v1.0.1', 'paths' => $many]);
+check('部品 1 つなら 31 件でも件数では断らない', err($r) !== 'bad_request', $r['body']);
+$r = call('apply_official_fix', ['ref' => 'v1.0.1', 'paths' => array_map(function ($i) { return 'vendor/acme/pkg/src/F' . $i . '.php'; }, range(1, 101))]);
+check('部品 1 つでも 101 件は断る', err($r) === 'bad_request', $r['body']);
+$r = call('apply_official_fix', ['ref' => 'v1.0.1', 'paths' => array_merge(array_slice($many, 0, 30), ['vendor/other/pkg/src/X.php'])]);
+check('別の部品が混ざれば 30 件まで(31 件は断る)', err($r) === 'bad_request', $r['body']);
+$r = call('apply_official_fix', ['ref' => '4.2.0', 'paths' => array_map(function ($i) { return 'src/Eccube/F' . $i . '.php'; }, range(1, 31))]);
+check('本体は 31 件で断る', err($r) === 'bad_request', $r['body']);
+
 // ---- 公式のリリースの配布物(tar.gz)から当てる ----
 $lock423 = '6a7007a0b4851e5a80516b28e87a0d0420e9081d9d22eb7efa645a6265356668';
 $index423 = 'abcc550e0457cbb738ae79e81e4fcf6564fb430bd15c003075bea3bbee26418f';

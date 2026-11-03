@@ -934,8 +934,13 @@ function op_apply_official_fix(array $cfg, array $args)
 {
     $ref = isset($args['ref']) ? $args['ref'] : null;
     $paths = isset($args['paths']) && is_array($args['paths']) ? array_values($args['paths']) : [];
-    if (!$paths || count($paths) > 30 || count(array_unique($paths)) !== count($paths)) {
-        throw new ShError('bad_request', 'paths は 1〜30 件の重ならないファイルにしてください');
+    // 本体の修正は 30 件まで。部品(vendor/ の 1 つの部品)の修正は 100 件まで
+    $one_pkg = $paths && preg_match('#^vendor/[^/]+/[^/]+/#', (string) $paths[0], $pm) && count(array_filter($paths, function ($p) use ($pm) { return strpos((string) $p, $pm[0]) === 0; })) === count($paths);
+    if (!$paths || count($paths) > ($one_pkg ? 100 : 30) || count(array_unique($paths)) !== count($paths)) {
+        throw new ShError('bad_request', 'paths は 1〜30 件(1 つの部品なら 100 件)の重ならないファイルにしてください');
+    }
+    if ($one_pkg) {
+        @set_time_limit(90);
     }
     $expected = isset($args['expected_sha256']) && is_array($args['expected_sha256']) ? $args['expected_sha256'] : [];
     // 1. 場所を確かめ、全部を取ってくる
@@ -946,7 +951,7 @@ function op_apply_official_fix(array $cfg, array $args)
         $missing = [];
         $r = sh_code_path($p, $missing);
         $url = sh_official_url($r, $ref);
-        if (microtime(true) - $t0 > 14) {
+        if (microtime(true) - $t0 > ($one_pkg ? 40 : 14)) {
             throw new ShError('timeout', '公式から取るのに時間がかかりすぎたので、何も置いていません');
         }
         try {

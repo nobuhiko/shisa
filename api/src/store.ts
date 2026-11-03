@@ -50,6 +50,7 @@ export interface AppliedFix {
   at: number;
   from_version?: string; // 当てる前の版(修正で版が変わったときの照らし合わせの基準)
   via?: "fix" | "release";
+  package_complete?: boolean; // 部品の修正を、公式の差分で全部のファイルをそろえて当てたもの
 }
 
 export interface Store {

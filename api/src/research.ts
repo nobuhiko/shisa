@@ -40,7 +40,7 @@ export function satisfies(version: string, constraint: string): boolean {
 
 // ---- 部品の弱点 ----
 
-export async function checkPackages(shop: Shop, applied: { path: string; ref: string; at: number }[] = []) {
+export async function checkPackages(shop: Shop, applied: { path: string; ref: string; at: number; package_complete?: boolean }[] = []) {
   // composer.lock は大きい(EC-CUBE 4.2 で 256KB を超える)ので、受け口の inspect が抜き出した名前と版を使う
   const r = await callReceiver(shop, "inspect", { sections: ["app"] });
   if (!r.ok) throw new Error("composer.lock の部品の一覧を読めませんでした");
@@ -48,7 +48,7 @@ export async function checkPackages(shop: Shop, applied: { path: string; ref: st
     .filter((p) => p?.name && p?.version)
     .map((p) => {
       // self-harden が部品を公式の修正版に差し替えたもの(全部のファイルをそろえて当てたもの)は、その版で照らし合わせる
-      const fx = applied.filter((a) => a.path.startsWith(`vendor/${p.name}/`) && /^v?[0-9]+\.[0-9]+\.[0-9]+$/.test(a.ref)).sort((a, b) => b.at - a.at)[0];
+      const fx = applied.filter((a) => a.package_complete && a.path.startsWith(`vendor/${p.name}/`) && /^v?[0-9]+\.[0-9]+\.[0-9]+$/.test(a.ref)).sort((a, b) => b.at - a.at)[0];
       return { name: p.name, version: fx ? fx.ref : p.version, locked: p.version, replaced_by_self_harden: !!fx };
     });
   if (!pkgs.length) throw new Error("composer.lock に部品が見つかりませんでした");

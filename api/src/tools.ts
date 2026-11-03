@@ -114,7 +114,7 @@ export const CLIENT_TOOLS: Tool[] = [
     input_schema: obj(
       {
         ref: { type: "string" },
-        paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 30 },
+        paths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 100, description: "Up to 30 files for EC-CUBE itself, up to 100 for one package under vendor/" },
         reason: { type: "string", description: "Which official fix this is (advisory id and source URL)" },
         extra_verify_paths: { type: "array", items: { type: "string" } },
       },
@@ -522,7 +522,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           const mine = new Set(Object.keys(await shopHashes(shop)));
           const scope = await vendorFixScope(pkg, String(input.ref), mine);
           const missing = scope.files.filter((f) => !paths.includes(f));
-          if (scope.files.length > 30) return { content: j({ ok: false, error: "too_many_files", detail: `This update changes ${scope.files.length} files of ${vpkg}; too many for one unit. Report it.`, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+          if (scope.files.length > 100) return { content: j({ ok: false, error: "too_many_files", detail: `This update changes ${scope.files.length} files of ${vpkg}; too many for one unit. Report it.`, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           if (missing.length) return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change of this package includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
         } catch (e) {
           return { content: j({ ok: false, error: "scope_unknown", detail: `Could not confirm the full set of files of this package update: ${(e as Error).message}. Nothing was written.` }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
@@ -562,11 +562,11 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         ref: input.ref,
         paths: input.paths,
         verify: { paths: verifyPaths(shop, input.extra_verify_paths), timeout_sec: 8 },
-      });
+      }, vpkg ? 100_000 : 28_000);
       if (r.ok && !r.result.rolled_back && ctx) {
         await ctx.store.addApplied(
           shop.shop_id,
-          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const })),
+          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const, package_complete: vpkg ? true : undefined })),
         );
       }
       return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
