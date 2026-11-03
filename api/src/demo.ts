@@ -147,7 +147,12 @@ const PAGE = String.raw`<!doctype html>
   .kv-time.in .pub { width: 8vw; background: #475569; transition-delay: .2s; } .kv-time.in .atk { width: 14vw; background: #c62828; transition-delay: 1.2s; }
   .kv-time.in .ask { width: 52vw; background: #64748b; transition: width 5.5s linear; transition-delay: 2.4s; }
   .kv-time .src { position: absolute; left: 8vw; right: 8vw; bottom: 12vh; color: #94a3b8; font-size: 15px; text-align: center; }
-  .kv-late b { font-size: clamp(48px, 11vh, 120px); color: #ef4444; } .kv-ok b { font-size: clamp(48px, 11vh, 120px); color: #fff; }
+  .kv-late b { font-size: clamp(48px, 11vh, 120px); color: #ef4444; position: relative; transition: color .4s, transform .5s; }
+  .kv-late b::after { content: ''; position: absolute; left: -2%; top: 52%; height: .09em; width: 0; background: #fff; transition: width .45s ease-out; }
+  .kv-late.struck b { color: rgba(239,68,68,.35); transform: translateY(-9vh) scale(.8); } .kv-late.struck b::after { width: 104%; }
+  .kv-ok { justify-content: flex-start; padding-top: 10vh; }
+  .kv-store { position: relative; } .kv-roof { position: absolute; left: 50%; bottom: 100%; width: 16vw; transform: translate(-50%, 1vh) scale(.6); opacity: 0; transition: opacity .6s, transform .7s cubic-bezier(.2,1.4,.4,1); }
+  .kv-shop.guarded .kv-roof { opacity: 1; transform: translate(-50%, 0) scale(1); transition-delay: .3s; } .kv-shop.guarded .kv-bubble { opacity: 0; } .kv-shop.guarded { filter: none; transform: none; } .kv-ok b { font-size: clamp(56px, 13vh, 140px); color: #fff; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
   .opening { flex: 1; display: grid; place-items: center; }
   .opening b { font-size: clamp(32px, 6vh, 64px); color: #fff; letter-spacing: .02em; opacity: 0; transition: opacity .8s; } .opening b.in { opacity: 1; }
   body.bare header { visibility: hidden; }
@@ -545,7 +550,7 @@ const PAGE = String.raw`<!doctype html>
       nw.appendChild(el('em', 'kv-img', '※イメージ'));
       // 3. 小さなお店
       var sh = layer('kv-shop');
-      sh.innerHTML = '<div class="kv-bubble">うちのお店は、大丈夫だろうか…</div><div class="kv-store"><div class="awn"></div><div class="body"><span>EC-CUBE</span></div></div><div class="kv-ground">レンタルサーバー</div>';
+      sh.innerHTML = '<div class="kv-bubble">うちのお店は、大丈夫だろうか…</div><div class="kv-store"><img class="kv-roof" alt="" src="/demo/asset/' + encodeURIComponent((st.name || {}).image || 'shisa.svg') + '"><div class="awn"></div><div class="body"><span>EC-CUBE</span></div></div><div class="kv-ground">レンタルサーバー</div>';
       // 4-5. お知らせ
       var nt = layer('kv-notice');
       var card = el('div', 'notice-card'); card.appendChild(el('small', null, notice.label || 'サーバー会社からのお知らせ')); card.appendChild(el('b', null, notice.text || '')); nt.appendChild(card);
@@ -568,7 +573,7 @@ const PAGE = String.raw`<!doctype html>
         function () { nt.classList.add('puzzled'); },
         function () { hide(nt); hide(sh); hide(nw); show(tl); },
         function () { hide(tl); show(late); },
-        function () { hide(late); show(ok); }
+        function () { hide(late); sh.classList.remove('far', 'out'); sh.classList.add('guarded', 'in'); show(ok); }
       ];
       var t0 = performance.now();
       return L.reduce(function (p, line, i) {
