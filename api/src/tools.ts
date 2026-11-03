@@ -227,7 +227,7 @@ export const CLIENT_TOOLS: Tool[] = [
               },
               severity: { type: "string", enum: ["high", "medium", "low", "info"] },
               evidence: { type: "string" },
-              status: { type: "string", enum: ["fixed", "mitigated", "needs_human", "not_affected"] },
+              status: { type: "string", enum: ["fixed", "mitigated", "scheduled", "needs_human", "not_affected"], description: "fixed / mitigated (workaround in place) / scheduled (Shisa itself will handle it in a later inspection; also list it in next_by_self_harden) / needs_human (only when a person must act: no fix the tools can apply, an owner decision, hosting-side work) / not_affected" },
             },
             required: ["title", "category", "severity", "evidence", "status"],
             additionalProperties: false,
