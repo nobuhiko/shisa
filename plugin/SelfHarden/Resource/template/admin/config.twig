@@ -111,10 +111,12 @@
             <input type="hidden" name="{{ constant('Eccube\\Common\\Constant::TOKEN_NAME') }}" value="{{ csrf_token(constant('Eccube\\Common\\Constant::TOKEN_NAME')) }}">
             <div class="form-group row"><label class="col-3 col-form-label">API の URL</label>
               <div class="col"><input name="api_base" class="form-control" value="{{ api_base }}"></div></div>
-            <div class="form-group row"><label class="col-3 col-form-label">API から見た店の URL</label>
+            <details class="mb-3"><summary class="text-muted small">詳しい設定(ふつうは変えなくて大丈夫です)</summary>
+            <div class="form-group row mt-2"><label class="col-3 col-form-label">API から見た店の URL</label>
               <div class="col"><input name="self_base" class="form-control" value="{{ self_base }}"></div></div>
             <div class="form-group row"><label class="col-3 col-form-label">外から見た店の URL</label>
               <div class="col"><input name="public_base" class="form-control" value="{{ public_base }}"></div></div>
+            </details>
             <button type="submit" class="btn btn-ec-regular">{{ connected ? 'つなぎ直す' : 'API とつなぐ' }}</button>
           </form>
         </div>

@@ -34,7 +34,9 @@ services:
     build: { context: ., dockerfile: server-a/Dockerfile }
     image: self-harden/server-a:dev
     hostname: server-a
-    environment: *trusted
+    environment:
+      <<: *trusted
+      SELF_HARDEN_SELF_BASE: http://server-a   # API(docker の中)から店に届く URL
     ports: ["127.0.0.1:8081:80"]
     volumes: ["server-a-docroot:/var/www/html"]
     networks: [self-harden]
@@ -62,6 +64,7 @@ services:
     hostname: server-c
     environment:
       <<: *trusted
+      SELF_HARDEN_SELF_BASE: http://server-c
       PLANT_DEMO: "0"   # 照らし合わせの仕込みは入れない(パッチ版への上げを見るための台)
     ports: ["127.0.0.1:8083:80"]
     volumes: ["server-c-docroot:/var/www/html"]
@@ -73,6 +76,7 @@ services:
     hostname: server-d
     environment:
       <<: *trusted
+      SELF_HARDEN_SELF_BASE: http://server-d
       PLANT_DEMO: "0"
     ports: ["127.0.0.1:8084:80"]
     volumes: ["server-d-docroot:/var/www/html"]

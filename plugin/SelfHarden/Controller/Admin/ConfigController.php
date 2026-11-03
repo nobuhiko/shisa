@@ -36,7 +36,8 @@ class ConfigController extends AbstractController
             'connected' => $c !== null,
             'shop_id' => $c['shop_id'] ?? null,
             'api_base' => $c['api_base'] ?? (getenv('SELF_HARDEN_API') ?: 'http://api:8787'),
-            'self_base' => $c['self_base'] ?? $origin,
+            // API から店に届く URL。ふつうは外から見た URL と同じ。手元の検証環境のように違うときだけ、サーバー側で SELF_HARDEN_SELF_BASE を決める
+            'self_base' => $c['self_base'] ?? (getenv('SELF_HARDEN_SELF_BASE') ?: $origin),
             'public_base' => $c['public_base'] ?? $origin,
             'runs' => $c ? ($this->api->listRuns()['runs'] ?? []) : [],
         ];
