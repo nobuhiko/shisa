@@ -97,7 +97,12 @@ $r = call('write_file', ['target' => 'root/.htaccess', 'content' => "Options -In
 check('2 系: root/.htaccess は公開の場所(html/.htaccess)に書く', !empty($r['json']['ok']) && is_file($pub . '/.htaccess') && !is_file($shop . '/.htaccess'), $r['body']);
 $r = call('lab_arm');
 check('2 系: 小部屋は公開の場所の中に作る', !empty($r['json']['ok']) && is_dir($pub . '/self-harden-lab'), $r['body']);
-$r = call('clear_cache', ['verify' => ['paths' => ['/']]]);
+
+$tok = isset($r['json']['result']['token']) ? $r['json']['result']['token'] : '';
+$pr = @file_get_contents($base . '/self-harden-lab/probe.php?t=' . $tok);
+check('2 系: 小部屋の確認ページが、地図の置き場の合言葉で開く', is_string($pr) && strpos($pr, 'memory_limit') !== false, (string) $pr);
+$pr = @file_get_contents($base . '/self-harden-lab/probe.php?t=wrong');
+check('2 系: 合言葉が違えば開かない', $pr === false);$r = call('clear_cache', ['verify' => ['paths' => ['/']]]);
 check('2 系: キャッシュを消す操作は断る', err($r) === 'no_cache', $r['body']);
 $r = call('restore_official', ['path' => 'html/index.php', 'ref' => '2.17.2']);
 check('2 系: eccube- の付かないタグは断る', err($r) === 'bad_ref', $r['body']);

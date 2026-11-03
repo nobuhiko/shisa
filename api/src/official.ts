@@ -10,7 +10,8 @@ const RELEASE_BASE = "https://github.com/EC-CUBE/ec-cube/releases/download/";
 const VERSION_RE = /^4\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
 // 3 系(3.0.x)は GitHub のリリースに配布物が添付されていない。公式リポジトリのタグのソース一式を正本にする(vendor/ は含まれない)
 const V3_RE = /^3\.0\.[0-9]+(-p[0-9]+)?$/;
-const V3_ARCHIVE = "https://github.com/EC-CUBE/ec-cube/archive/refs/tags/";
+// 3 系の修正版(3.0.18-p1〜)は EC-CUBE/ec-cube3 にある。3.0.18 などのもとのタグもここにある
+const V3_ARCHIVE = "https://github.com/EC-CUBE/ec-cube3/archive/refs/tags/";
 // 2 系(2.x)は EC-CUBE/ec-cube2 のリリース。タグは eccube-<版>。配布物に data/vendor/ は入っていない
 const V2_RE = /^(eccube-)?2\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
 const V2_RELEASE = "https://github.com/EC-CUBE/ec-cube2/releases/download/";
@@ -157,17 +158,19 @@ function inShopCode(p: string) {
 export async function officialFixScope(installed: string, ref: string): Promise<FixScope> {
   let url: string;
   const v2 = V2_RE.test(installed);
-  const api = v2 ? "https://api.github.com/repos/EC-CUBE/ec-cube2" : GH_API;
+  const v3 = V3_RE.test(installed);
+  const api = v2 ? "https://api.github.com/repos/EC-CUBE/ec-cube2" : v3 ? "https://api.github.com/repos/EC-CUBE/ec-cube3" : GH_API;
   if (SHA_RE.test(ref)) url = `${api}/commits/${ref}`;
   else if (TAG_RE.test(ref) && TAG_RE.test(installed)) url = `${GH_API}/compare/${installed}...${ref}`;
   else if (v2 && V2_RE.test(ref)) url = `${api}/compare/${v2tag(installed)}...${v2tag(ref)}`;
+  else if (v3 && V3_RE.test(ref)) url = `${api}/compare/${installed}...${ref}`;
   else throw new Error(`公式の修正の範囲を出せない版の指定です: ${ref}`);
   const res = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "self-harden" }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`公式の修正の範囲を取れませんでした: HTTP ${res.status}`);
   const data = (await res.json()) as { files?: { filename: string; status: string }[] };
   const all = (data.files ?? []).map((f) => f.filename);
   const blockers = all.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p) || p === "composer.lock" || p === "composer.json" || (v2 && /^html\/install\/sql\//.test(p)));
-  const inCode = v2 ? (p: string) => /^(data|html)\//.test(p) && !/^data\/vendor\//.test(p) && !/^html\/install\//.test(p) : inShopCode;
+  const inCode = v3 ? (p: string) => /^(src|app|html)\//.test(p) && !/^app\/config\//.test(p) : v2 ? (p: string) => /^(data|html)\//.test(p) && !/^data\/vendor\//.test(p) && !/^html\/install\//.test(p) : inShopCode;
   const files = all.filter((p) => inCode(p) && !blockers.includes(p) && (data.files ?? []).find((f) => f.filename === p)?.status !== "removed");
   return { files, blockers, source: url.replace("https://api.github.com/repos/", "https://github.com/") };
 }

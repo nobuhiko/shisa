@@ -10,7 +10,7 @@ services:
     hostname: server-h
     depends_on: [server-h-db]
     environment:
-      SELF_HARDEN_SELF_BASE: http://server-h   # 2.17 系。API(docker の中)から店に届く URL
+      SELF_HARDEN_SELF_BASE: http://127.0.0.1:8088   # 2.17 系は設定に書いた URL 以外で開くとエラーになるので、API の中にも同じ URL の中継を置いている(api/docker-compose.yml の demo-h-loop)
       ECCUBE_DB_HOST: server-h-db
       ECCUBE_HTTP_URL: http://127.0.0.1:8088/
     ports: ["127.0.0.1:8088:80"]

@@ -12,6 +12,14 @@ services:
     ports: ["127.0.0.1:8787:8787"]
     volumes: ["./data:/data"]
     networks: [self-harden]
+  # 手元のデモだけ: EC-CUBE 2 系の店(server-h)は、設定に書いた URL(http://127.0.0.1:8088)以外の名前で開くとエラーにする。
+  # API の中からも同じ URL で届くように、API と同じネットワークの場所で 127.0.0.1:8088 を server-h:80 へ中継する。公開するときは外す
+  demo-h-loop:
+    image: alpine:3.20
+    network_mode: "service:api"
+    depends_on: [api]
+    command: sh -c "apk add --no-cache socat >/dev/null && exec socat TCP-LISTEN:8088,fork,reuseaddr TCP:server-h:80"
+    restart: unless-stopped
 networks:
   self-harden:
     name: self-harden

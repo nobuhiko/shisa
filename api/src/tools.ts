@@ -290,9 +290,21 @@ export interface ToolOutcome {
 const LAB_PATH = { ".htaccess": "self-harden-lab/.htaccess", ".user.ini": "self-harden-lab/.user.ini" } as const;
 const PHP_LIKE = /\.(php[0-9]?|phtml|phar|inc)$/i;
 
-function targetToPath(target: string): string | null {
-  if (target === "root/.htaccess") return ".htaccess";
-  if (target === "root/.user.ini") return ".user.ini";
+// 店の公開の場所(本体の一番上からの相対)。4 系は ""、3 系・2 系は "html"。窓口が自分の居場所から決めたものを聞く
+const pubCache = new Map<string, string>();
+async function pubDir(shop: Shop): Promise<string> {
+  const hit = pubCache.get(shop.shop_id);
+  if (hit !== undefined) return hit;
+  const r = await callReceiver(shop, "inspect", { sections: ["paths"] });
+  const p = r.ok && typeof r.result.paths?.public === "string" ? r.result.paths.public : "";
+  if (r.ok) pubCache.set(shop.shop_id, p);
+  return p;
+}
+const underPub = (pub: string, rel: string) => (pub === "" ? rel : `${pub}/${rel}`);
+
+async function targetToPath(shop: Shop, target: string): Promise<string | null> {
+  if (target === "root/.htaccess") return underPub(await pubDir(shop), ".htaccess");
+  if (target === "root/.user.ini") return underPub(await pubDir(shop), ".user.ini");
   if (target.startsWith("dir:")) return target.slice(4);
   return null;
 }
@@ -646,7 +658,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       if (!(file in LAB_PATH)) return { content: j({ error: "file must be .htaccess or .user.ini" }), isError: true, title: "小部屋で試す" };
       const arm = await callReceiver(shop, "lab_arm", {}); // 小部屋が無ければ作る
       if (!arm.ok) return { content: j(arm), isError: true, title: "小部屋で試す" };
-      const cur = await currentFile(shop, LAB_PATH[file]);
+      const cur = await currentFile(shop, underPub(await pubDir(shop), LAB_PATH[file]));
       const w = await callReceiver(shop, "write_file", { target: `lab/${file}`, content: input.content, expected_sha256: cur.sha });
       if (!w.ok) return { content: j({ write: w }), isError: true, title: `小部屋で試す: ${file}` };
       const p = await probe(shop, input.ini_keys);
@@ -656,7 +668,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       return { content: j(await probe(shop, input?.ini_keys)), title: "小部屋をもう一度確かめる" };
     }
     case "write_file": {
-      const path = targetToPath(String(input.target));
+      const path = await targetToPath(shop, String(input.target));
       if (!path) return { content: j({ error: "target must be root/.htaccess, root/.user.ini or dir:<dir>/.htaccess" }), isError: true, title: "本番に入れる" };
       const cur = await currentFile(shop, path);
       const d = lineDiff(cur.content, String(input.content ?? ""));

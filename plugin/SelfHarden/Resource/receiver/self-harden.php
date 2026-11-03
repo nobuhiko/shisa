@@ -40,10 +40,11 @@ const SH_MAPS = [
         'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
         'var_dir' => 'app/self-harden',
         'cache' => ['base' => 'app/cache', 'dirs' => ['twig', 'doctrine', 'eccube', 'plugin', 'translator', 'prod']],
-        'secrets' => ['app/config/eccube/config.yml', 'app/config/eccube/database.yml', 'app/config/eccube/mail.yml', 'app/config/eccube/path.yml'],
+        'secrets' => ['app/config/eccube/config.yml', 'app/config/eccube/database.yml', 'app/config/eccube/mail.yml'],
         'version_file' => 'src/Eccube/Common/Constant.php',
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
-        'repo' => 'EC-CUBE/ec-cube',
+        // 3 系の修正版(3.0.18-p1〜)は EC-CUBE/ec-cube3 のタグにある
+        'repo' => 'EC-CUBE/ec-cube3',
         'tag_re' => '/^3\\.0\\.[0-9]+(-p[0-9]+)?$/',
         'line_re' => '/^(3\\.0)\\./',
         'release_asset' => null,
@@ -363,8 +364,10 @@ function sh_ensure_lab()
     if (is_link($probe)) {
         @unlink($probe);
     }
-    if (@file_get_contents($probe) !== SH_PROBE) {
-        sh_atomic_write($probe, SH_PROBE);
+    // 確認ページは合言葉を地図の置き場から読む(3 系・2 系は公開の場所の外)
+    $code = str_replace("dirname(__DIR__) . '/var/self-harden/lab-token'", var_export(sh_var('lab-token'), true), SH_PROBE);
+    if (@file_get_contents($probe) !== $code) {
+        sh_atomic_write($probe, $code);
     }
     return $dir;
 }

@@ -105,6 +105,11 @@ check('3 系: 公開の場所の .htaccess を dir: では書かせない', err(
 $r = call('lab_arm');
 check('3 系: 小部屋は公開の場所の中に作る', !empty($r['json']['ok']) && is_dir($pub . '/self-harden-lab') && $r['json']['result']['probe_path'] === '/self-harden-lab/probe.php', $r['body']);
 
+$tok = isset($r['json']['result']['token']) ? $r['json']['result']['token'] : '';
+$pr = @file_get_contents($base . '/self-harden-lab/probe.php?t=' . $tok);
+check('3 系: 小部屋の確認ページが、地図の置き場の合言葉で開く', is_string($pr) && strpos($pr, 'memory_limit') !== false, (string) $pr);
+$pr = @file_get_contents($base . '/self-harden-lab/probe.php?t=wrong');
+check('3 系: 合言葉が違えば開かない', $pr === false);
 $r = call('clear_cache', ['verify' => ['paths' => ['/']]]);
 check('3 系: キャッシュは app/cache の下を消す', !empty($r['json']['ok']) && !is_dir($shop . '/app/cache/twig'), $r['body']);
 
