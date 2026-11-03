@@ -4,7 +4,7 @@
 namespace Plugin\SelfHarden3\Service;
 
 /**
- * 店 → API の呼び出し。鍵は <公開ディレクトリ>/var/self-harden/config.php(受け口が自分の隣に読むものと同じ)。署名の形は docs/api.md。
+ * 店 → API の呼び出し。鍵は <本体の一番上>/app/self-harden/config.php(受け口の 3 系の地図が読む場所と同じ。公開ディレクトリの外)。署名の形は docs/api.md。
  * 中身は 4 系の plugin/SelfHarden/Service/ApiClient.php と同じ。違うのは、置き場所を EccubeConfig ではなく引数でもらうことと、platform の値だけ
  */
 class ApiClient
@@ -22,7 +22,7 @@ class ApiClient
 
     private function configPath()
     {
-        return $this->root.'/'.Installer::VAR_DIR.'/config.php';
+        return Installer::projectRoot($this->root).'/'.Installer::VAR_DIR.'/config.php';
     }
 
     public function config()

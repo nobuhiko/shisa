@@ -11,7 +11,8 @@ namespace Plugin\SelfHarden3\Service;
 class Installer
 {
     const RECEIVER = 'self-harden.php';
-    const VAR_DIR = 'var/self-harden';
+    // 鍵と退避の置き場。受け口の 3 系の地図と同じく、本体の一番上の app/self-harden(公開ディレクトリの外)
+    const VAR_DIR = 'app/self-harden';
     const LAB_DIR = 'self-harden-lab';
 
     /**
@@ -26,6 +27,19 @@ class Installer
         }
 
         return $root.'/html';
+    }
+
+    /**
+     * 本体の一番上。受け口と同じ見分け方: 公開ディレクトリが html/ で、その上に 3 系の目印があれば上の階
+     */
+    public static function projectRoot($pub)
+    {
+        $up = dirname($pub);
+        if (basename($pub) === 'html' && is_file($up.'/src/Eccube/Application.php')) {
+            return $up;
+        }
+
+        return $pub;
     }
 
     public static function place($root)
@@ -44,7 +58,7 @@ class Installer
             throw new \RuntimeException('受け口を置けませんでした');
         }
         @chmod($dst, 0644);
-        $var = $root.'/'.self::VAR_DIR;
+        $var = self::projectRoot($root).'/'.self::VAR_DIR;
         foreach (array('', '/backups', '/nonces') as $sub) {
             if (!is_dir($var.$sub)) {
                 @mkdir($var.$sub, 0700, true);
@@ -61,15 +75,16 @@ class Installer
     public static function remove($root)
     {
         @unlink($root.'/'.self::RECEIVER);
-        @unlink($root.'/'.self::VAR_DIR.'/config.php');
-        @unlink($root.'/'.self::VAR_DIR.'/lab-token');
+        $var = self::projectRoot($root).'/'.self::VAR_DIR;
+        @unlink($var.'/config.php');
+        @unlink($var.'/lab-token');
         foreach (array('probe.php', '.htaccess', '.user.ini') as $f) {
             @unlink($root.'/'.self::LAB_DIR.'/'.$f);
         }
         @rmdir($root.'/'.self::LAB_DIR);
-        foreach ((array) @scandir($root.'/'.self::VAR_DIR.'/nonces') as $f) {
+        foreach ((array) @scandir($var.'/nonces') as $f) {
             if ($f !== '.' && $f !== '..') {
-                @unlink($root.'/'.self::VAR_DIR.'/nonces/'.$f);
+                @unlink($var.'/nonces/'.$f);
             }
         }
     }

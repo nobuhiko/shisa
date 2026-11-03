@@ -24,8 +24,10 @@ const SH_OFFICIAL_RAW = 'https://raw.githubusercontent.com/';
 // どの地図を使うかは、窓口が自分の居場所を見て決める。API からは選べない(鍵が漏れても、ゆるい地図を選ばせない)
 const SH_MAPS = [
     'eccube4' => [
-        'detect' => 'src/Eccube/Kernel.php',
         'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
+        'var_dir' => 'var/self-harden',
+        'cache' => ['base' => 'var/cache', 'dirs' => ['prod']],
+        'secrets' => [],
         'version_file' => 'src/Eccube/Common/Constant.php',
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
         'repo' => 'EC-CUBE/ec-cube',
@@ -33,19 +35,56 @@ const SH_MAPS = [
         'line_re' => '/^(4\\.[0-9]+)\\./',
         'release_asset' => 'eccube-%s.tar.gz',
     ],
+    // 3 系(3.0.x)。公開の場所は既定で html/、本体はその上の階。修正版の配布物は GitHub のリリースに無い
+    'eccube3' => [
+        'code_tops' => ['', 'src', 'app', 'html', 'vendor'],
+        'var_dir' => 'app/self-harden',
+        'cache' => ['base' => 'app/cache', 'dirs' => ['twig', 'doctrine', 'eccube', 'plugin', 'translator', 'prod']],
+        'secrets' => ['app/config/eccube/config.yml', 'app/config/eccube/database.yml', 'app/config/eccube/mail.yml', 'app/config/eccube/path.yml'],
+        'version_file' => 'src/Eccube/Common/Constant.php',
+        'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
+        'repo' => 'EC-CUBE/ec-cube',
+        'tag_re' => '/^3\\.0\\.[0-9]+(-p[0-9]+)?$/',
+        'line_re' => '/^(3\\.0)\\./',
+        'release_asset' => null,
+    ],
 ];
+
+// 店の作り(どの地図か、本体の一番上、公開の場所)を、窓口が自分の居場所のファイルの目印だけで決める。
+// 上の階を本体とみなすのは、3 系の既定の置き方(窓口が html/ にあり、上の階に 3 系の目印がある)のときだけ
+function sh_layout()
+{
+    static $l = null;
+    if ($l === null) {
+        $here = __DIR__;
+        $up = dirname(__DIR__);
+        if (is_file($here . '/src/Eccube/Kernel.php')) {
+            $l = ['map' => 'eccube4', 'root' => $here, 'pub' => ''];
+        } elseif (is_file($here . '/src/Eccube/Application.php')) {
+            $l = ['map' => 'eccube3', 'root' => $here, 'pub' => ''];
+        } elseif (basename($here) === 'html' && is_file($up . '/src/Eccube/Application.php') && !is_file($up . '/src/Eccube/Kernel.php')) {
+            $l = ['map' => 'eccube3', 'root' => $up, 'pub' => 'html'];
+        } else {
+            // 見分けがつかないときは 4 系の置き方(窓口の場所が一番上)
+            $l = ['map' => 'eccube4', 'root' => $here, 'pub' => ''];
+        }
+    }
+    return $l;
+}
+
+// 公開の場所の中の場所を、一番上からの相対にする
+function sh_pub($rel = '')
+{
+    $p = sh_layout()['pub'];
+    return $p === '' ? $rel : ($rel === '' ? $p : $p . '/' . $rel);
+}
 
 function sh_map()
 {
     static $m = null;
     if ($m === null) {
-        foreach (SH_MAPS as $name => $x) {
-            if (is_file(sh_root() . '/' . $x['detect'])) {
-                return $m = ['name' => $name] + $x;
-            }
-        }
-        // 見分けがつかないときは、今ある唯一の地図(4 系)を使う
-        $m = ['name' => 'eccube4'] + SH_MAPS['eccube4'];
+        $name = sh_layout()['map'];
+        $m = ['name' => $name] + SH_MAPS[$name];
     }
     return $m;
 }
@@ -87,12 +126,12 @@ final class ShError extends Exception
 
 function sh_root()
 {
-    return __DIR__;
+    return sh_layout()['root'];
 }
 
 function sh_var($sub = '')
 {
-    return sh_root() . '/' . SH_VAR_DIR . ($sub === '' ? '' : '/' . $sub);
+    return sh_root() . '/' . sh_map()['var_dir'] . ($sub === '' ? '' : '/' . $sub);
 }
 
 function sh_send($status, array $data, $sign_nonce = null, $secret = null)
@@ -247,10 +286,10 @@ function sh_resolve_target($target, $allow_code = false)
         throw new ShError('bad_target', 'target がありません');
     }
     $map = [
-        'root/.htaccess' => '.htaccess',
-        'root/.user.ini' => '.user.ini',
-        'lab/.htaccess' => SH_LAB_DIR . '/.htaccess',
-        'lab/.user.ini' => SH_LAB_DIR . '/.user.ini',
+        'root/.htaccess' => sh_pub('.htaccess'),
+        'root/.user.ini' => sh_pub('.user.ini'),
+        'lab/.htaccess' => sh_pub(SH_LAB_DIR . '/.htaccess'),
+        'lab/.user.ini' => sh_pub(SH_LAB_DIR . '/.user.ini'),
     ];
     if (isset($map[$target])) {
         $rel = $map[$target];
@@ -272,7 +311,7 @@ function sh_resolve_target($target, $allow_code = false)
             throw new ShError('bad_target', 'ディレクトリではありません');
         }
         $drel = sh_rel($dirabs);
-        if (sh_is_inside($drel, SH_VAR_DIR) || sh_is_inside($drel, SH_LAB_DIR) || $drel === '') {
+        if (sh_is_inside($drel, sh_map()['var_dir']) || sh_is_inside($drel, sh_pub(SH_LAB_DIR)) || $drel === '' || $drel === sh_pub()) {
             throw new ShError('bad_target', 'そのディレクトリには dir: で書けません');
         }
         $rel = $drel . '/.htaccess';
@@ -290,7 +329,7 @@ function sh_resolve_target($target, $allow_code = false)
 
 function sh_ensure_lab()
 {
-    $dir = sh_root() . '/' . SH_LAB_DIR;
+    $dir = sh_root() . '/' . sh_pub(SH_LAB_DIR);
     if (is_link($dir)) {
         throw new ShError('symlink', '小部屋がシンボリックリンクです');
     }
@@ -649,7 +688,8 @@ function op_inspect(array $args)
         $root = sh_root();
         $r['paths'] = [
             'root' => $root, 'root_writable' => is_writable($root),
-            'receiver' => __FILE__, 'lab' => $root . '/' . SH_LAB_DIR, 'lab_exists' => is_dir($root . '/' . SH_LAB_DIR),
+            'receiver' => __FILE__, 'public' => sh_pub(), 'map' => sh_map()['name'],
+            'lab' => $root . '/' . sh_pub(SH_LAB_DIR), 'lab_exists' => is_dir($root . '/' . sh_pub(SH_LAB_DIR)),
             'var' => sh_var(), 'var_writable' => is_writable(sh_var()),
         ];
     }
@@ -694,11 +734,11 @@ function op_read_file(array $args)
     $relnorm = sh_rel($abs);
     $base = basename($relnorm);
     $top = strpos($relnorm, '/') === false ? '' : substr($relnorm, 0, strpos($relnorm, '/'));
-    $is_backup = (bool) preg_match('#^' . preg_quote(SH_VAR_DIR, '#') . '/backups/[0-9]{14}-[0-9a-f]{8}\.bak$#', $relnorm);
+    $is_backup = (bool) preg_match('#^' . preg_quote(sh_map()['var_dir'], '#') . '/backups/[0-9]{14}-[0-9a-f]{8}\.bak$#', $relnorm);
     // 読めるのは、設定ファイルと本体・部品のファイル(公式と比べるため)。鍵・.env・var/ の中(退避を除く)は読めない
     $named = in_array($base, ['.htaccess', '.user.ini', 'composer.json', 'composer.lock', 'web.config', 'robots.txt'], true);
     $allowed = $is_backup
-        || ($named && (!sh_is_protected($relnorm) || in_array($relnorm, ['composer.json', 'composer.lock'], true) || strpos($relnorm, SH_LAB_DIR . '/') === 0))
+        || ($named && (!sh_is_protected($relnorm) || in_array($relnorm, ['composer.json', 'composer.lock'], true) || strpos($relnorm, sh_pub(SH_LAB_DIR) . '/') === 0))
         || (in_array($top, sh_map()['code_tops'], true) && !sh_is_protected($relnorm));
     if (!$allowed) {
         throw new ShError('not_readable', 'このファイルは読めません');
@@ -730,7 +770,7 @@ function op_write_file(array $cfg, array $args)
     $content = isset($args['content']) ? $args['content'] : null;
     $existing = is_file($abs) ? (string) @file_get_contents($abs) : '';
     sh_check_content($kind, $content, $existing);
-    if ($kind === 'htaccess' && strpos($rel, SH_LAB_DIR . '/') !== 0) {
+    if ($kind === 'htaccess' && strpos($rel, sh_pub(SH_LAB_DIR) . '/') !== 0) {
         sh_check_guards($content, $existing);
     }
 
@@ -781,8 +821,9 @@ function op_lab_arm()
 function sh_is_protected($rel)
 {
     $base = basename($rel);
-    return $rel === 'self-harden.php' || sh_is_inside($rel, 'var') || sh_is_inside($rel, SH_LAB_DIR)
-        || preg_match('/^\.env/', $base) || $rel === 'composer.json' || $rel === 'composer.lock' || sh_is_inside($rel, '.git');
+    return $rel === sh_pub('self-harden.php') || sh_is_inside($rel, 'var') || sh_is_inside($rel, sh_map()['var_dir']) || sh_is_inside($rel, sh_pub(SH_LAB_DIR))
+        || preg_match('/^\.env/', $base) || $rel === 'composer.json' || $rel === 'composer.lock' || sh_is_inside($rel, '.git')
+        || in_array($rel, sh_map()['secrets'], true);
 }
 
 // 公式の中身で書いてよい本体のファイル: src/ app/ html/ vendor/ の中と、root 直下のファイル
@@ -1214,6 +1255,9 @@ function sh_tar_pick($gz, array $want)
 
 function op_apply_official_release(array $cfg, array $args)
 {
+    if (empty(sh_map()['release_asset'])) {
+        throw new ShError('no_release', 'この版の系統には、公式のリリースの配布物がありません');
+    }
     @set_time_limit(150);
     $ref = isset($args['ref']) ? $args['ref'] : null;
     $installed = sh_eccube_version();
@@ -1265,18 +1309,24 @@ function op_apply_official_release(array $cfg, array $args)
 // アプリのキャッシュ(var/cache/prod)を消す。いったん別の名前に付け替えてから(すぐに効く)、時間の許す範囲で中身を消す
 function op_clear_cache(array $cfg, array $args)
 {
-    $base = sh_root() . '/var/cache';
-    $prod = $base . '/prod';
-    if (is_link($base) || is_link($prod)) {
+    $cache = sh_map()['cache'];
+    $base = sh_root() . '/' . $cache['base'];
+    if (is_link($base)) {
         throw new ShError('symlink', 'キャッシュの場所がシンボリックリンクです');
     }
     $moved = false;
-    if (is_dir($prod)) {
-        $old = $base . '/.sh-old-' . bin2hex(random_bytes(4));
-        if (!@rename($prod, $old)) {
-            throw new ShError('io', 'キャッシュを付け替えられませんでした');
+    foreach ($cache['dirs'] as $d) {
+        $prod = $base . '/' . $d;
+        if (is_link($prod)) {
+            throw new ShError('symlink', 'キャッシュの場所がシンボリックリンクです');
         }
-        $moved = true;
+        if (is_dir($prod)) {
+            $old = $base . '/.sh-old-' . bin2hex(random_bytes(4));
+            if (!@rename($prod, $old)) {
+                throw new ShError('io', 'キャッシュを付け替えられませんでした');
+            }
+            $moved = true;
+        }
     }
     // 付け替えた古いキャッシュを消す(前回の残りも)。時間を超えたら次の呼び出しで続きを消す
     $t0 = microtime(true);
