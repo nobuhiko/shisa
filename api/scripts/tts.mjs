@@ -9,7 +9,12 @@ for (const [i, l] of lines.entries()) {
   const q = await (await fetch(`http://127.0.0.1:50021/audio_query?speaker=${speaker}&text=${encodeURIComponent(l.text)}`, { method: "POST" })).json();
   // アクセントの直し(耳で選んだもの): モーラの並びの頭で句を見つけ、アクセントの位置を変えて高さを付け直す
   let touched = false;
-  for (const a of JSON.parse(process.env.ACCENTS ?? "[]")) for (const p of q.accent_phrases) if (p.moras.map((m) => m.text).join("").startsWith(a.match)) { p.accent = a.accent; touched = true; }
+  for (const a of JSON.parse(process.env.ACCENTS ?? "[]")) for (const [i, p] of q.accent_phrases.entries()) if (p.moras.map((m) => m.text).join("").startsWith(a.match)) {
+    // join: 前の句につなげて 1 つの言葉として読む(「インストール|するだけで」が 2 つに割れて、するで声が上がるのを防ぐ)
+    if (a.join && i > 0) { const prev = q.accent_phrases[i - 1]; prev.moras.push(...p.moras); prev.pause_mora = p.pause_mora; p.moras = []; touched = true; continue; }
+    if (a.accent) { p.accent = a.accent; touched = true; }
+  }
+  q.accent_phrases = q.accent_phrases.filter((p) => p.moras.length);
   if (touched) q.accent_phrases = await (await fetch(`http://127.0.0.1:50021/mora_pitch?speaker=${speaker}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(q.accent_phrases) })).json();
   q.speedScale = 1.08; q.postPhonemeLength = (l.pause ?? 700) / 1000;
   const wav = Buffer.from(await (await fetch(`http://127.0.0.1:50021/synthesis?speaker=${speaker}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(q) })).arrayBuffer());

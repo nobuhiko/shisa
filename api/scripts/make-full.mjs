@@ -18,11 +18,11 @@ const sh = (cmd, args) => execFileSync(cmd, args, { stdio: ["ignore", "pipe", "i
 const ff = (...a) => sh("ffmpeg", ["-y", "-loglevel", "error", ...a]);
 const dur = (f) => Number(sh("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f]).trim());
 
-// 1. 1 行ずつ音声に
+// 1. 1 行ずつ音声に(parts があれば、行の中を分けて読み、あいだに間を入れる)
 const clip = {};
 for (const sec of ["ki", "intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) => {
   const key = `${sec}${i}`, f = join(out, key);
-  execFileSync("node", [join(ROOT, "api/scripts/tts.mjs"), String(voice.speaker_id), f, JSON.stringify([{ text: l.read ?? l.text, pause: l.pause }])], { env: { ...process.env, ACCENTS: JSON.stringify(voice.accents) } });
+  execFileSync("node", [join(ROOT, "api/scripts/tts.mjs"), String(voice.speaker_id), f, JSON.stringify(l.parts ?? [{ text: l.read ?? l.text, pause: l.pause }])], { env: { ...process.env, ACCENTS: JSON.stringify(voice.accents) } });
   clip[key] = { file: f + ".wav", d: dur(f + ".wav") };
 });
 
@@ -72,12 +72,13 @@ const okKey = `ki${N.ki.length - 1}`, o = 0.5 + clip[okKey].d;
 const iplace = [{ at: 0.5, k: okKey }, { at: o, k: "intro0" }, { at: o + clip.intro0.d, k: "intro1" }, { at: Math.max(am.paste - A0, o + clip.intro0.d + clip.intro1.d), k: "sho0" }];
 const ilen = Math.max(A1 - A0, iplace[3].at + clip.sho0.d + 0.3);
 const blurFrom = (am.paste - A0).toFixed(2);
-// 「でも、大丈夫。」の字幕(起の字幕と同じ見た目)を、読んでいるあいだだけ重ねる
-const okCap = join(out, "ok-caption.png");
-sh("node", [join(ROOT, "api/scripts/caption-png.cjs"), N.ki[N.ki.length - 1].text, okCap]);
-ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) => ["-i", clip[p.k].file]), "-i", okCap,
+// 「でも、大丈夫。」は、阿吽のシーサーと大きな文字を、うすい紺の幕ごと管理画面に重ね、読み終わりにフェードで消す
+const okCap = join(out, "ok-card.png");
+sh("node", [join(ROOT, "api/scripts/ok-card.cjs"), N.ki[N.ki.length - 1].text, join(ROOT, "api/demo", story.name?.image || "shisa.svg"), okCap]);
+const okOut = Math.max(1.2, o - 0.9);
+ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) => ["-i", clip[p.k].file]), "-loop", "1", "-t", (o + 0.5).toFixed(2), "-i", okCap,
   "-filter_complex",
-  `[0:v]split[base][cp];[cp]crop=1100:40:248:312,boxblur=8:3[bl];[base][bl]overlay=248:312:enable='gte(t,${blurFrom})',tpad=stop_mode=clone:stop_duration=${Math.max(0, ilen - (A1 - A0)).toFixed(2)},fade=t=in:st=0:d=0.5:color=0x0d172a[vb];[vb][${iplace.length + 1}:v]overlay=0:0:enable='between(t,0.5,${(o - 0.2).toFixed(2)})'[v];` +
+  `[0:v]split[base][cp];[cp]crop=1100:40:248:312,boxblur=8:3[bl];[base][bl]overlay=248:312:enable='gte(t,${blurFrom})',tpad=stop_mode=clone:stop_duration=${Math.max(0, ilen - (A1 - A0)).toFixed(2)},fade=t=in:st=0:d=0.5:color=0x0d172a[vb];[${iplace.length + 1}:v]format=rgba,fade=t=out:st=${okOut.toFixed(2)}:d=0.8:alpha=1[ok];[vb][ok]overlay=0:0:eof_action=pass[v];` +
   iplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[ia${i}]`).join(";") + ";" + iplace.map((_, i) => `[ia${i}]`).join("") + `amix=inputs=${iplace.length}:normalize=0,apad[ia]`,
   "-map", "[v]", "-map", "[ia]", "-t", String(ilen), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "2-intro.mp4"));
 
