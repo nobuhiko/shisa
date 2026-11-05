@@ -286,6 +286,8 @@
   // 止める行と、その一言
   function stopOf(s, st) {
     var t = s.tool || '', r = s.result || '', m;
+    // 直し方の提案のすぐ次の行で、なぜ店主が決めるのかを見せる
+    if (st.pendingB) { st.pendingB = false; return { text: '書き換えるかは店主さんが決める → 直し方を作って、承認を待つ', cls: 'warn' }; }
     if (s.kind === 'decision') { if (/公開|止め|開けた/.test(s.title)) st.decidedOpen = true; return { text: s.title, cls: 'good' }; }
     if (st.adv && !st.readAdv && /^公開の情報を読む/.test(s.title) && s.title.indexOf(st.adv) >= 0) { st.readAdv = true; return { text: '届いたお知らせを読む' }; }
     if (/小部屋で試す/.test(t) && !/空に|片付け/.test(s.title)) {
@@ -305,7 +307,19 @@
       return /^v/.test(fr) ? { text: '中の部品を、公式の修正版 ' + fr + ' に差し替えた', cls: 'good' } : { text: 'EC-CUBE を、公式の修正版 ' + fr + ' に上げた(お店は開けたまま)', cls: 'good' };
     }
     if (/公式のリリースに上げる/.test(t) && /置いた/.test(r)) return { text: 'EC-CUBE を、部品ごと公式の修正版 ' + t.replace(/^.*: /, '') + ' に上げた', cls: 'good' };
-    if (/直し方を提案する/.test(t) && /管理画面に出した/.test(r) && !st.proposed) { st.proposed = true; return { text: 'お店独自のカスタマイズに弱点 → 直し方を作り、店主の承認を待つ', cls: 'warn' }; }
+    // カスタマイズの点検: 読んだカスタマイズのファイルの名前と、外から開いて確かめたページを覚えておく。
+    // 止めるのは直し方を提案したところで 2 回: 「どこで見つけたか」→ 次の行で「なぜ店主が決めるのか」(見つけたのは早いが、話の順に並べるため)
+    if (/ファイルを読む/.test(t) && (m = /app\/(?:Customize|template)\/\S+/.exec(t))) {
+      st.customNames = st.customNames || {};
+      m[0].split('/').forEach(function (w) { var k = w.replace(/\.(php|twig)$/, '').replace(/(Controller|Type|Repository)$/, '').toLowerCase().replace(/[^a-z0-9]/g, ''); if (k.length > 3 && !/^(app|customize|template|default|index|controller)$/.test(k)) st.customNames[k] = true; });
+    }
+    if (/外から開く/.test(t) && st.customNames && !st.customPage && (m = /外から開く: \/([A-Za-z0-9_\-]+)/.exec(t)) && st.customNames[m[1].toLowerCase().replace(/[^a-z0-9]/g, '')]) st.customPage = '/' + m[1];
+    if (/直し方を提案する/.test(t) && /管理画面に出した/.test(r)) st.proposed = true;
+    // 提案があった点検では、報告をまとめるところで「どこで見つけたか」→ 次の行で「なぜ店主が決めるのか」を見せる(話の順に、承認の場面の直前へ)
+    if (/報告をまとめる/.test(t) && st.proposed && !st.toldProposal) {
+      st.toldProposal = true; st.pendingB = true;
+      return { text: 'お店独自のカスタマイズのページ' + (st.customPage ? ' ' + st.customPage : '') + ' に、外から届く弱点を見つけた', cls: 'warn' };
+    }
     return null;
   }
 
@@ -351,6 +365,13 @@
         var list = compactSteps(d.steps.filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
         (function next() {
           if (i >= list.length) {
+            // 提案の話の続き(なぜ店主が決めるのか)が残っていれば、報告の前に止めどころとして出す
+            if (st.pendingB) {
+              st.pendingB = false; showBand('書き換えるかは店主さんが決める → 直し方を作って、承認を待つ', 'warn');
+              (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: '書き換えるかは店主さんが決める → 直し方を作って、承認を待つ' }); filmMark();
+              timer = setTimeout(function () { hideBand(); next(); }, FILM_HOLDS[stopNo++] || FILM_HOLD);
+              return;
+            }
             // 報告の前に、報告に書かれた「公開を止めることは選ばなかった」判断を出す
             // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
             var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
@@ -373,7 +394,7 @@
           if (c) { li.classList.add('key'); showBand(c.text, c.cls); }
           stepsEl.appendChild(li);
           stepsEl.scrollTop = stepsEl.scrollHeight;
-          if (c) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: c.text }); }
+          if (c) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: c.text }); filmMark(); }
           var hold = c ? (FILM_HOLDS[stopNo++] || FILM_HOLD) : 0;
           timer = setTimeout(function () { if (c) hideBand(); next(); }, c ? hold : (s.research || (FILM_FLOW && isResearch(s))) ? (FILM_FLOW ? FILM_RS : 400) : waitSec(s) ? 1000 : (FILM_FLOW ? 350 : 600));
         })();
@@ -552,6 +573,15 @@
   var FILM_FLOW = !!new URLSearchParams(location.search).get('film');
   var FILM_RS = Math.min(1000, Math.max(80, Number(new URLSearchParams(location.search).get('rs')) || 180));
   if (filmRun) document.body.classList.add('sh-film');
+  // 撮影の目印: 止めどころのたびに右上の 24px の四角を白黒に反転する(録画は時計どおりに進まないので、組み立てでは録画の中のこの反転を探して行の音声を置き、四角は見出しの色で塗りつぶす)
+  var filmMarkN = 0;
+  function filmMark() {
+    if (!document.body.classList.contains('sh-film')) return;
+    var m = document.getElementById('sh-film-mark');
+    if (!m) { m = document.createElement('div'); m.id = 'sh-film-mark'; m.style.cssText = 'position:fixed;right:0;top:0;width:24px;height:24px;z-index:2147483647;background:#000'; document.body.appendChild(m); }
+    m.style.background = filmMarkN++ % 2 ? '#000' : '#fff';
+  }
+  if (filmRun) { var fm0 = document.createElement('div'); fm0.id = 'sh-film-mark'; fm0.style.cssText = 'position:fixed;right:0;top:0;width:24px;height:24px;z-index:2147483647;background:#000'; document.body.appendChild(fm0); }
   if (new URLSearchParams(location.search).get('big') === '1') document.body.classList.add('sh-big');
   if (start) start.addEventListener('click', function () {
     var adv = document.getElementById('sh-advisory').value.trim();
