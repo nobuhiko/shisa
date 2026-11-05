@@ -73,7 +73,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "save_research",
     description:
-      "Save what you found about one subject (a product and version, or an advisory URL) so later inspections can reuse it for 7 days. Include for each issue whether it is exploited in the wild, whether it is reachable without authentication, official fixes and official workarounds, each with primary sources.",
+      "Save what you found about one subject (a product and version, or an advisory URL) so later inspections of any shop can reuse it for 7 days. Public information only: nothing about this shop or server (no URLs, hostnames, paths, file contents, settings, or results here). Include for each issue whether it is exploited in the wild, whether it is reachable without authentication, official fixes and official workarounds, each with primary sources.",
     input_schema: obj(
       {
         subject: { type: "string" },
