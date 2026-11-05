@@ -3,6 +3,7 @@
 #   ./regress.sh [server-a ... server-h]   (省略で server-a〜server-d)
 #   server-g は EC-CUBE 3.0、server-h は EC-CUBE 2.17(別の compose: docker-compose.ec2.yml)
 #   費用: 1 店あたり初回の上限まで($12)。終わるまで 10〜20 分
+#   CUSTOM=1 を付けると、点検の前に弱点ではないカスタマイズを入れ(customize.sh)、終わったら上書きされていないかを確かめる(server-d・f・g・h)
 set -eu
 cd "$(dirname "$0")"
 # 貼るお知らせの URL は走らせるときに渡す(例: ADV=https://... ./regress.sh)
@@ -12,6 +13,8 @@ port() { case "$1" in server-a) echo 8081;; server-b) echo 8082;; server-c) echo
 svcs() { case "$1" in server-b) echo "server-b server-b-php";; *) echo "$1";; esac; }
 
 (cd ../api && SH_AUTO_ON_CONNECT=0 docker compose up -d --build >/dev/null 2>&1)
+# API の箱を作り直すと、API の中の 2 系の中継(demo-h-loop)が古い箱に付いたままになるので、付け直す
+(cd ../api && docker compose up -d --force-recreate demo-h-loop >/dev/null 2>&1)
 # まっさらにする
 for s in $SERVERS; do
   if [ "$s" = server-h ]; then
@@ -32,18 +35,21 @@ for s in $SERVERS; do
   case "$s" in
     server-h)
       ./ec2/install-plugin.sh >/dev/null
+      [ "${CUSTOM:-0}" = 1 ] && ./customize.sh "$s"
       ./ec2/connect-plugin.sh >/dev/null
       J=.cache/curl/server-h.jar; U="$B/admin/load_plugin_config.php?plugin_id=10000"
       t=$(curl -s -c "$J" -b "$J" "$U" | grep -o 'name="transactionid" value="[^"]*"\|transactionid[^,]*: *"[^"]*"' | head -1 | grep -o '[0-9a-f]\{20,\}')
       out=$(curl -s -c "$J" -b "$J" --data-urlencode "mode=run" --data-urlencode "transactionid=$t" --data-urlencode "advisory_url=$ADV" "$U") ;;
     server-g)
       ./install-plugin.sh "$s" >/dev/null
+      [ "${CUSTOM:-0}" = 1 ] && ./customize.sh "$s"
       ./connect-plugin.sh "$s" >/dev/null
       J=.cache/curl/$s.jar
       tok=$(curl -s -b "$J" -c "$J" "$B/admin/plugin/SelfHarden3/config" | grep -o '_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//')
       out=$(curl -s -b "$J" -c "$J" --data-urlencode "_token=$tok" --data-urlencode "advisory_url=$ADV" "$B/admin/plugin/SelfHarden3/run") ;;
     *)
       ./install-plugin.sh "$s" >/dev/null
+      [ "${CUSTOM:-0}" = 1 ] && ./customize.sh "$s"
       ./connect-plugin.sh "$s" >/dev/null
       J=.cache/curl/$s.jar
       tok=$(curl -s -c "$J" -b "$J" "$B/admin/store/plugin/SelfHarden/config" | grep -o 'name="_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//')
@@ -59,3 +65,5 @@ for s in $SERVERS; do
 done
 # 全部が終わるまで待って、表にする
 node ../api/scripts/regress-report.mjs ../api/data/runs $RUNS
+# カスタマイズありで回したときは、入れたファイルが上書きされていないか、入れたページが開くかを確かめる
+if [ "${CUSTOM:-0}" = 1 ]; then for s in $SERVERS; do ./customize.sh check "$s" || true; done; fi
