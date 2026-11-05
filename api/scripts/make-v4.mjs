@@ -239,7 +239,9 @@ const plen = Math.max(P1 - P0, pt + 0.4);
 if (pm.upgrade && pm.done) {
   // 版上げ: 承認を押してから終わるまで(数十秒)は早送りにし、右下に同じ時刻の買い物の画面を重ねる(メンテナンス中もそのまま)
   // 区間は壁時計(録画の頭からの秒)で決め、録画の秒(× pr)に直して切る
-  const w0 = P0 / pr, wA = pm.approved + 1.2, wB = Math.max(wA + 1, pm.done - 0.3), w1 = pm.wall_total - 0.3;
+  // 結果のカード(「上げました。お店を開いて確かめました」)のあとは、そのまま結へ。お店のトップに移るところは映さない
+  // (お店が動いていることは札で見せている。トップが一瞬だけ映ると不自然なため)
+  const w0 = P0 / pr, wA = pm.approved + 1.2, wB = Math.max(wA + 1, pm.done - 0.3), w1 = Math.max(wB + 1, (pm.after ?? pm.wall_total) - 0.1);
   const FAST = Math.min(1, 6 / (wB - wA)); // 承認から終わりまでを約 6 秒に
   const segs = [[w0, wA, 1], [wA, wB, FAST], [wB, w1, 1]];
   const parts = [];
