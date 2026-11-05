@@ -40,8 +40,15 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "read_file",
     description:
-      "Read a text file (up to 256KB) under the shop root: configuration files (.htaccess, .user.ini, composer.json, composer.lock, robots.txt), files of the application under src/, app/, html/, vendor/ and files directly under the root, and backups under var/self-harden/backups/. .env and other files under var/ cannot be read.",
-    input_schema: obj({ path: { type: "string" } }, ["path"]),
+      "Read a text file (up to 256KB) under the shop root: configuration files (.htaccess, .user.ini, composer.json, composer.lock, robots.txt), files of the application under src/, app/, html/, vendor/ and files directly under the root, and backups under var/self-harden/backups/. .env and other files under var/ cannot be read. With from/to, only those lines are returned (at most 80 lines per call): use this to read just the surroundings of a scan_custom hit instead of the whole file.",
+    input_schema: obj(
+      {
+        path: { type: "string" },
+        from: { type: "integer", minimum: 1, description: "First line to return (1-based)" },
+        to: { type: "integer", minimum: 1, description: "Last line to return (at most from + 79)" },
+      },
+      ["path"],
+    ),
   },
   {
     name: "http_get",
@@ -87,6 +94,14 @@ export const CLIENT_TOOLS: Tool[] = [
       "Compare every file of the shop (root files, app/, html/, src/, vendor/) with the official EC-CUBE release of the installed version, by SHA-256. Returns files that differ from the official release, files that are not in the official release, and files of the official release that are missing. Files that self-harden itself changed by applying official fixes (and that still have the content it wrote) are listed separately as intended; do not revert them to the release. Takes some time on large installations. In an EC-CUBE 2 shop whose data/ folder sits inside the public folder (inspect paths.flat = true), the official html/x is the shop's x: this comparison reports official names (html/x, data/...), and the restore/fix/diff/quarantine tools accept either form.",
     input_schema: obj({
       only_php: { type: "boolean", description: "List only PHP-like files among the added files (default true)" },
+    }),
+  },
+  {
+    name: "scan_custom",
+    description:
+      "Check the shop's own custom code locally on the receiver for common risky shapes, without sending whole files: values from the outside (request parameters, cookies, uploaded files, some request headers) flowing into SQL strings, page output without escaping, file operations, or command/code execution; dynamic code; obfuscation; and PHP files placed where only images or uploads belong (misplaced lists them even when the hit limit is reached). Returns only file, line number, kind and that one line (long strings are masked), plus each scanned file's mtime and size, and files much newer than most (newer_than_most). Pass the custom files from compare_with_official (files that differ from the official release and PHP-like files not in it; official names like html/x are accepted). Without paths, the receiver walks the application folders (excluding the vendor folder). At most 400 files and 300 hits per call. A hit is a lead, not a verdict: read the surrounding lines with read_file from/to and check whether it is reachable from the outside.",
+    input_schema: obj({
+      paths: { type: "array", items: { type: "string" }, maxItems: 400, description: "Custom files to check (shop paths or official names)" },
     }),
   },
   {
@@ -222,12 +237,13 @@ export const CLIENT_TOOLS: Tool[] = [
               title: { type: "string" },
               category: {
                 type: "string",
-                enum: ["php", "eccube", "packages", "tamper", "exposure", "config", "other"],
-                description: "php: the PHP runtime / eccube: EC-CUBE itself / packages: Composer packages / tamper: modified or unknown files / exposure: information visible from outside / config: weak settings / other",
+                enum: ["php", "eccube", "packages", "tamper", "custom", "exposure", "config", "other"],
+                description: "php: the PHP runtime / eccube: EC-CUBE itself / packages: Composer packages / tamper: modified or unknown files (signs of intrusion) / custom: weaknesses in the shop's own custom code / exposure: information visible from outside / config: weak settings / other",
               },
               severity: { type: "string", enum: ["high", "medium", "low", "info"] },
               evidence: { type: "string" },
-              status: { type: "string", enum: ["fixed", "mitigated", "scheduled", "needs_approval", "needs_human", "not_affected"], description: "fixed / mitigated (workaround in place) / scheduled (Shisa itself will handle it in a later inspection; also list it in next_by_self_harden) / needs_approval (the owner has to decide: work that needs maintenance mode or stops the shop, database migrations, large component or major version upgrades, settings that change how the owner works) / needs_human (only work on the hosting side that the shop cannot do: the language runtime build, the web server, TLS certificates, server settings) / not_affected" },
+              status: { type: "string", enum: ["fixed", "mitigated", "scheduled", "needs_approval", "needs_human", "not_affected"], description: "fixed / mitigated (workaround in place) / scheduled (Shisa itself will handle it in a later inspection; also list it in next_by_self_harden) / needs_approval (the owner has to decide: work that needs maintenance mode or stops the shop, database migrations, large component or major version upgrades, settings that change how the owner works) / needs_human (work Shisa must not do itself: on the hosting side, the language runtime build, the web server, TLS certificates, server settings; or changes to the shop's own custom code, which only its developer may make) / not_affected" },
+              to: { type: "string", enum: ["server_company", "developer"], description: "Only with needs_human: who does the work. server_company: the hosting company / developer: the shop's developer (the company that built or customizes the shop)" },
             },
             required: ["title", "category", "severity", "evidence", "status"],
             additionalProperties: false,
@@ -253,7 +269,7 @@ export const CLIENT_TOOLS: Tool[] = [
           description: "Only what truly cannot be done from the shop side. Each with a ready-to-send message",
           items: {
             type: "object",
-            properties: { to: { type: "string" }, title: { type: "string" }, why: { type: "string" }, message: { type: "string", description: "Ready-to-send message in Japanese" } },
+            properties: { to: { type: "string", description: "Who receives it, in Japanese (サーバー会社 / 制作会社)" }, title: { type: "string" }, why: { type: "string" }, message: { type: "string", description: "Ready-to-send message in Japanese. For the developer: file, line, the page or entry it is reachable from, why it is dangerous, and the direction of the fix" } },
             required: ["to", "title", "why", "message"],
             additionalProperties: false,
           },
@@ -461,8 +477,12 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       return { content: j(r), isError: !r.ok, title: `ファイルの一覧: /${input.path ?? ""}` };
     }
     case "read_file": {
-      const r = await callReceiver(shop, "read_file", { path: input.path });
-      return { content: j(r), isError: !r.ok, title: `ファイルを読む: ${input.path}` };
+      const args: Record<string, unknown> = { path: input.path };
+      if (Number.isInteger(input.from)) args.from = input.from;
+      if (Number.isInteger(input.to)) args.to = input.to;
+      const r = await callReceiver(shop, "read_file", args);
+      const range = args.from || args.to ? ` ${args.from ?? 1}〜${args.to ?? ""} 行目` : "";
+      return { content: j(r), isError: !r.ok, title: `ファイルを読む: ${input.path}${range}` };
     }
     case "http_get": {
       try {
@@ -523,6 +543,13 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       } catch (e) {
         return { content: j({ error: (e as Error).message }), isError: true, title: "公式の配布物と照らし合わせる" };
       }
+    }
+    case "scan_custom": {
+      const raw: unknown[] = Array.isArray(input.paths) ? input.paths.slice(0, 400) : [];
+      const paths = await Promise.all(raw.filter((p): p is string => typeof p === "string").map((p) => shopPathOf(shop, p)));
+      const r = await callReceiver(shop, "scan_custom", paths.length ? { paths } : {}, 60_000);
+      const n = r.ok ? (r.result.hits as unknown[]).length : 0;
+      return { content: j(r), isError: !r.ok, title: `改造したコードの点検: ${r.ok ? `${r.result.scanned} 件を調べ、気になる行 ${n} 件` : "できなかった"}` };
     }
     case "diff_with_official": {
       try {
