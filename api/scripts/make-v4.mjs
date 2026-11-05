@@ -6,7 +6,7 @@
 //   SHOP_SYNC が無いときは試作: 買い物の録画を、承・転の長さに合わせて伸び縮みさせるだけ(時刻はそろわない)
 //   K=<倍率> で早送りの倍率を決める(既定は、点検の長さが約 FILM_TARGET 秒(既定 50)になる倍率)
 //   OUT=<出力のファイル名>(既定 full-v4-draft.mp4)
-// 起・導入・結は、make-full.mjs が作った video/full/1-ki.mp4・2-intro.mp4・4-end.mp4 を使う(台本が同じなので作り直さない)
+// 起・導入は、make-full.mjs が作った video/full/1-ki.mp4・2-intro.mp4 を使う(台本が同じなので作り直さない)。結は 1 行目を頭に足して録り直す(結の 2〜4 行目の音声は video/full のもの)
 // 台本は api/demo/story.json の narration.v4。点検で起きなかったこと(書き換えの跡が無い、など)の行は、報告と経過を見て自動で外す
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -141,18 +141,19 @@ ff("-ss", S.toFixed(3), "-t", flen.toFixed(3), "-i", webm, ...inputs, "-loop", "
   "-filter_complex", filt, "-map", "[fv]", "-map", "[aout]", "-t", flen.toFixed(3), ...enc, join(out, "3-film.mp4"));
 console.log("承・転", JSON.stringify({ K, realSec: Math.round(realSec), len: flen.toFixed(1), end: endT.toFixed(1), place: place.map((p) => `${p.k}@${p.at.toFixed(1)}`), pip: { sa: sa.toFixed(1), sb: sb.toFixed(2) } }));
 
-// 3. 承認の場面: video/approve の録画(健康診断の表 → カード → 確認コード → 承認 → 直ったページ → お店のトップ)
+// 3. 承認の場面: video/approve の録画(健康診断の表 → カード → 確認コード → 承認 → 「直しました」の結果)
 const pdir = join(W, "approve");
 const pm = JSON.parse(readFileSync(join(pdir, "marks.json"), "utf8"));
 const pwebm = join(pdir, readdirSync(pdir).find((f) => f.endsWith(".webm")));
 const pr = dur(pwebm) / pm.wall_total;
-const P0 = Math.max(0, (pm.health ?? pm.card) * pr - 0.1), P1 = pm.wall_total * pr - 0.2;
+// 直ったページとお店のトップは映さない(お店が止まっていないことは、承・転の買い物の画面で見せている)。「直しました」の結果がカードに出たところで終える
+const P0 = Math.max(0, (pm.health ?? pm.card) * pr - 0.1), P1 = (pm.after ?? pm.top ?? pm.wall_total) * pr - 0.3;
 const at = (m) => m * pr - P0 + 0.2;
 const pplace = [];
 let pt = 0;
 for (const l of V4.approve) { const a = Math.max(at(pm[l.at]), pt + 0.3); pplace.push({ at: a, k: l.key }); pt = a + clip[l.key].d; }
-pplace.push({ at: Math.max(at(pm.top), pt + 0.3), k: "k0" });
-const plen = Math.max(P1 - P0, pplace.at(-1).at + clip.k0.d + 0.3);
+// 結の 1 行目は、結の頭(版の違うお店の健康診断が並ぶところ)で読む。承認の場面は 3 行目を読み終えたら終える
+const plen = Math.max(P1 - P0, pt + 0.4);
 ff("-ss", P0.toFixed(3), "-t", (P1 - P0).toFixed(3), "-i", pwebm, ...pplace.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
   `[0:v]fps=30,tpad=stop_mode=clone:stop_duration=${Math.max(0, plen - (P1 - P0)).toFixed(2)}[v];` +
   pplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + pplace.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${pplace.length}:normalize=0,apad[pa]`,
@@ -164,12 +165,32 @@ console.log("承認", JSON.stringify({ len: plen.toFixed(1), place: pplace.map((
   ff("-i", join(out, "3-film.mp4"), "-i", join(out, "3b-approve.mp4"), "-filter_complex",
     `[0:v][1:v]xfade=transition=fade:duration=${X}:offset=${(fl - X).toFixed(3)}[v];[0:a][1:a]acrossfade=d=${X}[a]`,
     "-map", "[v]", "-map", "[a]", ...enc, join(out, "3c-film-approve.mp4")); }
-for (const p of ["1-ki", "2-intro", "4-end"]) if (!existsSync(join(prev, p + ".mp4"))) throw new Error(`${p}.mp4 が video/full に無い(先に make-full.mjs を回す)`);
-writeFileSync(join(out, "all.list"), [join(prev, "1-ki.mp4"), join(prev, "2-intro.mp4"), join(out, "3c-film-approve.mp4"), join(prev, "4-end.mp4")].map((f) => `file '${f}'`).join("\n"));
+// 3c. 結: 場面 KE を録り直し、1 行目(k0)と 2 行目(ketsu1)を、健康診断が並ぶ最初の画面で続けて読む。
+// 場面 KE は 3 つの区切り(並び → 志 → 名前)なので、最初の区切りの長さを k0 + ketsu1 にする。最初の区切りの字幕は ketsu1 の文なので、k0 を読むあいだは字幕を隠す
+for (const k of ["ketsu1", "ketsu2", "ketsu3"]) clip[k] = { file: join(prev, k + ".wav"), d: dur(join(prev, k + ".wav")) };
+{
+  const segs = [clip.k0.d + clip.ketsu1.d, clip.ketsu2.d, clip.ketsu3.d];
+  const kdir = join(out, "ke"); execFileSync("rm", ["-rf", kdir]);
+  sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), `KE&d=${segs.map((x) => x.toFixed(2)).join(",")}&mark=1`, kdir, ".kv-layer.in", "結"]);
+  const kwebm = join(kdir, readdirSync(kdir).find((f) => f.endsWith(".webm")));
+  const { flips, end } = lineFlips(kwebm, 1902, 1062);
+  if (flips.length !== 3) throw new Error(`結の目印が ${flips.length} 個(3 個のはず)`);
+  const ratio = (flips[2] - flips[0]) / (segs[0] + segs[1]);
+  const seg = flips.map((a, i) => [a, i + 1 < 3 ? flips[i + 1] : Math.min(end, a + segs[2] * ratio)]);
+  writeFileSync(join(out, "end.list"), ["k0", "ketsu1", "ketsu2", "ketsu3"].map((k) => `file '${clip[k].file}'`).join("\n"));
+  const ewav = join(out, "end-voice.wav"); ff("-f", "concat", "-safe", "0", "-i", join(out, "end.list"), "-c", "copy", ewav);
+  ff("-i", kwebm, "-i", ewav, "-filter_complex",
+    `[0:v]fps=30,drawbox=x=1896:y=1056:w=24:h=24:color=0x0d172a:t=fill,split=3[s0][s1][s2];` +
+    seg.map(([a, b], i) => `[s${i}]trim=${a.toFixed(3)}:${b.toFixed(3)},setpts=(PTS-STARTPTS)*${(segs[i] / (b - a)).toFixed(5)}[v${i}]`).join(";") +
+    `;[v0][v1][v2]concat=n=3:v=1:a=0,drawbox=x=0:y=960:w=1920:h=120:color=0x0d172a:t=fill:enable='lte(t,${clip.k0.d.toFixed(2)})'[v]`,
+    "-map", "[v]", "-map", "1:a", "-t", segs.reduce((a, x) => a + x, 0).toFixed(3), ...enc, join(out, "4-end.mp4"));
+}
+for (const p of ["1-ki", "2-intro"]) if (!existsSync(join(prev, p + ".mp4"))) throw new Error(`${p}.mp4 が video/full に無い(先に make-full.mjs を回す)`);
+writeFileSync(join(out, "all.list"), [join(prev, "1-ki.mp4"), join(prev, "2-intro.mp4"), join(out, "3c-film-approve.mp4"), join(out, "4-end.mp4")].map((f) => `file '${f}'`).join("\n"));
 const OUT = process.env.OUT || "full-v4-draft.mp4";
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, OUT));
 ff("-i", join(W, OUT), "-vf", "scale=1280:720", "-c:v", "libx264", "-crf", "28", "-preset", "medium", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", join(W, OUT.replace(/\.mp4$/, "-720p.mp4")));
-console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(prev, "4-end.mp4")) }));
+console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));
 
 // 右上などの四角が白黒に反転した時刻を、録画の中で探す
 function lineFlips(file, x, y) {
