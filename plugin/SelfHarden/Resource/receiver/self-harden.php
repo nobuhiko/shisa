@@ -66,6 +66,20 @@ const SH_MAPS = [
         'line_re' => '/^(2\\.[0-9]+)\\./',
         'release_asset' => '%s.tar.gz',
     ],
+    // 見分けがつかない店。読む操作(ping・inspect)だけ答え、書く操作は断る。鍵の置き場は 4 系と同じ場所を見る
+    'unknown' => [
+        'code_tops' => [],
+        'var_dir' => 'var/self-harden',
+        'vendor_dir' => 'vendor',
+        'cache' => null,
+        'secrets' => [],
+        'version_file' => null,
+        'version_re' => null,
+        'repo' => null,
+        'tag_re' => null,
+        'line_re' => null,
+        'release_asset' => null,
+    ],
 ];
 
 // 公式のタグから版の数字だけを取り出す(2 系のタグは eccube-2.17.2-p1 の形)
@@ -83,7 +97,9 @@ function sh_layout()
     if ($l === null) {
         $here = __DIR__;
         $up = dirname(__DIR__);
-        if (is_file($here . '/src/Eccube/Kernel.php')) {
+        $c = @file_get_contents($here . '/src/Eccube/Common/Constant.php');
+        $v4 = is_string($c) && preg_match("/const\\s+VERSION\\s*=\\s*'4\\./", $c);
+        if (is_file($here . '/src/Eccube/Kernel.php') || ($v4 && !is_file($here . '/src/Eccube/Application.php'))) {
             $l = ['map' => 'eccube4', 'root' => $here, 'pub' => ''];
         } elseif (is_file($here . '/src/Eccube/Application.php')) {
             $l = ['map' => 'eccube3', 'root' => $here, 'pub' => ''];
@@ -91,12 +107,31 @@ function sh_layout()
             $l = ['map' => 'eccube3', 'root' => $up, 'pub' => 'html'];
         } elseif (basename($here) === 'html' && is_file($up . '/data/class/SC_Initial.php')) {
             $l = ['map' => 'eccube2', 'root' => $up, 'pub' => 'html'];
+        } elseif (is_file($here . '/data/class/SC_Initial.php')) {
+            // 2 系で、data/ を公開の場所の中に置いた店(レンタルサーバーでよくある)。公式の配布物の html/ の中身が、窓口の場所にそのまま並ぶ
+            $l = ['map' => 'eccube2', 'root' => $here, 'pub' => '', 'flat' => true];
         } else {
-            // 見分けがつかないときは 4 系の置き方(窓口の場所が一番上)
-            $l = ['map' => 'eccube4', 'root' => $here, 'pub' => ''];
+            // 見分けがつかないときは、どの地図にも当てはめない(読むだけにして、書く操作は断る)
+            $l = ['map' => 'unknown', 'root' => $here, 'pub' => ''];
         }
     }
     return $l;
+}
+
+// 本体として読み書きしてよい一番上のフォルダか('*' はどのフォルダでも。守るファイルは別に断る)
+function sh_code_top_ok($top)
+{
+    $tops = sh_map()['code_tops'];
+    return in_array($top, $tops, true) || (in_array('*', $tops, true) && $top !== '.git');
+}
+
+// 店の中の場所を、公式の配布物の中の場所にする。data/ を公開の場所の中に置いた 2 系だけ、data/ と composer.* 以外は html/ の下
+function sh_official_rel($rel)
+{
+    if (empty(sh_map()['flat']) || strpos($rel, 'data/') === 0 || $rel === 'composer.json' || $rel === 'composer.lock') {
+        return $rel;
+    }
+    return 'html/' . $rel;
 }
 
 // 公開の場所の中の場所を、一番上からの相対にする
@@ -112,6 +147,11 @@ function sh_map()
     if ($m === null) {
         $name = sh_layout()['map'];
         $m = ['name' => $name] + SH_MAPS[$name];
+        if (!empty(sh_layout()['flat'])) {
+            // data/ を公開の場所の中に置いた 2 系: 公式の html/ の中身が一番上に並ぶので、一番上のどのフォルダも本体として扱う
+            $m['code_tops'] = ['*'];
+            $m['flat'] = true;
+        }
     }
     return $m;
 }
@@ -599,7 +639,7 @@ function sh_fetch_status($base, $path, $timeout)
         $fp = @fsockopen(($u['scheme'] === 'https' ? 'ssl://' : '') . $u['host'], $port, $errno, $errstr, 3);
         if ($fp) {
             stream_set_timeout($fp, $timeout);
-            $req = $path;
+            $req = (isset($u['path']) ? $u['path'] : '/') . (isset($u['query']) ? '?' . $u['query'] : '');
             fwrite($fp, "GET $req HTTP/1.0\r\nHost: {$u['host']}\r\nX-SH-Verify: 1\r\nConnection: close\r\n\r\n");
             $line = fgets($fp);
             if (is_string($line) && preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) {
@@ -617,7 +657,7 @@ function sh_verify(array $cfg, $verify)
         return null;
     }
     $base = isset($cfg['self_base']) ? (string) $cfg['self_base'] : '';
-    if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?$#', $base)) {
+    if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?(/[A-Za-z0-9._~\-/]*)?$#', $base)) {
         throw new ShError('bad_config', 'self_base が正しくありません');
     }
     $timeout = isset($verify['timeout_sec']) ? max(1, min(8, (int) $verify['timeout_sec'])) : 8;
@@ -653,7 +693,7 @@ function sh_redact_value($v)
 
 function op_ping()
 {
-    return ['receiver_version' => SH_VERSION, 'php_version' => PHP_VERSION, 'time' => time(), 'map' => sh_map()['name']];
+    return ['receiver_version' => SH_VERSION, 'php_version' => PHP_VERSION, 'time' => time(), 'map' => sh_map()['name'], 'flat' => !empty(sh_map()['flat'])];
 }
 
 function op_inspect(array $args)
@@ -717,7 +757,7 @@ function op_inspect(array $args)
         $root = sh_root();
         $r['paths'] = [
             'root' => $root, 'root_writable' => is_writable($root),
-            'receiver' => __FILE__, 'public' => sh_pub(), 'map' => sh_map()['name'],
+            'receiver' => __FILE__, 'public' => sh_pub(), 'map' => sh_map()['name'], 'flat' => !empty(sh_map()['flat']),
             'lab' => $root . '/' . sh_pub(SH_LAB_DIR), 'lab_exists' => is_dir($root . '/' . sh_pub(SH_LAB_DIR)),
             'var' => sh_var(), 'var_writable' => is_writable(sh_var()),
         ];
@@ -768,7 +808,7 @@ function op_read_file(array $args)
     $named = in_array($base, ['.htaccess', '.user.ini', 'composer.json', 'composer.lock', 'web.config', 'robots.txt'], true);
     $allowed = $is_backup
         || ($named && (!sh_is_protected($relnorm) || in_array($relnorm, ['composer.json', 'composer.lock'], true) || strpos($relnorm, sh_pub(SH_LAB_DIR) . '/') === 0))
-        || (in_array($top, sh_map()['code_tops'], true) && !sh_is_protected($relnorm));
+        || (sh_code_top_ok($top) && !sh_is_protected($relnorm));
     if (!$allowed) {
         throw new ShError('not_readable', 'このファイルは読めません');
     }
@@ -851,7 +891,7 @@ function sh_is_protected($rel)
 {
     $base = basename($rel);
     return $rel === sh_pub('self-harden.php') || sh_is_inside($rel, 'var') || sh_is_inside($rel, sh_map()['var_dir']) || sh_is_inside($rel, sh_pub(SH_LAB_DIR))
-        || preg_match('/^\.env/', $base) || $rel === 'composer.json' || $rel === 'composer.lock' || sh_is_inside($rel, '.git')
+        || preg_match('/^\.env|\.env$/', $base) || $rel === 'composer.json' || $rel === 'composer.lock' || sh_is_inside($rel, '.git')
         || in_array($rel, sh_map()['secrets'], true);
 }
 
@@ -865,7 +905,7 @@ function sh_code_path($rel, &$missing_dirs = null)
     $abs = sh_safe_path($rel, false);
     $r = sh_rel($abs);
     $top = strpos($r, '/') === false ? '' : substr($r, 0, strpos($r, '/'));
-    if (!in_array($top, sh_map()['code_tops'], true) || sh_is_protected($r)) {
+    if (!sh_code_top_ok($top) || sh_is_protected($r)) {
         throw new ShError('bad_target', 'そのファイルは受け口からは書けません: ' . $r);
     }
     // 親フォルダは root の中に実在すること(シンボリックリンクはたどらない)。
@@ -901,6 +941,9 @@ function sh_code_path($rel, &$missing_dirs = null)
 
 function sh_eccube_version()
 {
+    if (empty(sh_map()['version_file'])) {
+        return null;
+    }
     $c = @file_get_contents(sh_root() . '/' . sh_map()['version_file']);
     return is_string($c) && preg_match(sh_map()['version_re'], $c, $m) ? $m[1] : null;
 }
@@ -955,7 +998,7 @@ function sh_official_url($rel, $ref)
             throw new ShError('bad_ref', 'EC-CUBE は今の版(' . $installed . ')以上のタグか、公式のコミットの番号(40 文字の 16 進数。短い形は不可)だけにできます');
         }
     }
-    return SH_OFFICIAL_RAW . sh_map()['repo'] . '/' . $ref . '/' . $rel;
+    return SH_OFFICIAL_RAW . sh_map()['repo'] . '/' . $ref . '/' . sh_official_rel($rel);
 }
 
 function sh_fetch_official($url)
@@ -1321,17 +1364,23 @@ function op_apply_official_release(array $cfg, array $args)
     }
     // 2. 公式の配布物を取り、チェックサムで確かめ、欲しいファイルを取り出す
     $gz = sh_release_tarball($ref);
-    $got = sh_tar_pick($gz, $rels);
+    // 配布物の中の名前で取り出す(data/ を公開の場所の中に置いた 2 系では、html/ の下の名前)
+    $want = [];
+    foreach ($rels as $r => $p) {
+        $want[sh_official_rel($r)] = $r;
+    }
+    $got = sh_tar_pick($gz, $want);
     $items = [];
     $url = 'https://github.com/' . sh_map()['repo'] . '/releases/download/' . $ref . '/' . sprintf(sh_map()['release_asset'], $ref);
     foreach ($rels as $r => $p) {
-        if (!isset($got[$r])) {
-            throw new ShError('official_fetch_failed', '公式の配布物に無いファイルがあるので、何も置いていません: ' . $r);
+        $o = sh_official_rel($r);
+        if (!isset($got[$o])) {
+            throw new ShError('official_fetch_failed', '公式の配布物に無いファイルがあるので、何も置いていません: ' . $o);
         }
-        if (!hash_equals((string) $expected[$p], hash('sha256', $got[$r]))) {
-            throw new ShError('official_mismatch', '公式の配布物の中身が expected_sha256 と違うので、何も置いていません: ' . $r);
+        if (!hash_equals((string) $expected[$p], hash('sha256', $got[$o]))) {
+            throw new ShError('official_mismatch', '公式の配布物の中身が expected_sha256 と違うので、何も置いていません: ' . $o);
         }
-        $items[] = ['rel' => $r, 'url' => $url . '#' . $r, 'content' => $got[$r]];
+        $items[] = ['rel' => $r, 'url' => $url . '#' . $o, 'content' => $got[$o]];
     }
     return sh_apply_items($cfg, $args, $ref, $items, $dirs_to_make);
 }
@@ -1470,13 +1519,19 @@ function op_list_quarantine()
 // ファイルの一覧と SHA-256。読むだけ。件数と時間の上限があり、cursor から続きを取れる
 function op_hash_tree(array $args)
 {
-    $roots = isset($args['roots']) && is_array($args['roots']) ? $args['roots'] : ['', 'app', 'html', 'src', 'vendor'];
+    // 一番上のファイルと本体のフォルダ。2 系は data/ も。data/ を公開の場所の中に置いた 2 系は、一番上から全部('*')
+    $default = sh_map()['name'] === 'eccube2' ? (empty(sh_map()['flat']) ? ['', 'html', 'data'] : ['*']) : ['', 'app', 'html', 'src', 'vendor'];
+    $roots = isset($args['roots']) && is_array($args['roots']) ? $args['roots'] : $default;
     $limit = isset($args['limit']) ? max(1, min(5000, (int) $args['limit'])) : 3000;
     $cursor = isset($args['cursor']) && is_string($args['cursor']) ? $args['cursor'] : '';
     $paths = [];
     foreach ($roots as $root) {
-        if (!in_array($root, ['', 'app', 'html', 'src', 'vendor'], true)) {
-            throw new ShError('bad_root', 'roots は "", app, html, src, vendor から選んでください');
+        if (!in_array($root, ['', '*', 'app', 'html', 'src', 'vendor', 'data'], true)) {
+            throw new ShError('bad_root', 'roots は "", *, app, html, src, vendor, data から選んでください');
+        }
+        if ($root === '*') {
+            sh_collect(sh_root(), '', true, $paths);
+            continue;
         }
         $abs = $root === '' ? sh_root() : sh_root() . '/' . $root;
         if ($root !== '' && (is_link($abs) || !is_dir($abs))) {
@@ -1516,7 +1571,7 @@ function sh_collect($abs, $rel, $recursive, array &$out)
         if (is_link($p)) {
             $out[] = $r;
         } elseif (is_dir($p)) {
-            if ($recursive && $name !== 'node_modules') {
+            if ($recursive && $name !== 'node_modules' && $name !== 'templates_c') {
                 sh_collect($p, $r, true, $out);
             }
         } elseif (is_file($p) && !preg_match('/^\.env/', $name)) {
@@ -1601,6 +1656,9 @@ function sh_main()
     $args = isset($req['args']) && is_array($req['args']) ? $req['args'] : [];
     @set_time_limit(25);
     try {
+        if (sh_map()['name'] === 'unknown' && !in_array($req['op'], ['ping', 'inspect'], true)) {
+            throw new ShError('unknown_layout', 'この店の作り(EC-CUBE のどの系統か)を見分けられなかったので、読む以外の操作はしません');
+        }
         switch ($req['op']) {
             case 'ping': $r = op_ping(); break;
             case 'inspect': $r = op_inspect($args); break;

@@ -93,6 +93,10 @@ foreach (['../outside.txt', '/etc/passwd', 'src/x.php'] as $p) {
     $r = call('read_file', ['path' => $p]);
     check('2 系: 読めない(外・本体のフォルダ以外): ' . $p, isset($r['json']['ok']) && $r['json']['ok'] === false, $r['body']);
 }
+$r = call('hash_tree', ['limit' => 5000]);
+$names = !empty($r['json']['ok']) ? array_column($r['json']['result']['files'], 0) : [];
+check('2 系: 照らし合わせの一覧に data/ の本体が入り、秘密の設定は入らない', in_array('data/class/SC_Initial.php', $names, true) && in_array('html/index.php', $names, true)
+    && !in_array('data/config/config.php', $names, true), $r['body']);
 $r = call('write_file', ['target' => 'root/.htaccess', 'content' => "Options -Indexes\n"]);
 check('2 系: root/.htaccess は公開の場所(html/.htaccess)に書く', !empty($r['json']['ok']) && is_file($pub . '/.htaccess') && !is_file($shop . '/.htaccess'), $r['body']);
 $r = call('lab_arm');
