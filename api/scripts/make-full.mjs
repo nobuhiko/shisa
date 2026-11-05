@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// 通しの 1 本を組み立てる(手元だけ): 起(できている mp4)+ 導入(画面を並べる)+ 承・転(撮影モードの録画に、止めどころごとにナレーションを置く)+ 結
+// 通しの 1 本を組み立てる(手元だけ): 起 + 導入(本物の管理画面)+ 承・転(撮影モードの録画に、止めどころごとにナレーションを置く)+ 承認の場面(本物の管理画面)+ 結
 // 使い方: PW=<playwright> node api/scripts/make-full.mjs <作業ディレクトリ(video/)>
 // 前提: VOICEVOX が 127.0.0.1:50021、デモのお店 B が 8082、絵コンテの video/board/*.png
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
@@ -28,7 +28,7 @@ for (const sec of ["ki", "intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) 
 
 // 2. 止めどころ(撮影モードで止まる順)ごとに読む行。止まる長さは読む行の長さの合計
 // 止めどころは帯の言葉で探す(番号は記録や撮影モードの直しでずれるので)。まず短く流して、止まる順を取る
-const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"]], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]], [/中の部品を/, ["ten3", "ten4"], "ten2"]];
+const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"], "sho5"], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]], [/中の部品を/, ["ten3", "ten4"], "ten2"], [/カスタマイズに弱点/, ["ten5"]]];
 const dry = join(out, "dry"); execFileSync("rm", ["-rf", dry]);
 sh("node", [join(ROOT, "api/scripts/record-film.cjs"), SHOP, RUN, ADV, Array(30).fill(150).join(","), dry]);
 const order = JSON.parse(readFileSync(join(dry, "marks.json"), "utf8")).stops.map((s) => s.text);
@@ -51,15 +51,37 @@ const webm = join(fdir, readdirSync(fdir).find((f) => f.endsWith(".webm")));
 
 // 3. 承・転: 録画の「通知を渡す」を押したところ(貼る所作は導入の本物の操作で見せる)から「健康診断の表 + 結の 1 行目」まで。止めどころに行を置く
 const S = Math.max(0, marks.start - 0.3);
-const k0 = clip.ketsu0.d;
-// 健康診断の表は 0.7 秒ずつ行が埋まる(7 行で約 5.5 秒)。埋まりきって少し置くまで流す
-const E = Math.min(marks.total - 0.3, marks.end + Math.max(k0 + 1.0, 11));
+// 健康診断の表は 0.7 秒ずつ行が埋まる(7 行で約 5.5 秒)。埋まりきって少し置くまで流す(結の 1 行目は、承認の場面のあとで読む)
+const E = Math.min(marks.total - 0.3, marks.end + 9);
 const place = [];
 for (const [i, keys] of Object.entries(MAP)) { let t = marks.stops[i].at - S + 0.15; for (const k of keys) { place.push({ at: t, k }); t += clip[k].d; } }
-place.push({ at: marks.end - S + 0.3, k: "ketsu0" });
 const inputs = place.flatMap((p) => ["-i", clip[p.k].file]);
 const filt = place.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[a${i}]`).join(";") + ";" + place.map((_, i) => `[a${i}]`).join("") + `amix=inputs=${place.length}:normalize=0,apad[aout]`;
 ff("-ss", String(S), "-t", String(E - S), "-i", webm, ...inputs, "-filter_complex", filt, "-map", "0:v", "-map", "[aout]", "-t", String(E - S), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "3-film.mp4"));
+
+// 3b. 承認の場面: 本物の管理画面で「店主の承認で直せること」→ 確認コード → 承認して直す → 直ったページ → お店のトップ。
+// 承認は 1 回しかできないので、録画は video/approve/ に一度だけ取る(あればそれを使う)。録画は時計より遅れて進むので、印の時刻は録画の長さとの比で伸ばす
+const pdir = join(W, "approve");
+const ms = (k, extra = 0) => String(Math.round(clip[k].d * 1000 + extra));
+if (!existsSync(join(pdir, "marks.json"))) {
+  sh("node", [join(ROOT, "api/scripts/record-approve.cjs"), SHOP, pdir, ms("ten6", 300), ms("ten7", 200), "1800", String(Math.max(1500, Math.round(clip.ten8.d * 1000) - 1500)), ms("ketsu0", 800)]);
+}
+const pm = JSON.parse(readFileSync(join(pdir, "marks.json"), "utf8"));
+const pwebm = join(pdir, readdirSync(pdir).find((f) => f.endsWith(".webm")));
+const pr = dur(pwebm) / pm.wall_total;
+const P0 = Math.max(0, pm.card * pr - 0.3), P1 = pm.wall_total * pr - 0.2;
+const pplace = [{ at: pm.card * pr - P0 + 0.2, k: "ten6" }, { at: pm.code * pr - P0, k: "ten7" }, { at: pm.approved * pr - P0 + 0.2, k: "ten8" }, { at: pm.top * pr - P0 + 0.2, k: "ketsu0" }];
+// 前の行と重ならないように、置く時刻を後ろへずらす
+for (let i = 1; i < pplace.length; i++) pplace[i].at = Math.max(pplace[i].at, pplace[i - 1].at + clip[pplace[i - 1].k].d);
+const plen = Math.max(P1 - P0, pplace.at(-1).at + clip.ketsu0.d + 0.3);
+const pcode = pm.code * pr - P0;
+ff("-ss", P0.toFixed(3), "-t", (P1 - P0).toFixed(3), "-i", pwebm, ...pplace.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
+  // カードを見せている間に、あとから読み込まれた経過でページが下へずれることがあるので、スクロールした直後のコマを確認コードを入れ始めるまで止めて見せる
+  `[0:v]fps=30,split[p1][p2];[p1]trim=0:0.6,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${(pcode - 0.6).toFixed(2)}[c1];[p2]trim=start=${pcode.toFixed(3)},setpts=PTS-STARTPTS[c2];` +
+  `[c1][c2]concat=n=2:v=1:a=0,tpad=stop_mode=clone:stop_duration=${Math.max(0, plen - (P1 - P0)).toFixed(2)},fade=t=in:st=0:d=0.3[v];` +
+  pplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + pplace.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${pplace.length}:normalize=0,apad[pa]`,
+  "-map", "[v]", "-map", "[pa]", "-t", plen.toFixed(3), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "3b-approve.mp4"));
+console.log("承認の場面", JSON.stringify({ ratio: pr.toFixed(3), place: pplace.map((p) => `${p.k}@${p.at.toFixed(1)}`), len: plen.toFixed(1) }));
 
 // 4. 導入: 本物の管理画面の操作の録画(video/admin)。プラグインを上げる → 有効にする → つなぐ → お知らせの URL を貼って「通知を渡す」。
 // 貼った URL(サーバー会社の名前が入る)の入力欄は、打ち始めからぼかす
@@ -128,6 +150,7 @@ execFileSync("cp", [narratedScene(`KE&d=${kd.join(",")}`, ["ketsu1", "ketsu2", "
 const kiKeys = N.ki.map((_, i) => `ki${i}`).slice(0, -1);
 const kiA = narratedScene(`V&d=${N.ki.map((_, i) => clip[`ki${i}`].d.toFixed(2)).join(",")}`, kiKeys, "ki", kiKeys.length + 1);
 execFileSync("cp", [kiA, join(out, "1-ki.mp4")]);
-writeFileSync(join(out, "all.list"), ["1-ki", "2-intro", "3-film", "4-end"].map((n) => `file '${join(out, n + ".mp4")}'`).join("\n"));
-ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, "full-v1.mp4"));
-console.log("full-v1.mp4", dur(join(W, "full-v1.mp4")).toFixed(1), "秒", JSON.stringify({ ki: dur(join(out, "1-ki.mp4")), intro: dur(join(out, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), end: dur(join(out, "4-end.mp4")) }));
+const OUT = process.env.OUT || "full-v2.mp4";
+writeFileSync(join(out, "all.list"), ["1-ki", "2-intro", "3-film", "3b-approve", "4-end"].map((n) => `file '${join(out, n + ".mp4")}'`).join("\n"));
+ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, OUT));
+console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ ki: dur(join(out, "1-ki.mp4")), intro: dur(join(out, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));

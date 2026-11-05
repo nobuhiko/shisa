@@ -305,6 +305,7 @@
       return /^v/.test(fr) ? { text: '中の部品を、公式の修正版 ' + fr + ' に差し替えた', cls: 'good' } : { text: 'EC-CUBE を、公式の修正版 ' + fr + ' に上げた(お店は開けたまま)', cls: 'good' };
     }
     if (/公式のリリースに上げる/.test(t) && /置いた/.test(r)) return { text: 'EC-CUBE を、部品ごと公式の修正版 ' + t.replace(/^.*: /, '') + ' に上げた', cls: 'good' };
+    if (/直し方を提案する/.test(t) && /管理画面に出した/.test(r) && !st.proposed) { st.proposed = true; return { text: 'お店独自のカスタマイズに弱点 → 直し方を作り、店主の承認を待つ', cls: 'warn' }; }
     return null;
   }
 
