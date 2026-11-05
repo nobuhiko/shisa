@@ -275,8 +275,8 @@ export const CLIENT_TOOLS: Tool[] = [
               title: { type: "string" },
               category: {
                 type: "string",
-                enum: ["php", "eccube", "packages", "tamper", "custom", "exposure", "config", "other"],
-                description: "php: the PHP runtime / eccube: EC-CUBE itself / packages: Composer packages / tamper: modified or unknown files (signs of intrusion) / custom: weaknesses in the shop's own custom code / exposure: information visible from outside / config: weak settings / other",
+                enum: ["php", "eccube", "packages", "tamper", "custom", "exposure", "config", "limits", "other"],
+                description: "php: the PHP runtime / eccube: EC-CUBE itself / packages: Composer packages / tamper: modified or unknown files (signs of intrusion) / custom: weaknesses in the shop's own custom code / exposure: information visible from outside / config: weak settings / limits: what Shisa deliberately does not look at because it holds customers' data (database contents, access logs); at most one such finding, with status not_affected and severity info / other",
               },
               severity: { type: "string", enum: ["high", "medium", "low", "info"] },
               evidence: { type: "string" },

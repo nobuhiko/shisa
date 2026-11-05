@@ -182,8 +182,13 @@
   function judgeOf(x) { return x.status === 'needs_approval' && x.proposal_id ? JUDGE_FIX : x.status === 'needs_human' && x.to === 'developer' ? JUDGE_DEV : (JUDGE[x.status] || JUDGE.not_affected); }
   function stLabelOf(x) { return x.status === 'needs_approval' && x.proposal_id ? '承認すれば Shisa が直す' : x.status === 'needs_human' && x.to === 'developer' ? '制作会社の作業が必要' : (stLabels[x.status] || x.status); }
   function renderHealth(r, meta, animate) {
-    var f = (r && r.findings) || [];
-    if (!f.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
+    var all = (r && r.findings) || [];
+    // Shisa が意図して見ないもの(データベースの中身・アクセスのログ)は、問題の行にせず、表の下の注記にする。
+    // 古い記録(その他の「点検できなかった…」)も同じ扱い
+    function isLimits(x) { return x.category === 'limits' || (x.category === 'other' && /点検できなかった|点検しない|調べない|見ない/.test(x.title || '')); }
+    var hasLimits = all.some(isLimits);
+    var f = all.filter(function (x) { return !isLimits(x); });
+    if (!all.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
     var card = document.getElementById('sh-health-card'), body = document.getElementById('sh-health');
     body.textContent = ''; card.hidden = false;
     var items = HEALTH_ITEMS.slice();
@@ -206,6 +211,10 @@
       return { tr: tr, judge: worst, td: td };
     });
     var when = meta && meta.at ? new Date(meta.at).toLocaleString('ja-JP') : '';
+    var tbl = body.parentNode, note = document.getElementById('sh-health-note');
+    if (!note) { note = el('div', 'text-muted small'); note.id = 'sh-health-note'; note.style.cssText = 'padding:8px 16px;'; tbl.parentNode.insertBefore(note, tbl.nextSibling); }
+    note.textContent = hasLimits ? '店主さんが許せば調べること: データベースの中の表示の内容、アクセスのログ(お客さんの情報が入っているので、許しがあるときだけ見ます)' : '';
+    note.hidden = !hasLimits;
     document.getElementById('sh-health-meta').textContent = (when ? '最後の点検: ' + when : '') + (meta && meta.interval_hours ? ' / 次の点検: ' + meta.interval_hours + ' 時間ごとに自分で' : '');
     if (animate) {
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
