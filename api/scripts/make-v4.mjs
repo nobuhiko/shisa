@@ -66,10 +66,25 @@ const found = order.filter((c) => has(c, (f) => f.status !== "not_affected" && f
   .map((c) => {
     const n = F.filter((f) => f.category === c && f.status !== "not_affected" && f.severity !== "info").length;
     // EC-CUBE の行は、版上げの提案があれば版の数字まで書く(報告で読んだ今の版と、提案の上げ先の版)
-    if (c === "eccube" && upP) return V4.findings_eccube_upgrade.replace("{from}", upP.from_version).replace("{to}", upP.to_version);
-    return V4.findings_labels[c] + (n > 1 ? `(${n} 件)` : "");
+    if (c === "eccube" && upP) return { c, text: V4.findings_eccube_upgrade.replace("{from}", upP.from_version).replace("{to}", upP.to_version) };
+    return { c, text: V4.findings_labels[c] + (n > 1 ? `(${n} 件)` : "") };
   });
-console.log("読む行:", lines.map((l) => l.key).join(","), " 見つけた問題:", found.join(" / "), " 点検:", mins, "分");
+// 見つけた問題を、それを見つけた経過の行の時刻(実際の時計)に結びつける。見つからなければ null(あとで自然な順に置く)
+const stepT = (s) => s.tool || s.kind || "";
+const firstAt = (...preds) => { for (const pr of preds) { const s = steps.find((x) => pr(x, stepT(x), x.title || "", String(x.result || ""))); if (s) return s.at; } return null; };
+const FOUND_AT = {
+  php: () => firstAt((x, t, ti) => t === "判断" && /当てはま/.test(ti) && !/当てはまらない|当てはまりません/.test(ti), (x, t) => t === "サーバーを調べる"),
+  tamper: () => firstAt((x, t) => /^(公式との違いを見る|公式の中身に戻す|隔離する)/.test(t)),
+  eccube: () => firstAt((x, t) => /^(公式の修正を当てる|公式のリリースに上げる): \d/.test(t), (x, t) => /^版上げを提案/.test(t), (x, t, ti) => /EC-CUBE.*(release|リリース|修正版)/i.test(ti)),
+  packages: () => firstAt((x, t) => /部品の弱点|部品の脆弱性/.test(t)),
+  custom: () => firstAt((x, t) => /カスタマイズしたコードの点検/.test(t), (x, t) => CUE.custom(x)),
+  exposure: () => firstAt((x, t, ti, r) => /^外から開く/.test(t) && /見える/.test(r)),
+  config: () => firstAt((x, t) => /^(本番に入れる|小部屋で試す)/.test(t)),
+};
+for (const f of found) f.at = FOUND_AT[f.c] ? FOUND_AT[f.c]() : null;
+// 見つけた順に並べる(時刻が無いものは、あとで隙間に置く)
+found.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+console.log("読む行:", lines.map((l) => l.key).join(","), " 見つけた問題:", found.map((f) => f.text).join(" / "), " 点検:", mins, "分");
 
 // 1. 音声
 const clip = {};
@@ -129,11 +144,7 @@ const origLen = flen + delta;
 // 出力の秒 → 元の早送りの秒
 const toOrig = (t) => (t <= cut ? t : G > 1 && t <= cut + TAIL ? cut + (t - cut) * G : t + delta);
 console.log("話の後の詰め", JSON.stringify({ cut: cut.toFixed(1), endT: endT.toFixed(1), G: G.toFixed(2), saved: delta.toFixed(1) }));
-// 見つけた問題の一覧(画像)を、その行のあいだ重ねる
-const fcard = join(out, "findings.png");
-sh("node", [join(ROOT, "api/scripts/findings-card.cjs"), V4.findings_title, JSON.stringify(found), fcard]);
-const fp = place.find((p) => p.overlay === "findings");
-const ovA = fp ? fp.at - 0.2 : 0, ovB = fp ? fp.at + clip[fp.k].d + 1.6 : 0;
+
 // 右下の札(「点検中も営業中」・時計・ご注文の件数): 点検と同時に録った買い物の記録(video/shopping/marks.json)から、こまごとに作る
 const sdir = process.env.SHOPPING || join(W, "shopping");
 const smarks = JSON.parse(readFileSync(join(sdir, "marks.json"), "utf8"));
@@ -168,22 +179,45 @@ function badgeFrames(name, len, wallOf, showOf) {
 const t0 = steps[0].at, start = cueAt.start - S;
 const Keff = fok ? realSec / (cueAt.end - cueAt.start) : K;
 console.log("早送りの実際の倍率", Keff.toFixed(2), "(名目", K, ")");
+// 見つけた問題の一覧: 見出しだけの札を「書き出していきます」の行で出し、項目は見つけた時刻に 1 行ずつ足す。早送りが終わる(健康診断の表が出る)前に消す
+// 重ねるのは時間を詰める前の早送り(元の秒)なので、時刻は元の秒で決める
+const fdir2 = join(out, "findings"); execFileSync("rm", ["-rf", fdir2]);
+sh("node", [join(ROOT, "api/scripts/findings-card.cjs"), V4.findings_title, JSON.stringify(found.map((f) => f.text)), fdir2]);
+const fp = place.find((p) => p.overlay === "findings");
+const fromOrig = (o) => (o <= cut ? o : G > 1 && o <= endT ? cut + (o - cut) / G : o - delta);
+const ovA = fp ? fp.at - 0.2 : 0;
+const ovB = fp ? toOrig(Math.min(hAt - 0.2, endT2 + 0.4)) : 0;
+{
+  const first = ovA + 1.2, last = ovB - 0.8;
+  const timed = found.map((f) => (f.at == null ? null : start + (f.at - t0) / (Keff * 1000)));
+  // 時刻が無いものは、前後の時刻のあいだ(無ければ均等)に置く
+  let prev = first;
+  found.forEach((f, i) => {
+    let o = timed[i];
+    if (o == null) { const nx = timed.slice(i + 1).find((x) => x != null) ?? last; o = prev + (Math.max(nx, prev + 0.6) - prev) / 2; }
+    o = Math.min(Math.max(o, prev, first), last);
+    f.o = o; prev = o + 0.6;
+  });
+}
+console.log("見つけた問題を出す秒(出力)", found.map((f) => `${f.c}@${fromOrig(f.o).toFixed(1)}`).join(" "));
 const fb = badgeFrames("badge-film", flen, (t) => t0 + Math.max(0, toOrig(t) - start) * Keff * 1000, (t) => t <= endT2 + 0.5);
 const inputs = place.flatMap((p) => ["-i", clip[p.k].file]);
 const ni = place.length;
 const filt = [
   `[0:v]drawbox=x=1896:y=0:w=24:h=24:color=0x2e3e50:t=fill[f0]`,
   `[${ni + 1}:v]format=rgba,fade=t=in:st=${ovA.toFixed(2)}:d=0.3:alpha=1,fade=t=out:st=${(ovB - 0.3).toFixed(2)}:d=0.3:alpha=1[fc]`,
-  `[f0][fc]overlay=0:0:enable='between(t,${ovA.toFixed(2)},${ovB.toFixed(2)})'[f1]`,
+  `[f0][fc]overlay=0:0:enable='between(t,${ovA.toFixed(2)},${ovB.toFixed(2)})'[g0]`,
+  ...found.map((f, i) => `[${ni + 2 + i}:v]format=rgba,fade=t=in:st=${f.o.toFixed(2)}:d=0.45:alpha=1,fade=t=out:st=${(ovB - 0.3).toFixed(2)}:d=0.3:alpha=1[fi${i}];[g${i}][fi${i}]overlay=0:0:enable='between(t,${f.o.toFixed(2)},${ovB.toFixed(2)})'[g${i + 1}]`),
+  `[g${found.length}]null[f1]`,
   G > 1
     ? `[f1]split=3[x0][x1][x2];[x0]trim=0:${cut.toFixed(3)},setpts=PTS-STARTPTS[y0];[x1]trim=${cut.toFixed(3)}:${endT.toFixed(3)},setpts=(PTS-STARTPTS)/${G.toFixed(4)}[y1];[x2]trim=${endT.toFixed(3)}:${origLen.toFixed(3)},setpts=PTS-STARTPTS[y2];[y0][y1][y2]concat=n=3:v=1:a=0[f2]`
     : `[f1]null[f2]`,
-  `[${ni + 2}:v]format=rgba[bd]`,
+  `[${ni + 2 + found.length}:v]format=rgba[bd]`,
   `[f2][bd]overlay=0:0:eof_action=pass[fv]`,
   place.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[a${i}]`).join(";"),
   place.map((_, i) => `[a${i}]`).join("") + `amix=inputs=${ni}:normalize=0,apad[aout]`,
 ].join(";");
-ff("-ss", S.toFixed(3), "-t", origLen.toFixed(3), "-i", webm, ...inputs, "-loop", "1", "-t", origLen.toFixed(3), "-i", fcard, "-framerate", String(BFPS), "-i", join(fb.dir, "b%05d.png"),
+ff("-ss", S.toFixed(3), "-t", origLen.toFixed(3), "-i", webm, ...inputs, "-loop", "1", "-t", origLen.toFixed(3), "-i", join(fdir2, "base.png"), ...found.flatMap((_, i) => ["-loop", "1", "-t", origLen.toFixed(3), "-i", join(fdir2, `item-${i}.png`)]), "-framerate", String(BFPS), "-i", join(fb.dir, "b%05d.png"),
   "-filter_complex", filt, "-map", "[fv]", "-map", "[aout]", "-t", flen.toFixed(3), ...enc, join(out, "3-film.mp4"));
 console.log("承・転", JSON.stringify({ K, realSec: Math.round(realSec), len: flen.toFixed(1), end: endT2.toFixed(1), place: place.map((p) => `${p.k}@${p.at.toFixed(1)}`), orders: fb.frames.at(-1).orders }));
 

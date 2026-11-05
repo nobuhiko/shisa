@@ -589,7 +589,7 @@ const PAGE = String.raw`<!doctype html>
       ['?', '?', '?'].forEach(function (q, i) { var e = el('i', 'kv-q', q); e.style.setProperty('--i', i); nt.appendChild(e); });
       // 6. 時間の帯
       var tl = layer('kv-time');
-      tl.innerHTML = '<div class="row"><label>弱点の公表</label><div class="bar pub"><span>10/21</span></div></div>'
+      tl.innerHTML = '<div class="row"><label>脆弱性の公表</label><div class="bar pub"><span>10/21</span></div></div>'
         + '<div class="row"><label>攻撃</label><div class="bar atk"><span>同じ日から</span></div></div>'
         + '<div class="row"><label>頼む先を探す</label><div class="bar ask"><span>…</span></div></div>'
         + '<small class="src"></small>';

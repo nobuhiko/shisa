@@ -26,6 +26,17 @@ for (const sec of ["ki", "intro", "sho", "ten", "ketsu"]) N[sec].forEach((l, i) 
   clip[key] = { file: f + ".wav", d: dur(f + ".wav") };
 });
 
+// 行の目印の四角を、背景の色で塗りつぶす(場面 V・KE の録画)
+const MARK = "drawbox=x=1896:y=1056:w=24:h=24:color=0x0d172a:t=fill";
+// ONLY=ki: 起(場面 V)だけを作り直して video/full/1-ki.mp4 を置き換える(台本の言い回しを変えたとき。ほかの部品はそのまま)
+if (process.env.ONLY === "ki") {
+  const kiKeys = N.ki.map((_, i) => `ki${i}`).slice(0, -1);
+  const kiA = narratedScene(`V&d=${N.ki.map((_, i) => clip[`ki${i}`].d.toFixed(2)).join(",")}`, kiKeys, "ki", kiKeys.length + 1);
+  execFileSync("cp", [kiA, join(out, "1-ki.mp4")]);
+  console.log("1-ki.mp4", dur(join(out, "1-ki.mp4")).toFixed(1), "秒");
+  process.exit(0);
+}
+
 // 2. 止めどころ(撮影モードで止まる順)ごとに読む行。止まる長さは読む行の長さの合計
 // 止めどころは帯の言葉で探す(番号は記録や撮影モードの直しでずれるので)。まず短く流して、止まる順を取る
 const RULES = [[/当てはま/, ["sho1"]], [/500/, ["sho2", "sho3"]], [/別の手|500.*(効く|効き)|(効く|効き).*500/, ["sho4"]], [/本番の /, ["sho5"]], [/開けたまま守|閉めずに|営業を続け/, ["sho6"], "sho5"], [/公式の中身に戻した/, ["ten0", "ten1"]], [/EC-CUBE を、/, ["ten2"]], [/中の部品を/, ["ten3", "ten4"], "ten2"], [/カスタマイズのページ.*弱点を見つけた/, ["ten5"]], [/店主さんが決める/, ["ten6"]]];
@@ -112,7 +123,6 @@ ff("-ss", String(A0), "-t", String(A1 - A0), "-i", awebm, ...iplace.flatMap((p) 
   "-map", "[v]", "-map", "[ia]", "-t", String(ilen), "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-ar", "48000", "-ac", "2", join(out, "2-intro.mp4"));
 
 // 行の目印(場面の右下の四角が白黒に反転する)を録画の中で探す。録画は時計どおりに進まないので、音声はこの時刻に置く
-const MARK = "drawbox=x=1896:y=1056:w=24:h=24:color=0x0d172a:t=fill";
 function lineFlips(webm, x = 1902, y = 1062) {
   const txt = execFileSync("ffmpeg", ["-v", "error", "-i", webm, "-vf", `crop=12:12:${x}:${y},signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-`, "-f", "null", "-"]).toString();
   // 読み込み前の白い画面は目印ではない。場面の黒い四角が出てから、反転を数える
