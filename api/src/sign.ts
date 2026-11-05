@@ -43,6 +43,11 @@ export async function responseSignature(secret: string, nonce: string, body: str
   return hmacHex(secret, `SH1-RES\n${nonce}\n${await sha256Hex(body)}`);
 }
 
+// API → お店(プラグイン)の返事の署名。窓口の返事(SH1-RES)と取り違えないよう、別の頭にする
+export async function apiResponseSignature(secret: string, nonce: string, body: string) {
+  return hmacHex(secret, `SH1-API-RES\n${nonce}\n${await sha256Hex(body)}`);
+}
+
 export const TIME_WINDOW_SEC = 300;
 export const NONCE_TTL_SEC = 600;
 

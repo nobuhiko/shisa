@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // API の入口(docs/api.md の「店 → API」)
 import { Hono, type Context } from "hono";
-import { verifyRequest, randomHex, NONCE_TTL_SEC } from "./sign.js";
+import { verifyRequest, randomHex, NONCE_TTL_SEC, apiResponseSignature } from "./sign.js";
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store, Proposal } from "./store.js";
@@ -41,6 +41,12 @@ export function createApp(store: Store, kick: (runId: string) => void) {
   }
 
   const unauthorized = (c: Context) => c.json({ ok: false, error: "unauthorized" }, 401);
+  // 承認にかかわる返事には署名を付ける(プラグインが確かめる。途中で書き換えられた提案を承認させないため)。呼び出しの nonce に結びつける
+  async function signedJson(c: Context, shop: Shop, data: unknown, status = 200) {
+    const body = JSON.stringify(data);
+    const nonce = c.req.header("x-sh-nonce") ?? "";
+    return c.body(body, status as any, { "Content-Type": "application/json", "X-SH-Api-Signature": await apiResponseSignature(shop.secret, nonce, body) });
+  }
 
   app.get("/health", (c) => c.json({ ok: true }));
 
@@ -104,15 +110,15 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     const shop = await authShop(c, c.req.param("id"), "");
     if (!shop) return unauthorized(c);
     const list = (await store.listProposals(shop.shop_id)).filter((p) => p.status !== "superseded").slice(0, 20);
-    return c.json({ ok: true, proposals: list.map(proposalOut) });
+    return signedJson(c, shop, { ok: true, proposals: list.map(proposalOut) });
   });
 
   app.get("/v1/shops/:id/proposals/:pid", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");
     if (!shop) return unauthorized(c);
     const p = await store.getProposal(c.req.param("pid"));
-    if (!p || p.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
-    return c.json({ ok: true, proposal: proposalOut(p) });
+    if (!p || p.shop_id !== shop.shop_id) return signedJson(c, shop, { ok: false, error: "not_found" }, 404);
+    return signedJson(c, shop, { ok: true, proposal: proposalOut(p) });
   });
 
   // 承認の印は、お店の管理画面(プラグイン)がお店の中の承認の鍵で作る。API は印を作れず、窓口へ取り次ぐだけ
@@ -121,11 +127,11 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     const shop = await authShop(c, c.req.param("id"), body);
     if (!shop) return unauthorized(c);
     const p = await store.getProposal(c.req.param("pid"));
-    if (!p || p.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
-    if (p.status !== "pending") return c.json({ ok: false, error: "not_pending", detail: "この提案はもう決まっています", status: p.status }, 409);
+    if (!p || p.shop_id !== shop.shop_id) return signedJson(c, shop, { ok: false, error: "not_found" }, 404);
+    if (p.status !== "pending") return signedJson(c, shop, { ok: false, error: "not_pending", detail: "この提案はもう決まっています", status: p.status }, 409);
     let req: any;
-    try { req = JSON.parse(body); } catch { return c.json({ ok: false, error: "bad_request" }, 400); }
-    return c.json(await applyApproved(shop, store, p, req?.approval));
+    try { req = JSON.parse(body); } catch { return signedJson(c, shop, { ok: false, error: "bad_request" }, 400); }
+    return signedJson(c, shop, await applyApproved(shop, store, p, req?.approval));
   });
 
   return app;

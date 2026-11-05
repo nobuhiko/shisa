@@ -856,6 +856,16 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
 // ---- 店主の承認で直す ----
 // 承認の鍵はお店の中にしかない。ここでは提案を作って控えるだけで、書くのは店主が承認したあと(applyApproved)
 const PROPOSAL_MAX = 262144;
+// 承認の直しは小さく: 先頭と末尾の同じ行を除いた「変わる範囲」の行数の上限(窓口と同じ数)
+export const PROPOSAL_MAX_LINES = 200;
+export function changedSpan(oldText: string, newText: string): number {
+  const a = oldText.split(/\r\n|\n|\r/), b = newText.split(/\r\n|\n|\r/);
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0;
+  while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  return Math.max(a.length - i - j, b.length - i - j);
+}
 async function approveInfo(shop: Shop): Promise<{ ready: boolean; dirs: string[] }> {
   const r = await callReceiver(shop, "inspect", { sections: ["paths"] });
   if (!r.ok) throw new Error(`inspect: ${r.error}`);
@@ -875,6 +885,7 @@ export async function proposeFix(shop: Shop, ctx: ToolContext, input: any): Prom
   if (!r.result.exists) throw new Error("今あるファイルだけ直せます(新しいファイルは作りません)");
   const current = String(r.result.content);
   if (current === newContent) throw new Error("今の中身と同じです");
+  if (changedSpan(current, newContent) > PROPOSAL_MAX_LINES) throw new Error(`変わる行が多すぎます(${PROPOSAL_MAX_LINES} 行まで)。承認の直しは小さな直しだけです。制作会社への依頼にしてください`);
   const extra = Array.isArray(input.extra_verify_paths) ? input.extra_verify_paths.filter((p: unknown): p is string => typeof p === "string" && /^\/[A-Za-z0-9._~\-/%?=&]*$/.test(p)).slice(0, 2) : [];
   const p: Proposal = {
     proposal_id: `prp_${randomHex(8)}`,
@@ -907,6 +918,11 @@ export async function applyApproved(shop: Shop, store: Store, p: Proposal, appro
     && typeof approval.sig === "string" && Number.isInteger(approval.expires_at);
   if (!ok) return { ok: false as const, error: "approval_mismatch", detail: "承認の印が提案と合いません" };
   const r = await callReceiver(shop, "apply_approved_fix", { approval, content: p.new_content, verify: { paths: p.verify_paths, timeout_sec: 8 } }, 45_000);
+  // 提案の状態を変えるのは、窓口が実際に書いた(書いて戻した)ときだけ。印が合わない・期限切れ・使い回し・食い違いなどで断られたときは、
+  // 提案はそのまま(偽の承認を送って、正しい提案を潰せないように)
+  if (!r.ok && ["not_approved", "approval_expired", "approval_used", "conflict", "no_approval_key", "bad_content", "too_large_change", "php_syntax", "bad_target"].includes(String(r.error))) {
+    return { ok: false as const, status: p.status, error: r.error, detail: r.detail };
+  }
   const status: Proposal["status"] = !r.ok ? "failed" : r.result.rolled_back ? "rolled_back" : "applied";
   await store.putProposal({ ...p, status, decided_at: Date.now(), result: r.ok ? r.result : { error: r.error, detail: r.detail } });
   // 点検の経過にも残す(管理画面で、承認して直したことが流れるように)
