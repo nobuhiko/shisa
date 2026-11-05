@@ -92,7 +92,42 @@ class ApiClient
         return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/runs', '', $c);
     }
 
-    private function request($method, $base, $path, $body, $signWith)
+    public function listProposals()
+    {
+        $c = $this->config();
+
+        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals', '', $c);
+    }
+
+    public function getProposal($proposalId)
+    {
+        $c = $this->config();
+
+        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId), '', $c);
+    }
+
+    /** 承認の印を API に渡す(API は窓口に取り次ぐだけ。印はお店の中の鍵で作ったもの) */
+    public function approve($proposalId, array $approval)
+    {
+        $c = $this->config();
+        $body = json_encode(['approval' => $approval], JSON_UNESCAPED_SLASHES);
+
+        return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/approve', $body, $c, 60);
+    }
+
+    public function shopId()
+    {
+        $c = $this->config();
+
+        return $c ? $c['shop_id'] : null;
+    }
+
+    public function root()
+    {
+        return $this->root;
+    }
+
+    private function request($method, $base, $path, $body, $signWith, $timeout = 25)
     {
         $headers = ['Content-Type: application/json'];
         if ($signWith) {
@@ -106,7 +141,7 @@ class ApiClient
         }
         $ch = curl_init($base.$path);
         curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => $method, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 25,
+            CURLOPT_CUSTOMREQUEST => $method, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_HTTPHEADER => $headers, CURLOPT_FOLLOWLOCATION => false,
         ]);
         if ($method !== 'GET') {

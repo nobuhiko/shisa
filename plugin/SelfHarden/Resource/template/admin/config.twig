@@ -52,6 +52,17 @@
   .sh-steps li.k-decision { font-weight: bold; color: #1b5e20; }
   body.sh-big .sh-steps { font-size: 18px; max-height: 60vh; } body.sh-big .sh-steps time { font-size: 15px; }
   body.sh-big .sh-steps .tool { font-size: 13px; } body.sh-big .sh-report { font-size: 17px; }
+  .sh-fix { border: 1px solid #e1d5ee; border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; }
+  .sh-fix h4 { font-size: 16px; font-weight: bold; margin: 0 0 6px; }
+  .sh-fix .path { font-family: monospace; font-size: 12px; color: #666; }
+  .sh-fix .owner { white-space: pre-wrap; margin: 8px 0; }
+  .sh-fix-diff { font-family: monospace; font-size: 12px; background: #fafafa; border: 1px solid #eee; padding: 6px 0; max-height: 320px; overflow: auto; margin: 8px 0; }
+  .sh-fix-diff div { white-space: pre-wrap; word-break: break-all; padding: 0 10px; }
+  .sh-fix-diff .del { background: #fde0e0; } .sh-fix-diff .add { background: #e3f6e3; } .sh-fix-diff .gap { color: #999; }
+  .sh-fix .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .sh-fix-result { margin-top: 8px; font-weight: bold; } .sh-fix-result.ok { color: #2e7d32; } .sh-fix-result.ng { color: #b00020; }
+  .sh-fix details { margin-top: 8px; } .sh-fix details pre { white-space: pre-wrap; background: #f7f7f7; padding: 8px; font-size: 13px; }
+  body.sh-big .sh-fix { font-size: 17px; } body.sh-big .sh-fix-diff { font-size: 15px; }
 </style>
 {% endblock %}
 
@@ -92,6 +103,11 @@
           <ul class="sh-steps" id="sh-steps"></ul>
           <div class="sh-report" id="sh-report" hidden></div>
         </div>
+      </div>
+
+      <div class="card rounded border-0 mb-4" id="sh-fix-card" hidden>
+        <div class="card-header"><span>店主の承認で直せること</span> <span class="ml-2 text-muted small">中身を見て「承認して直す」を押すと、Shisa が控えを取ってから直し、すぐにお店を開いて確かめます。開けなくなったら、その場で元に戻します</span></div>
+        <div class="card-body" id="sh-fix-list"></div>
       </div>
 
       {% if runs|length > 0 %}
@@ -159,8 +175,9 @@
   var JUDGE = { needs_human: [6, 'サーバー会社の作業', 'j-human'], needs_approval: [5, '店主の判断を待つ', 'j-approve'], scheduled: [4, '次の点検で Shisa が対応', 'j-next'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
   // 人に渡す作業のうち、カスタマイズしたコードの直しは制作会社の作業として出す(報告の項目の to: developer)
   var JUDGE_DEV = [6, '制作会社の作業', 'j-human'];
-  function judgeOf(x) { return x.status === 'needs_human' && x.to === 'developer' ? JUDGE_DEV : (JUDGE[x.status] || JUDGE.not_affected); }
-  function stLabelOf(x) { return x.status === 'needs_human' && x.to === 'developer' ? '制作会社の作業が必要' : (stLabels[x.status] || x.status); }
+  var JUDGE_FIX = [5, '承認すれば直せる', 'j-approve'];
+  function judgeOf(x) { return x.status === 'needs_approval' && x.proposal_id ? JUDGE_FIX : x.status === 'needs_human' && x.to === 'developer' ? JUDGE_DEV : (JUDGE[x.status] || JUDGE.not_affected); }
+  function stLabelOf(x) { return x.status === 'needs_approval' && x.proposal_id ? '承認すれば Shisa が直す' : x.status === 'needs_human' && x.to === 'developer' ? '制作会社の作業が必要' : (stLabels[x.status] || x.status); }
   function renderHealth(r, meta, animate) {
     var f = (r && r.findings) || [];
     if (!f.some(function (x) { return x.category; })) return; // 項目の付いていない古い報告では出さない
@@ -202,7 +219,7 @@
     if (r.status) { reportEl.appendChild(el('h3', null, 'いまの守り')); reportEl.appendChild(el('p', 'summary', r.status)); }
     var sections = [
       ['したこと', r.actions, function (a) { var li = el('li', null, a.title + ' — ' + a.target); li.appendChild(el('div', 'text-muted small', '確かめ方: ' + a.verified + (a.backup_id ? '(退避: ' + a.backup_id + ')' : ''))); return li; }],
-      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + stLabelOf(f) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); return li; }],
+      ['見つけたこと', r.findings, function (f) { var li = el('li'); li.appendChild(el('span', 'sev sev-' + f.severity, sevLabels[f.severity] || f.severity)); li.appendChild(document.createTextNode(f.title + '(' + stLabelOf(f) + ')')); li.appendChild(el('div', 'text-muted small', f.evidence)); if (f.proposal_id) li.appendChild(el('div', 'small text-primary', '→ 直し方を「店主の承認で直せること」に用意しました')); return li; }],
       ['これから Shisa がやること', r.next_by_self_harden, function (x) { return el('li', null, x.title + (x.when ? '(' + x.when + ')' : '')); }],
       ['お願い(依頼文つき)', r.requests, function (x) {
         var li = el('li', null, x.title + '(宛先: ' + x.to + ')');
@@ -335,7 +352,7 @@
             // 判断の行が無い古い記録だけ、報告に書かれた「公開を止めなかった」を出す
             var r = d.report || {}, notStop = !st.decidedOpen && (r.findings || []).concat(r.actions || []).some(function (x) { return /Deny from all|公開を止め|公開の停止|公開停止/.test(JSON.stringify(x)); });
             var finish = function () {
-              renderReport(r); maskTree(reportEl); badge.textContent = '実際の動作(記録の早送り)・終わり';
+              renderReport(r); maskTree(reportEl); badge.textContent = '実際の動作(記録の早送り)・終わり'; loadProposals();
               if (r.findings && r.findings.some(function (x) { return x.category; })) {
                 showBand('お店の健康診断: 項目ごとに、効く手を打った', 'good');
                 // 撮影のときは、健康診断の表だけを大きく出す
@@ -370,10 +387,93 @@
         shown = d.steps.length;
         stepsEl.scrollTop = stepsEl.scrollHeight;
         if (d.status === 'running') { timer = setTimeout(function () { poll(runId); }, 2500); }
-        else { renderReport(d.report); renderHealth(d.report, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, false); timer = setTimeout(watchNew, 10000); }
+        else { renderReport(d.report); renderHealth(d.report, { at: d.steps.length ? d.steps[d.steps.length - 1].at : null, interval_hours: d.interval_hours }, false); loadProposals(); timer = setTimeout(watchNew, 10000); }
       })
       .catch(function () { timer = setTimeout(function () { poll(runId); }, 5000); });
   }
+
+  // ---- 店主の承認で直す ----
+  var proposalsUrl = '{{ url('self_harden_admin_proposals') }}';
+  var approveBase = '{{ url('self_harden_admin_config') }}'.replace(/config$/, 'approve/');
+  var fixCard = document.getElementById('sh-fix-card'), fixList = document.getElementById('sh-fix-list');
+  // 今の中身と書く中身を、行ごとに見比べる(お店の中で読んだ今の中身と比べるので、見せたものと書くものがずれない)
+  function lineDiff(a, b) {
+    var A = a.split('\n'), B = b.split('\n'), n = A.length, m = B.length;
+    if (n * m > 4000000) return null;
+    var w = m + 1, dp = new Int32Array((n + 1) * w);
+    for (var i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) dp[i * w + j] = A[i] === B[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    var ops = []; i = 0; j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && A[i] === B[j]) { ops.push([' ', A[i]]); i++; j++; }
+      else if (j < m && (i >= n || dp[i * w + j + 1] >= dp[(i + 1) * w + j])) { ops.push(['+', B[j]]); j++; }
+      else { ops.push(['-', A[i]]); i++; }
+    }
+    return ops;
+  }
+  function diffEl(cur, next) {
+    var box = el('div', 'sh-fix-diff'), ops = lineDiff(cur, next);
+    if (!ops) { box.appendChild(el('div', 'gap', '(大きすぎて見比べられません)')); return box; }
+    var keep = ops.map(function (o, k) { for (var d = -2; d <= 2; d++) { var x = ops[k + d]; if (x && x[0] !== ' ') return true; } return false; }), gap = false;
+    ops.forEach(function (o, k) {
+      if (!keep[k]) { if (!gap) box.appendChild(el('div', 'gap', '…')); gap = true; return; }
+      gap = false; box.appendChild(el('div', o[0] === '+' ? 'add' : o[0] === '-' ? 'del' : '', (o[0] === ' ' ? '  ' : o[0] + ' ') + o[1]));
+    });
+    return box;
+  }
+  function renderProposals(d) {
+    var list = (d && d.ok && d.proposals) || [];
+    var show = list.filter(function (p) { return p.status === 'pending' || ((p.status === 'applied' || p.status === 'rolled_back') && p.decided_at && Date.now() - p.decided_at < 86400000); });
+    fixList.textContent = '';
+    fixCard.hidden = !show.length;
+    show.forEach(function (p) {
+      var box = el('div', 'sh-fix'); box.id = 'sh-fix-' + p.proposal_id;
+      box.appendChild(el('h4', null, p.title || '直し方の提案'));
+      box.appendChild(el('div', 'path', p.path));
+      box.appendChild(el('p', 'owner', p.owner_text));
+      var res = el('div', 'sh-fix-result'); res.id = 'sh-fix-result-' + p.proposal_id;
+      if (p.status === 'pending') {
+        if (typeof p.current === 'string' && typeof p.new_content === 'string') box.appendChild(diffEl(p.current, p.new_content));
+        var act = el('div', 'actions');
+        var btn = el('button', 'btn btn-ec-conversion sh-approve-btn', '承認して直す'); btn.type = 'button'; btn.id = 'sh-approve-' + p.proposal_id;
+        if (p.changed || !p.content_ok) { btn.disabled = true; res.className = 'sh-fix-result ng'; res.textContent = p.changed ? '提案のあとにファイルが変わっています。次の点検で提案し直します' : '提案の中身が合わないので、承認できません'; }
+        btn.addEventListener('click', function () { approve(p, btn, res); });
+        act.appendChild(btn);
+        act.appendChild(el('span', 'text-muted small', 'リスクは店主さんが取ります。控えから、いつでも元に戻せます'));
+        box.appendChild(act);
+      } else {
+        res.className = 'sh-fix-result ' + (p.status === 'applied' ? 'ok' : 'ng');
+        res.textContent = p.status === 'applied' ? '承認して直しました(控えを取ってから書き、お店を開いて確かめました)' : 'お店が開けなくなったので、すぐに元に戻しました';
+      }
+      box.appendChild(res);
+      if (p.developer_text) {
+        var det = el('details'); det.appendChild(el('summary', null, '自分で直すのが不安なら: 制作会社に渡す説明'));
+        det.appendChild(el('pre', null, p.developer_text));
+        var cp = el('button', 'btn btn-sm btn-ec-regular', '説明をコピー'); cp.type = 'button';
+        cp.addEventListener('click', function () { try { navigator.clipboard.writeText(p.developer_text); cp.textContent = 'コピーしました'; } catch (e) {} });
+        det.appendChild(cp); box.appendChild(det);
+      }
+      fixList.appendChild(box);
+    });
+    return show;
+  }
+  function loadProposals() {
+    return fetch(proposalsUrl, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(renderProposals).catch(function () { return []; });
+  }
+  function approve(p, btn, res) {
+    btn.disabled = true; res.className = 'sh-fix-result'; res.textContent = '控えを取って直し、お店を開いて確かめています…';
+    var body = new URLSearchParams({ _token: token });
+    fetch(approveBase + encodeURIComponent(p.proposal_id), { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var v = d.result && d.result.verify ? d.result.verify.map(function (x) { return x.path + ' ' + x.status; }).join('、') : '';
+        if (d.ok && d.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = '直しました。控えを取ってから書き、お店を開いて確かめました(' + v + ')'; }
+        else if (d.ok && d.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = 'お店が開けなくなったので、すぐに元に戻しました(' + v + ')'; }
+        else { res.className = 'sh-fix-result ng'; res.textContent = '直せませんでした: ' + (d.detail || d.error || ''); btn.disabled = false; }
+        window.__shApproved = d.status || 'failed';
+      })
+      .catch(function () { res.className = 'sh-fix-result ng'; res.textContent = '直せませんでした(つながりませんでした)'; btn.disabled = false; window.__shApproved = 'failed'; });
+  }
+  window.__shFix = { load: loadProposals };
 
   function open(runId) {
     clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
@@ -421,7 +521,7 @@
   });
   var now = document.getElementById('sh-now');
   if (now) now.addEventListener('click', function () { begin(now, null); });
-  {% if connected %}if (!new URLSearchParams(location.search).get('replay') && !new URLSearchParams(location.search).get('film')) watchNew();{% endif %}
+  {% if connected %}if (!new URLSearchParams(location.search).get('replay') && !new URLSearchParams(location.search).get('film')) { watchNew(); loadProposals(); }{% endif %}
   document.querySelectorAll('.sh-open').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); open(a.getAttribute('data-run')); }); });
   document.querySelectorAll('.sh-replay').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); replay(a.getAttribute('data-run')); }); });
   // ?replay=<run_id>&seconds=<全体の秒数> で開くと、すぐに再生する(撮影用)
