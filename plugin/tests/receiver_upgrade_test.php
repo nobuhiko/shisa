@@ -193,12 +193,16 @@ $orig = file_get_contents($constant);
 file_put_contents($constant, "<?php\nclass Constant { const VERSION = '4.2.3-p2'; }\n");
 file_put_contents($shop . '/src/NewInRelease.php', "<?php // new\n");
 file_put_contents($shop . '/.maintenance', '');
+// 門(.htaccess の 503)も立っていた
+$gateHt = "# >>> self-harden upgrade gate(テスト)\nRewriteRule ^ - [R=503,L]\n# <<< self-harden upgrade gate\n# shop\n";
+file_put_contents($shop . '/.htaccess', $gateHt);
 $p1 = $mkjob(['status' => 'running', 'step' => 'files'], ['files/src/Eccube/Common/Constant.php' => $orig, 'created.txt' => "src/NewInRelease.php\n"]);
 $r = $land($p1);
 $s1 = $state($p1);
 check('ファイルの置き換え中に止まった作業は、次の ping で控えから戻る', ($s1['status'] ?? '') === 'rolled_back' && file_get_contents($constant) === $orig, json_encode($s1['log'] ?? null, JSON_UNESCAPED_UNICODE));
 check('戻したら、版上げで増えたファイルも消える', !file_exists($shop . '/src/NewInRelease.php'));
 check('戻したら、メンテナンスを外す', !file_exists($shop . '/.maintenance'));
+check('戻したら、門(.htaccess の 503)も外す。お店のもとの設定は残る', file_get_contents($shop . '/.htaccess') === "# shop\n");
 $jobs1 = $r['json']['result']['upgrade_jobs'] ?? [];
 check('ping の返事に、作業の様子が出る(点検の報告に使う)', (bool) array_filter($jobs1, function ($j) use ($p1) { return $j['proposal_id'] === $p1 && $j['status'] === 'rolled_back'; }));
 // 2) まだお店に書く前(配布物を広げる段)で止まった: 断って片付ける。メンテナンスにはしない
@@ -223,6 +227,7 @@ $r = $land($p5);
 $s5 = $state($p5);
 $j5 = array_values(array_filter($r['json']['result']['upgrade_jobs'] ?? [], function ($j) use ($p5) { return $j['proposal_id'] === $p5; }));
 check('自動で戻せないときは stuck にして、メンテナンスのまま止める', ($s5['status'] ?? '') === 'stuck' && file_exists($shop . '/.maintenance'));
+check('stuck でも門は外す(店主が管理画面に入って戻すボタンを押せるように)', strpos((string) @file_get_contents($shop . '/.htaccess'), 'self-harden upgrade gate') === false);
 check('stuck のときは、店主にわかる案内(メンテナンス中・戻すボタン・外し方)を出す', isset($j5[0]['owner_message']) && strpos($j5[0]['owner_message'], 'メンテナンス中') !== false
     && strpos($j5[0]['owner_message'], '止まった作業を戻す') !== false && strpos($j5[0]['owner_message'], 'メンテナンス管理') !== false && $j5[0]['maintenance'] === true);
 @unlink($shop . '/.maintenance');
@@ -234,6 +239,40 @@ call('ping');
 check('目印が無ければ、止まったとみなすのは 10 分後(100 秒では手を出さない)', ($state($p6)['status'] ?? '') === 'running');
 @unlink($shop . '/var/self-harden/upgrade/' . $p6 . '/state.json');
 check('データベースの入口は、窓口の読む・隔離するの外(守る場所)', err(call('read_file', ['path' => 'self-harden-upgrade.php'])) === 'not_readable');
+
+echo "版上げの門(.htaccess の 503)を放置しない\n";
+// ここまでのテストで始めた作業(running のまま)を終わらせておく
+foreach (glob($shop . '/var/self-harden/upgrade/prp_*/state.json') as $f) {
+    $x = json_decode(file_get_contents($f), true);
+    if (in_array($x['status'] ?? '', ['running', 'rolling_back'], true)) {
+        $x['status'] = 'refused';
+        file_put_contents($f, json_encode($x));
+    }
+}
+file_put_contents($shop . '/.htaccess', $gateHt);
+$pa = $mkjob(['status' => 'running', 'step' => 'files', 'updated_at' => time() + 60]);
+call('ping');
+check('動いている版上げがあるあいだは、門を外さない', strpos(file_get_contents($shop . '/.htaccess'), 'self-harden upgrade gate') !== false);
+@unlink($shop . '/var/self-harden/upgrade/' . $pa . '/state.json');
+file_put_contents($shop . '/.htaccess', $gateHt);
+call('ping');
+check('動いている版上げが無いのに門だけ残っていたら、次の ping で外す', file_get_contents($shop . '/.htaccess') === "# shop\n");
+file_put_contents($shop . '/.htaccess', $gateHt);
+@unlink($shop . '/var/self-harden/gate-check');
+$ch = curl_init($base . '/self-harden.php?sh_gate=1');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20]);
+$page = (string) curl_exec($ch);
+$code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+check('門の画面は 503 で「メンテナンス中」を出す(認証は要らない)', $code === 503 && strpos($page, 'メンテナンス中') !== false);
+check('門の画面を見た人がいたら、動いている版上げが無い門は外す(API が来なくても)', file_get_contents($shop . '/.htaccess') === "# shop\n");
+$ch = curl_init($base . '/self-harden.php?sh_gate=1');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => 'a=1', CURLOPT_TIMEOUT => 20]);
+curl_exec($ch);
+$code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+check('元の要求が POST(注文など)でも、門の画面は 503', $code === 503);
+@unlink($shop . '/.htaccess');
 
 echo "データベースの入口(self-harden-upgrade.php)\n";
 [$c] = runner([]);
@@ -254,6 +293,14 @@ file_put_contents($dir . '/runner-token', str_repeat('e', 64));
 file_put_contents($dir . '/state.json', json_encode(['pid' => $pid, 'status' => 'running', 'step' => 'db']));
 [$c, $j] = runner(['job' => $pid, 'token' => str_repeat('e', 64)]);
 check('合図が合っても、上げ先の版が置き場に無ければ何も読み込まない', $c === 200 && isset($j['error']) && $j['error'] === 'no_stage');
+file_put_contents($dir . '/runner-token', str_repeat('f', 64));
+file_put_contents($dir . '/state.json', json_encode(['pid' => $pid, 'status' => 'running', 'step' => 'warmup']));
+[$c, $j] = runner(['job' => $pid, 'token' => str_repeat('f', 64)]);
+check('キャッシュの作り直しの段では、お店の EC-CUBE が無ければ何も読み込まない', $c === 200 && isset($j['error']) && $j['error'] === 'no_app');
+file_put_contents($dir . '/runner-token', str_repeat('a', 64));
+file_put_contents($dir . '/state.json', json_encode(['pid' => $pid, 'status' => 'rolling_back', 'step' => 'warmup']));
+[$c] = runner(['job' => $pid, 'token' => str_repeat('a', 64)]);
+check('戻しの途中で、作り直しの段(rb_warmup)でなければ何もしない(404)', $c === 404);
 [$c] = runner(['job' => '../../etc', 'token' => str_repeat('e', 64)]);
 check('作業の名前の形が違えば何もしない(404)', $c === 404);
 

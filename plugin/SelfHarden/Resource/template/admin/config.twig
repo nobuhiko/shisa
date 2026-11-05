@@ -571,9 +571,9 @@
   // ---- 店主の承認で、同じ系列の公式の修正版に上げる(データベースの作り変えを含む) ----
   var upTimer = null, upRunning = false;
   var UP_STEPS = { fetch: '公式の配布物を取る', stage: '上げ先の版を広げる', fetch_from: '今の版の配布物を取る', plan: 'カスタマイズを見分ける',
-    maint_on: 'メンテナンスに入れる', db_backup: 'データベースの控え', db: 'データベースの作り変え', files: 'ファイルの置き換え', cache: 'キャッシュを消す',
+    maint_on: 'メンテナンスに入れる', db_backup: 'データベースの控え', db: 'データベースの作り変え', gate_on: 'お店の入口をメンテナンス表示に', files: 'ファイルの置き換え', cache: 'キャッシュを消す', warmup: 'キャッシュを作り直す', gate_off: 'メンテナンス表示を外す',
     maint_off: 'メンテナンスを外す', verify: 'お店を開いて確かめる', done: '終わり', rb_maint_on: '戻す: メンテナンス', rb_files: '戻す: ファイル', rb_db: '戻す: データベース',
-    rb_cache: '戻す: キャッシュ', rb_maint_off: '戻す: メンテナンスを外す', rb_verify: '戻す: 確かめる', rolled_back: '元に戻した' };
+    rb_cache: '戻す: キャッシュ', rb_warmup: '戻す: キャッシュを作り直す', rb_maint_off: '戻す: メンテナンスを外す', rb_verify: '戻す: 確かめる', rolled_back: '元に戻した' };
   function renderUpgrade(p, d) {
     var box = el('div', 'sh-fix sh-upgrade'); box.id = 'sh-fix-' + p.proposal_id;
     box.appendChild(el('h4', null, p.title || ('EC-CUBE を ' + p.to_version + ' に上げる')));
@@ -630,12 +630,21 @@
     var cut = ac ? setTimeout(function () { ac.abort(); }, 10000) : null;
     return fetch(proposalsUrl, { credentials: 'same-origin', signal: ac ? ac.signal : undefined }).then(function (r) {
       clearTimeout(cut);
-      // EC-CUBE の版が変わると、管理画面のログインが切れることがある(ログインの画面へ回される)
+      // ファイルを置き換えてキャッシュを作り直すあいだは、お店の入口ごと「メンテナンス中」(503)になる。そのあいだは待つ
+      if (r.status === 503) throw { gate: true };
+      // 万一ログインの画面へ回されたときも、すぐには諦めず、少し待って見に行き直す(版上げが終われば戻る)
       if (r.redirected && /\/login/.test(r.url)) throw { relogin: true };
       return r.json();
     }).then(renderProposals)
       .catch(function (e) {
-        if (upRunning && e && e.relogin) {
+        if (upRunning && e && e.gate) {
+          var gb = document.querySelector('.sh-upgrade .sh-fix-result');
+          if (gb) { gb.className = 'sh-fix-result'; gb.textContent = '版上げ中です。ファイルを置き換えているあいだは、お店(この管理画面も)が「メンテナンス中」の画面になります。終わったら、ここに結果が出ます'; }
+          window.__shUpgradeGate = true;
+          clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 3000);
+        } else if (upRunning && e && e.relogin && (window.__shRelogin = (window.__shRelogin || 0) + 1) <= 5) {
+          clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000);
+        } else if (upRunning && e && e.relogin) {
           upRunning = false; clearTimeout(upTimer);
           var box = document.querySelector('.sh-upgrade .sh-fix-result');
           if (box) { box.className = 'sh-fix-result'; box.textContent = 'EC-CUBE の版が変わったので、管理画面のログインが切れました。もう一度ログインして、この画面を開くと結果が出ます'; }

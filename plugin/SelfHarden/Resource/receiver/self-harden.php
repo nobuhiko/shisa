@@ -2121,6 +2121,93 @@ function sh_upgrade_maintenance($on)
     }
 }
 
+// 版上げの「門」: ファイルを置き換え始めてから、キャッシュを作り直し終えるまで、お店の .htaccess の段階で 503 を返し、
+// PHP を一切動かさない(古いキャッシュと新しいファイルが混ざって 500 になる・ログインが切れるのを防ぐ)。
+// 通すのは窓口(self-harden.php)とデータベースの入口(self-harden-upgrade.php)だけ。503 の画面は窓口が出す(sh_gate_page)。
+// 目印つきの区切りで足し、成功・失敗・戻し・stuck のどの着地でも外す(sh_upgrade_gate(false))
+const SH_GATE_BEGIN = '# >>> self-harden upgrade gate';
+const SH_GATE_END = '# <<< self-harden upgrade gate';
+
+function sh_gate_file()
+{
+    return sh_root() . '/' . sh_pub('.htaccess');
+}
+
+function sh_gate_present()
+{
+    $f = sh_gate_file();
+    return is_file($f) && strpos((string) @file_get_contents($f), SH_GATE_BEGIN) !== false;
+}
+
+function sh_upgrade_gate($on, $url = null)
+{
+    $f = sh_gate_file();
+    sh_upgrade_no_link($f);
+    $cur = is_file($f) ? (string) @file_get_contents($f) : '';
+    $clean = (string) preg_replace('/' . preg_quote(SH_GATE_BEGIN, '/') . '.*?' . preg_quote(SH_GATE_END, '/') . "\n?/s", '', $cur);
+    $new = $clean;
+    if ($on) {
+        $u = is_string($url) && preg_match('#^/[A-Za-z0-9._~\-/]*self-harden\.php$#', $url) ? $url : '/' . sh_pub('self-harden.php');
+        $new = SH_GATE_BEGIN . '(版上げのあいだだけ。Shisa が自動で外します)' . "\n"
+            . 'ErrorDocument 503 ' . $u . "?sh_gate=1\n"
+            . "<IfModule mod_rewrite.c>\nRewriteEngine On\n"
+            . "RewriteCond %{REQUEST_URI} !(^|/)self-harden(-upgrade)?\\.php$\n"
+            . "RewriteRule ^ - [R=503,L]\n</IfModule>\n"
+            . SH_GATE_END . "\n" . $clean;
+    }
+    if ($new === $cur) {
+        return;
+    }
+    $tmp = $f . '.sh-tmp-' . bin2hex(random_bytes(4));
+    if (@file_put_contents($tmp, $new) === false || !@rename($tmp, $f)) {
+        @unlink($tmp);
+        throw new ShError('io', 'お店の .htaccess を書けませんでした');
+    }
+    @chmod($f, 0644);
+}
+
+// 門が立っているあいだにお客さん・管理画面に出す画面(503)。認証は要らない(読むだけで、情報は出さない)。
+// ついでに、門だけが残っていたら(動いている版上げが無い・止まって 10 分以上)片付ける(API が来なくても門を放置しない)
+function sh_gate_page()
+{
+    try {
+        $mark = sh_var('gate-check');
+        if (sh_gate_present() && (!is_file($mark) || filemtime($mark) < time() - 15)) {
+            @touch($mark);
+            $active = false;
+            $stale = false;
+            foreach ((array) glob(sh_var('upgrade') . '/prp_*/state.json') as $f) {
+                $st = json_decode((string) @file_get_contents($f), true);
+                if (is_array($st) && in_array($st['status'] ?? '', ['running', 'rolling_back'], true)) {
+                    $active = true;
+                    if (time() - (int) ($st['updated_at'] ?? 0) >= sh_upgrade_stale_after()) {
+                        $stale = true;
+                    }
+                }
+            }
+            if (!$active) {
+                sh_upgrade_gate(false);
+            } elseif ($stale && ($cfg = sh_config()) !== null) {
+                sh_upgrade_recover($cfg, 8);
+            }
+        }
+    } catch (Throwable $e) {
+        // 画面は必ず出す
+    }
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    http_response_code(503);
+    header('Retry-After: 60');
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        . '<title>ただいまメンテナンス中です</title><style>body{margin:0;font-family:sans-serif;background:#f5f5f5;color:#333}'
+        . '.b{max-width:560px;margin:15vh auto;padding:32px;background:#fff;border-radius:8px;text-align:center}h1{font-size:22px;margin:0 0 16px}p{line-height:1.8;margin:0}</style></head>'
+        . '<body><div class="b"><h1>ただいまメンテナンス中です</h1><p>お店の更新作業をしています。<br>数分で元に戻りますので、少し時間をおいてから、もう一度お試しください。</p></div></body></html>';
+    exit;
+}
+
 // お店を開いて確かめる。キャッシュを消した直後は最初の 1 回が遅いので、先に 1 回開いて温める
 function sh_upgrade_verify(array $cfg)
 {
@@ -2294,6 +2381,10 @@ function sh_upgrade_to_rollback(array &$st, $why)
         $st['status'] = 'refused';
         $st['finished_at'] = time();
         sh_upgrade_log($st, $why . '(お店にはまだ何も書いていないので、このまま止めます)');
+        try {
+            sh_upgrade_gate(false);
+        } catch (Throwable $e) {
+        }
         sh_rmtree(sh_upgrade_dir($st['pid']) . '/stage');
         return;
     }
@@ -2311,7 +2402,7 @@ function sh_upgrade_advance(array $cfg, array &$st, $budget)
         while (in_array($st['status'], ['running', 'rolling_back'], true)) {
             sh_upgrade_step($cfg, $st);
             sh_upgrade_save($st);
-            if (microtime(true) - $t0 >= $budget || ($st['status'] === 'running' && in_array($st['step'], ['db', 'verify'], true))) {
+            if (microtime(true) - $t0 >= $budget || ($st['status'] === 'running' && in_array($st['step'], ['db', 'warmup', 'verify'], true))) {
                 break;
             }
         }
@@ -2331,6 +2422,11 @@ function sh_upgrade_advance(array $cfg, array &$st, $budget)
 // 自動では戻せなかった: メンテナンスのまま黙って止めず、店主にわかる言葉で、今の様子と外し方・戻し方を残す
 function sh_upgrade_stuck(array &$st)
 {
+    // メンテナンス(EC-CUBE の .maintenance)は残すが、門は外す(店主が管理画面に入って「止まった作業を戻す」を押せるように)
+    try {
+        sh_upgrade_gate(false);
+    } catch (Throwable $e) {
+    }
     $st['status'] = 'stuck';
     $st['owner_message'] = '今、お店はメンテナンス中のままです。版上げを元に戻す途中で失敗したため、自動では外していません。'
         . '管理画面の Shisa の画面で「止まった作業を戻す」を押すと、もう一度戻します。'
@@ -2353,6 +2449,20 @@ function sh_upgrade_recover(array $cfg, $budget = 10)
         return $out; // 版上げの呼び出しが今動いている
     }
     $t0 = microtime(true);
+    $active = false;
+    foreach ((array) glob($base . '/prp_*/state.json') as $f) {
+        $x = json_decode((string) @file_get_contents($f), true);
+        if (is_array($x) && in_array($x['status'] ?? '', ['running', 'rolling_back'], true)) {
+            $active = true;
+        }
+    }
+    // 動いている版上げが無いのに門だけが残っていたら外す(門を放置しない)
+    if (!$active && sh_gate_present()) {
+        try {
+            sh_upgrade_gate(false);
+        } catch (Throwable $e) {
+        }
+    }
     foreach ((array) glob($base . '/prp_*/state.json') as $f) {
         $st = json_decode((string) @file_get_contents($f), true);
         if (!is_array($st) || !isset($st['pid'], $st['status'])) {
@@ -2573,6 +2683,18 @@ function sh_upgrade_step(array $cfg, array &$st)
             }
             $st['db_result'] = ['schema_sql' => isset($r['schema_sql']) ? array_slice((array) $r['schema_sql'], 0, 20) : [], 'migrated' => isset($r['migrated']) ? $r['migrated'] : null];
             sh_upgrade_log($st, 'データベースを作り変えました(作りの差 ' . count((array) ($r['schema_sql'] ?? [])) . ' 件、マイグレーション ' . (int) ($r['migrated'] ?? 0) . ' 件)');
+            $st['step'] = 'gate_on';
+            return;
+        case 'gate_on':
+            // 控え(一度だけ)を取ってから、門を立てる。ここからキャッシュを作り直し終えるまで、お店は PHP を動かさず 503 の画面だけ
+            $hf = sh_gate_file();
+            if (is_file($hf) && !is_file($dir . '/htaccess.before')) {
+                @copy($hf, $dir . '/htaccess.before');
+                @chmod($dir . '/htaccess.before', 0600);
+            }
+            $st['gate_url'] = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : null;
+            sh_upgrade_gate(true, $st['gate_url']);
+            sh_upgrade_log($st, 'お店の入口を、版上げのあいだだけ「メンテナンス中」の画面にしました(管理画面も含めて PHP を動かしません)');
             $st['step'] = 'files';
             $st['i'] = 0;
             return;
@@ -2600,6 +2722,9 @@ function sh_upgrade_step(array $cfg, array &$st)
                     $created[$rel] = true;
                 }
                 sh_upgrade_copy($stage . '/' . $rel, $abs);
+                if ($abs === sh_gate_file()) {
+                    sh_upgrade_gate(true, $st['gate_url'] ?? null); // 置き換えた .htaccess にも門を立て直す
+                }
             }
             $st['i'] += count($slice);
             sh_upgrade_log($st, 'ファイルを置き換えています(' . $st['i'] . ' / ' . count($plan['write']) . ')');
@@ -2621,6 +2746,21 @@ function sh_upgrade_step(array $cfg, array &$st)
         case 'cache':
             sh_upgrade_cache_clear();
             sh_upgrade_log($st, 'キャッシュを消しました');
+            $st['step'] = 'warmup';
+            return;
+        case 'warmup':
+            // 公式の cache:warmup で作り直す(Doctrine のプロキシも)。作り直す前に門を外すと、そのすき間でログインが切れる
+            sh_upgrade_test_fail('warmup');
+            $r = sh_upgrade_call_runner($cfg, $st);
+            if (empty($r['ok'])) {
+                throw new ShError(isset($r['error']) ? (string) $r['error'] : 'runner_failed', 'キャッシュの作り直し: ' . (isset($r['detail']) ? (string) $r['detail'] : '失敗しました'));
+            }
+            sh_upgrade_log($st, 'キャッシュを作り直しました');
+            $st['step'] = 'gate_off';
+            return;
+        case 'gate_off':
+            sh_upgrade_gate(false);
+            sh_upgrade_log($st, 'お店の入口の「メンテナンス中」の画面を外しました');
             $st['step'] = 'maint_off';
             return;
         case 'maint_off':
@@ -2647,6 +2787,7 @@ function sh_upgrade_step(array $cfg, array &$st)
         // ---- 戻す ----
         case 'rb_maint_on':
             sh_upgrade_maintenance(true);
+            sh_upgrade_gate(true, $st['gate_url'] ?? (isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : null));
             $st['step'] = 'rb_files';
             return;
         case 'rb_files':
@@ -2713,6 +2854,19 @@ function sh_upgrade_step(array $cfg, array &$st)
             return;
         case 'rb_cache':
             sh_upgrade_cache_clear();
+            $st['step'] = 'rb_warmup';
+            return;
+        case 'rb_warmup':
+            // 戻した版でもキャッシュを作り直してから門を外す(できなければ、そのまま進む。最初の表示で作られる)
+            if (is_file(sh_root() . '/vendor/autoload.php') && is_file(sh_root() . '/src/Eccube/Kernel.php')) {
+                try {
+                    $r = sh_upgrade_call_runner($cfg, $st);
+                    sh_upgrade_log($st, !empty($r['ok']) ? 'キャッシュを作り直しました' : 'キャッシュを作り直せませんでした(最初の表示で作られます)');
+                } catch (Throwable $e) {
+                    sh_upgrade_log($st, 'キャッシュを作り直せませんでした(最初の表示で作られます)');
+                }
+            }
+            sh_upgrade_gate(false);
             $st['step'] = 'rb_maint_off';
             return;
         case 'rb_maint_off':
@@ -3285,6 +3439,10 @@ function op_audit_tail(array $args)
 
 function sh_main()
 {
+    // 版上げの門が返す 503 の画面(.htaccess の ErrorDocument から来る。お客さんの元の要求が POST でも同じ画面)
+    if (isset($_GET['sh_gate'])) {
+        sh_gate_page();
+    }
     $method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
     if ($method === 'GET' || $method === 'HEAD') {
         sh_send(200, ['ok' => true, 'service' => 'self-harden-receiver']);

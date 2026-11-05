@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Shisa(self-harden): 店主が承認した版上げの途中で、データベースの作り変えだけを行う入口。
 // 窓口(self-harden.php)は EC-CUBE を読み込まない決まりなので、EC-CUBE 自身を読み込むのはここだけ。
-// 読み込むのは、窓口が公式の配布物(チェックサムで確かめたもの)から広げた「上げ先の版」の EC-CUBE で、行うのは決まった 2 つ
-// (スキーマの差の反映と、公式のマイグレーション)だけ。外から何かを渡して動かすことはできない。
+// 読み込むのは、窓口が公式の配布物(チェックサムで確かめたもの)から広げた「上げ先の版」の EC-CUBE(と、置き換えたあとのお店の EC-CUBE)で、
+// 行うのは決まった 3 つ(スキーマの差の反映、公式のマイグレーション、公式の cache:warmup)だけ。外から何かを渡して動かすことはできない。
 // 動くのは、窓口が承認された版上げの「データベースの段」で置いた 1 回きりの合図と一致したときだけ。それ以外は何もせず 404 を返す。
 
 const SHU_VAR = 'var/self-harden';
@@ -48,12 +48,24 @@ if (!hash_equals($token, $req['token'])) {
 // 合図は 1 回きり。一致したら、使う前に消す
 @unlink($tokenFile);
 $st = json_decode((string) @file_get_contents($dir.'/state.json'), true);
-if (!is_array($st) || ($st['status'] ?? '') !== 'running' || ($st['step'] ?? '') !== 'db') {
+// 動くのは 3 つの段だけ: データベースの作り変え(db)、置き換えたあとのキャッシュの作り直し(warmup)、戻したあとの作り直し(rb_warmup)
+$mode = null;
+if (is_array($st) && ($st['status'] ?? '') === 'running' && ($st['step'] ?? '') === 'db') {
+    $mode = 'db';
+} elseif (is_array($st) && ($st['status'] ?? '') === 'running' && ($st['step'] ?? '') === 'warmup') {
+    $mode = 'warmup';
+} elseif (is_array($st) && ($st['status'] ?? '') === 'rolling_back' && ($st['step'] ?? '') === 'rb_warmup') {
+    $mode = 'warmup';
+}
+if ($mode === null) {
     shu_nothing();
 }
 $stage = $dir.'/stage';
-if (!is_file($stage.'/vendor/autoload.php') || !is_file($stage.'/src/Eccube/Kernel.php')) {
+if ($mode === 'db' && (!is_file($stage.'/vendor/autoload.php') || !is_file($stage.'/src/Eccube/Kernel.php'))) {
     shu_send(200, ['ok' => false, 'error' => 'no_stage', 'detail' => '上げ先の版が作業の置き場にありません']);
+}
+if ($mode === 'warmup' && (!is_file($root.'/vendor/autoload.php') || !is_file($root.'/src/Eccube/Kernel.php'))) {
+    shu_send(200, ['ok' => false, 'error' => 'no_app', 'detail' => 'お店の EC-CUBE が見つかりません']);
 }
 @set_time_limit(170);
 @ini_set('memory_limit', '1024M');
@@ -83,7 +95,8 @@ function shu_sqlite_path($url, $root)
 
 ob_start();
 try {
-    require $stage.'/vendor/autoload.php';
+    // warmup はお店の(置き換えたあとの、または戻したあとの)EC-CUBE で、公式の cache:warmup だけを流す(データベースは変えない)
+    require ($mode === 'warmup' ? $root : $stage).'/vendor/autoload.php';
     // お店の設定(.env)をそのまま使う。上げ先の版の EC-CUBE を、お店のデータベースにつなぐ
     if (is_file($root.'/.env')) {
         (\Dotenv\Dotenv::createUnsafeMutable($root))->load();
@@ -103,6 +116,16 @@ try {
     $app = new \Symfony\Bundle\FrameworkBundle\Console\Application($kernel);
     $app->setAutoExit(false);
     $app->setCatchExceptions(false);
+    if ($mode === 'warmup') {
+        $out = new \Symfony\Component\Console\Output\BufferedOutput();
+        $in = new \Symfony\Component\Console\Input\ArrayInput(['command' => 'cache:warmup']);
+        $in->setInteractive(false);
+        $code = $app->run($in, $out);
+        if ($code !== 0) {
+            shu_send(200, ['ok' => false, 'error' => 'warmup_failed', 'detail' => 'キャッシュの作り直しに失敗しました']);
+        }
+        shu_send(200, ['ok' => true, 'warmup' => true]);
+    }
     // 窓口が控えを取ったのと同じデータベースにつないだか(違えば何もしない)
     $want = isset($st['db_target']) && is_array($st['db_target']) ? $st['db_target'] : null;
     $kernel->boot();
