@@ -28,6 +28,9 @@ const SH_MAPS = [
         'var_dir' => 'var/self-harden',
         'vendor_dir' => 'vendor',
         'cache' => ['base' => 'var/cache', 'dirs' => ['prod']],
+        // PHP が置かれるはずのない場所(画像・アップロード・利用者のファイル・記録)。作り直されるキャッシュ(PHP で書かれる)は除く
+        'drop_dirs' => ['html/upload', 'html/user_data', 'var'],
+        'drop_skip' => ['var/cache'],
         'secrets' => [],
         'version_file' => 'src/Eccube/Common/Constant.php',
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
@@ -42,6 +45,8 @@ const SH_MAPS = [
         'var_dir' => 'app/self-harden',
         'vendor_dir' => 'vendor',
         'cache' => ['base' => 'app/cache', 'dirs' => ['twig', 'doctrine', 'eccube', 'plugin', 'translator', 'prod']],
+        'drop_dirs' => ['html/upload', 'html/user_data', 'app/log'],
+        'drop_skip' => [],
         'secrets' => ['app/config/eccube/config.yml', 'app/config/eccube/database.yml', 'app/config/eccube/mail.yml'],
         'version_file' => 'src/Eccube/Common/Constant.php',
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
@@ -57,6 +62,9 @@ const SH_MAPS = [
         'var_dir' => 'data/self-harden',
         'vendor_dir' => 'data/vendor',
         'cache' => null,
+        // 2 系の html/user_data は、店が自分のページ(PHP)を置く場所なので含めない
+        'drop_dirs' => ['html/upload', 'data/upload', 'data/logs'],
+        'drop_skip' => [],
         'secrets' => ['data/config/config.php'],
         'version_file' => 'data/class/SC_Initial.php',
         'version_re' => "/define\\(\\s*'ECCUBE_VERSION'\\s*,\\s*'([^']+)'\\s*\\)/",
@@ -69,6 +77,8 @@ const SH_MAPS = [
     // 見分けがつかない店。読む操作(ping・inspect)だけ答え、書く操作は断る。鍵の置き場は 4 系と同じ場所を見る
     'unknown' => [
         'code_tops' => [],
+        'drop_dirs' => [],
+        'drop_skip' => [],
         'var_dir' => 'var/self-harden',
         'vendor_dir' => 'vendor',
         'cache' => null,
@@ -1664,6 +1674,91 @@ function sh_scan_walk($abs, $rel, array &$out, $depth)
 }
 
 // PHP が置かれるはずのない場所(画像・アップロード・一時の置き場)にある PHP
+// 画像・アップロードなど、PHP が置かれるはずのない場所を最後まで歩き、PHP を探す(一覧の上限に関係なく)
+// 拡張子で見るほか、拡張子が違っても先頭に PHP の開始の印があるものも拾う。返すのは場所・大きさ・日時だけ(中身は返さない)
+// 歩く数と時間に上限を付け、上限に達したら complete=false で返す
+const SH_MISPLACED_EXT = '/\.(php[0-9]?|phtml|phar|pht|phps|inc)$/i';
+function op_find_misplaced_php(array $args)
+{
+    $map = sh_map();
+    $max_walk = isset($args['max_entries']) ? max(1000, min(300000, (int) $args['max_entries'])) : 200000;
+    $deadline = microtime(true) + (isset($args['max_seconds']) ? max(2, min(20, (int) $args['max_seconds'])) : 15);
+    $root = sh_root();
+    $skip = array_merge($map['drop_skip'], [$map['var_dir'], sh_pub(SH_LAB_DIR), 'var/self-harden']);
+    $dirs = [];
+    foreach ($map['drop_dirs'] as $d) {
+        // data/ を公開の場所に置いた 2 系では、公式の html/ の中身が一番上に並ぶ
+        $dirs[] = !empty($map['flat']) && strpos($d, 'html/') === 0 ? substr($d, 5) : $d;
+    }
+    $found = [];
+    $walked = 0;
+    $sniffed = 0;
+    $complete = true;
+    $checked = [];
+    $absent = [];
+    foreach ($dirs as $d) {
+        if (!is_dir($root . '/' . $d) || is_link($root . '/' . $d)) {
+            $absent[] = $d;
+            continue;
+        }
+        $checked[] = $d;
+        $stack = [$d];
+        while ($stack) {
+            $rel = array_pop($stack);
+            $dh = @opendir($root . '/' . $rel);
+            if (!$dh) {
+                continue;
+            }
+            while (($name = readdir($dh)) !== false) {
+                if ($name === '.' || $name === '..') {
+                    continue;
+                }
+                if (++$walked > $max_walk || microtime(true) > $deadline) {
+                    $complete = false;
+                    break 3;
+                }
+                $r = $rel . '/' . $name;
+                $abs = $root . '/' . $r;
+                $skipped = false;
+                foreach ($skip as $sk) {
+                    if ($sk !== '' && sh_is_inside($r, $sk)) {
+                        $skipped = true;
+                        break;
+                    }
+                }
+                if ($skipped || is_link($abs)) {
+                    continue;
+                }
+                if (is_dir($abs)) {
+                    $stack[] = $r;
+                    continue;
+                }
+                $why = null;
+                if (preg_match(SH_MISPLACED_EXT, $name)) {
+                    $why = 'php_extension';
+                } elseif ($sniffed < 50000 && @filesize($abs) > 0) {
+                    $sniffed++;
+                    $fh = @fopen($abs, 'rb');
+                    $head = $fh ? (string) fread($fh, 256) : '';
+                    if ($fh) {
+                        fclose($fh);
+                    }
+                    if (stripos($head, '<?php') !== false || strpos($head, '<?=') !== false) {
+                        $why = 'php_code_in_other_extension';
+                    }
+                }
+                if ($why !== null && count($found) < 200) {
+                    $st = @stat($abs);
+                    $found[] = ['path' => $r, 'why' => $why, 'size' => $st ? $st['size'] : null, 'mtime' => $st ? $st['mtime'] : null];
+                }
+            }
+            closedir($dh);
+        }
+    }
+    return ['dirs_checked' => $checked, 'dirs_absent' => $absent, 'walked' => min($walked, $max_walk), 'complete' => $complete,
+        'found' => $found, 'found_truncated' => count($found) >= 200];
+}
+
 function sh_scan_place($rel)
 {
     if (!preg_match('/\.(php|phtml|php[0-9])$/i', $rel)) {
@@ -1919,6 +2014,7 @@ function sh_main()
             case 'lab_arm': $r = op_lab_arm(); break;
             case 'hash_tree': $r = op_hash_tree($args); break;
             case 'scan_custom': $r = op_scan_custom($args); break;
+            case 'find_misplaced_php': $r = op_find_misplaced_php($args); break;
             case 'restore_official': $r = op_restore_official($cfg, $args); break;
             case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
             case 'apply_official_release': $r = op_apply_official_release($cfg, $args); break;

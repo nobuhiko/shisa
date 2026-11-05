@@ -170,5 +170,30 @@ check('1 回に 80 行まで(ファイルの終わりで止まる)', !empty($r['
 $r = call('shop', 'read_file', ['path' => 'data/config/config.php', 'from' => 1, 'to' => 2]);
 check('行の範囲でも、秘密のファイルは読めない', err($r) === 'not_readable', $r['body']);
 
+echo "置き場所違いの PHP を最後まで探す(一覧の上限に関係なく)\n";
+@mkdir($shop . '/upload/save_image/deep/a/b', 0777, true);
+@mkdir($shop . '/data/logs', 0777, true);
+for ($i = 0; $i < 2500; $i++) {
+    file_put_contents($shop . "/upload/save_image/img$i.jpg", "\xFF\xD8\xFF\xE0 jpeg");
+}
+file_put_contents($shop . '/upload/save_image/deep/a/b/thumb.phtml', "<?php // marker\n");
+file_put_contents($shop . '/upload/save_image/deep/UPPER.PHP', "<?php // marker\n");
+file_put_contents($shop . '/upload/save_image/deep/a/fake.jpg', "<?php // marker in an image name\n");
+file_put_contents($shop . '/data/logs/note.inc', "<?php // marker\n");
+$r = call('shop', 'find_misplaced_php', []);
+$paths = !empty($r['json']['ok']) ? array_column($r['json']['result']['found'], 'path') : [];
+check('2,500 枚の画像の奥まで歩いて、最後まで調べた', !empty($r['json']['ok']) && $r['json']['result']['complete'] === true && $r['json']['result']['walked'] > 2500, substr($r['body'], 0, 300));
+check('深い場所の .phtml・大文字の .PHP・記録の .inc を拾う', in_array('upload/save_image/deep/a/b/thumb.phtml', $paths, true)
+    && in_array('upload/save_image/deep/UPPER.PHP', $paths, true) && in_array('data/logs/note.inc', $paths, true), json_encode($paths));
+check('拡張子が違っても、先頭が PHP のものを拾う', in_array('upload/save_image/deep/a/fake.jpg', $paths, true), json_encode($paths));
+check('ふつうの画像は拾わない', !in_array('upload/save_image/img1.jpg', $paths, true), json_encode($paths));
+check('返すのは場所・大きさ・日時・理由だけ(中身は返さない)', strpos($r['body'], 'marker') === false
+    && !empty($r['json']['result']['found'][0]) && array_keys($r['json']['result']['found'][0]) === ['path', 'why', 'size', 'mtime'], substr($r['body'], 0, 300));
+check('data/ を公開の場所に置いた 2 系では、公式の html/upload を一番上の upload として歩く', !empty($r['json']['ok']) && in_array('upload', $r['json']['result']['dirs_checked'], true), json_encode($r['json']['result']['dirs_checked'] ?? null));
+$r = call('shop', 'find_misplaced_php', ['max_entries' => 1000]);
+check('歩く数の上限に達したら「最後まで調べられなかった」と返す', !empty($r['json']['ok']) && $r['json']['result']['complete'] === false, substr($r['body'], 0, 200));
+$r = call('odd', 'find_misplaced_php', []);
+check('作りを見分けられない店では探さない', err($r) === 'unknown_layout', $r['body']);
+
 echo "\n$pass ok, $fail fail\n";
 exit($fail === 0 ? 0 : 1);
