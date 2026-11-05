@@ -350,6 +350,28 @@
     return null;
   }
 
+  // 流しっぱなしのときの話の区切り(最初の 1 回だけ)。組み立てでは、この目印の頃にナレーションを置く
+  function cueOf(s, st, idx) {
+    var t = s.tool || '', r = s.result || '';
+    st.cues = st.cues || {};
+    function once(k) { if (st.cues[k]) return null; st.cues[k] = true; return k; }
+    if (idx === 0) return once('start');
+    if (s.kind === 'decision') return once('judge');
+    if (/小部屋で試す/.test(t)) return once('lab');
+    if (/公式の中身に戻す/.test(t) && /戻した/.test(r)) return once('restore');
+    if (/公式の修正を当てる|公式のリリースに上げる/.test(t) && /当てた|置いた/.test(r)) return once('fix');
+    if (/カスタマイズしたコードの点検/.test(t) || (/ファイルを読む/.test(t) && /app\/(Customize|template)\//.test(t))) return once('custom');
+    if (/本番に入れる/.test(t) && /入れた/.test(r)) return once('prod');
+    return null;
+  }
+  var filmClock = null;
+  function startFilmClock(runT0) {
+    if (!FILM_K || !document.body.classList.contains('sh-film')) return;
+    filmClock = document.getElementById('sh-film-clock');
+    if (!filmClock) { filmClock = el('div'); filmClock.id = 'sh-film-clock'; filmClock.style.cssText = 'position:fixed;right:40px;top:64px;z-index:2100;background:#1f2933;color:#fff;font:700 26px/1.2 sans-serif;padding:8px 16px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3)'; document.body.appendChild(filmClock); }
+    var w0 = Date.now();
+    (function tick() { var d = new Date(runT0 + (Date.now() - w0) * FILM_K); filmClock.textContent = '点検の時刻 ' + d.toLocaleTimeString('ja-JP') + '(' + FILM_K + ' 倍速)'; filmClock._raf = requestAnimationFrame(tick); })();
+  }
   function replay(runId) {
     clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;
     statusEl.textContent = '';
@@ -362,10 +384,13 @@
         if (!d.ok) { statusEl.textContent = d.error || 'エラー'; return; }
         var st = { adv: advOf(d) };
         try { if (st.adv) maskHosts.push(new URL(st.adv).host); } catch (e) {}
-        var list = compactSteps(d.steps.filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
+        // 報告より後の行(あとから押した承認など)は、点検の早送りには入れない
+        var ri = -1; d.steps.some(function (s, k) { if (s.kind === 'report') { ri = k; return true; } return false; });
+        var list = compactSteps((ri >= 0 ? d.steps.slice(0, ri) : d.steps).filter(function (s) { return s.kind !== 'report'; }), st), i = 0;
         (function next() {
           if (i >= list.length) {
             // 提案の話の続き(なぜ店主が決めるのか)が残っていれば、報告の前に止めどころとして出す
+            if (FILM_K) { st.pendingB = false; if (filmClock) { cancelAnimationFrame(filmClock._raf); filmClock.remove(); filmClock = null; } (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: 'cue:end' }); filmMark(); }
             if (st.pendingB) {
               st.pendingB = false; showBand('書き換えるかは店主さんが決める → 直し方を作って、承認を待つ', 'warn');
               (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: '書き換えるかは店主さんが決める → 直し方を作って、承認を待つ' }); filmMark();
@@ -391,6 +416,18 @@
             return;
           }
           var s = list[i++], li = stepRow(s), c = s.research ? null : stopOf(s, st);
+          if (FILM_K) {
+            if (i === 1) { st.w0 = Date.now(); st.t0 = s.at || Date.now(); startFilmClock(st.t0); }
+            if (c) { li.classList.add('key'); showBand(c.text, c.cls); clearTimeout(st.bandTimer); st.bandTimer = setTimeout(hideBand, 2600); }
+            stepsEl.appendChild(li);
+            stepsEl.scrollTop = stepsEl.scrollHeight;
+            var cue = cueOf(s, st, i - 1);
+            if (cue) { (window.__shStops = window.__shStops || []).push({ t: Date.now(), text: 'cue:' + cue }); filmMark(); }
+            // 次の行は、記録の時刻どおり(倍率で速めた時刻)に出す
+            var nx = list[i], due = nx && nx.at ? st.w0 + (nx.at - st.t0) / FILM_K : Date.now() + 150;
+            timer = setTimeout(next, Math.max(40, due - Date.now()));
+            return;
+          }
           if (c) { li.classList.add('key'); showBand(c.text, c.cls); }
           stepsEl.appendChild(li);
           stepsEl.scrollTop = stepsEl.scrollHeight;
@@ -572,6 +609,9 @@
   var stopNo = 0;
   var FILM_FLOW = !!new URLSearchParams(location.search).get('film');
   var FILM_RS = Math.min(1000, Math.max(80, Number(new URLSearchParams(location.search).get('rs')) || 180));
+  // 撮影(流しっぱなし): flow=<倍率> で、止めどころで止めず、記録の時刻どおりに倍率だけ速めて流す(買い物の録画と時刻をそろえるため)。
+  // 話の区切り(調べ始め・試験場・公式に戻す・修正版・カスタマイズ・本番)ごとに目印を反転し、経過の上に「点検の時刻」の時計を出す
+  var FILM_K = Math.min(60, Math.max(0, Number(new URLSearchParams(location.search).get('flow')) || 0));
   if (filmRun) document.body.classList.add('sh-film');
   // 撮影の目印: 止めどころのたびに右上の 24px の四角を白黒に反転する(録画は時計どおりに進まないので、組み立てでは録画の中のこの反転を探して行の音声を置き、四角は見出しの色で塗りつぶす)
   var filmMarkN = 0;
