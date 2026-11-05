@@ -19,7 +19,9 @@
   #sh .btn-ec-conversion { background: #2b6cb0; border-color: #2b6cb0; color: #fff; }
   #sh .btn-sm { padding: 2px 8px; font-size: 12px; } #sh .btn[disabled] { opacity: .5; }
   #sh .flash { padding: 8px 12px; border-radius: 3px; margin-bottom: 12px; } #sh .flash-success { background: #e8f5e9; color: #1b5e20; } #sh .flash-error { background: #fde0e0; color: #b00020; }
-  #sh table.sh-health { width: 100%; border-collapse: collapse; } #sh .sh-health tr { border-top: 1px solid #eee; }
+  #sh table.sh-health { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  #sh .sh-health th:nth-child(1) { width: 30%; } #sh .sh-health th:nth-child(2) { width: 22%; }
+  #sh .sh-health td { overflow-wrap: anywhere; word-break: break-word; } #sh .sh-health .item, #sh .sh-health .j { white-space: normal; } #sh .sh-health tr { border-top: 1px solid #eee; }
   #sh ul.list-unstyled { list-style: none; padding: 0; margin: 0; } #sh .sh-report ul { padding-left: 20px; list-style: disc; } #sh .sh-report li { margin-bottom: 4px; }
   #sh [hidden] { display: none !important; }
   .sh-steps { list-style: none; padding: 0; margin: 0; max-height: 480px; overflow-y: auto; font-size: 14px; }
@@ -189,6 +191,7 @@
       tr.appendChild(el('td', 'item', it[1]));
       tr.appendChild(el('td', 'j ' + worst[2], animate ? '要確認' : worst[1]));
       var td = el('td', null, main ? maskOf(main.title) : '見つかったものはありません');
+      if (main && worst === JUDGE.not_affected && main.status === 'not_affected' && main.severity && main.severity !== 'info') td.appendChild(el('span', 'text-muted small ml-2', '(このお店には当てはまらない)'));
       if (xs.length > 1) td.appendChild(el('span', 'text-muted small ml-2', '(ほか ' + (xs.length - 1) + ' 件)'));
       if (animate) td.style.visibility = 'hidden';
       tr.appendChild(td); body.appendChild(tr);
@@ -252,12 +255,14 @@
   function stepEl(s) {
     var li = el('li', 'k-' + s.kind);
     li.appendChild(el('time', null, new Date(s.at).toLocaleTimeString('ja-JP')));
-    var body = s.detail ? el('details') : el('span');
-    var head = s.detail ? el('summary') : body;
+    // 道具の生の返事(JSON)は店主に見せない(記録には残る)。言葉の詳しい説明だけ開けるようにする
+    var detail = s.detail && !/^\s*[\{\[]/.test(s.detail) ? s.detail : '';
+    var body = detail ? el('details') : el('span');
+    var head = detail ? el('summary') : body;
     head.appendChild(el('span', null, maskOf(s.title)));
     if (s.tool) head.appendChild(el('span', 'tool', maskOf(s.tool)));
     if (s.result) head.appendChild(el('span', 'res', '→ ' + maskOf(s.result)));
-    if (s.detail) { body.appendChild(head); body.appendChild(el('pre', null, s.detail)); }
+    if (detail) { body.appendChild(head); body.appendChild(el('pre', null, detail)); }
     li.appendChild(body);
     return li;
   }
