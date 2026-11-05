@@ -12,3 +12,4 @@ demo-servers/**/src/
 demo-servers/.cache/
 video/
 api/demo/shots/
+demo-servers/trial-*/
