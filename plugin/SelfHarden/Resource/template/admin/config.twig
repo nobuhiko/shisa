@@ -405,8 +405,8 @@
     var ops = []; i = 0; j = 0;
     while (i < n || j < m) {
       if (i < n && j < m && A[i] === B[j]) { ops.push([' ', A[i]]); i++; j++; }
-      else if (j < m && (i >= n || dp[i * w + j + 1] >= dp[(i + 1) * w + j])) { ops.push(['+', B[j]]); j++; }
-      else { ops.push(['-', A[i]]); i++; }
+      else if (i < n && (j >= m || dp[(i + 1) * w + j] >= dp[i * w + j + 1])) { ops.push(['-', A[i]]); i++; }
+      else { ops.push(['+', B[j]]); j++; }
     }
     return ops;
   }
