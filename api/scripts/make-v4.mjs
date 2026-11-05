@@ -149,10 +149,14 @@ console.log("話の後の詰め", JSON.stringify({ cut: cut.toFixed(1), endT: en
 const sdir = process.env.SHOPPING || join(W, "shopping");
 const smarks = JSON.parse(readFileSync(join(sdir, "marks.json"), "utf8"));
 const orderTimes = smarks.orders || [];
-// メンテナンス(お店が 500 番台を返した、または開けなかった)の時間: その記録の少し前から、次にふつうに開けた画面まで
+// メンテナンスの時間: お客さんが 503(メンテナンスの画面)を見た記録の少し前から、次にふつうに開けた画面まで。
+// 503 のほかの失敗(500・つながらない)はメンテナンスとは数えず、件数を出して知らせる(隠さない)
 const maintIv = [];
+const is503 = (pg) => pg.status === 503 || (typeof pg.error === "string" && /: 503\b/.test(pg.error));
+const otherBad = smarks.pages.filter((pg) => !is503(pg) && ((pg.status && pg.status >= 500) || (pg.error && !(typeof pg.error === "string" && /: 503\b/.test(pg.error)))));
+console.log("買い物の記録: 503(メンテナンスの画面)", smarks.pages.filter((pg) => pg.status === 503).length, "件、そのほかの失敗(500・つながらない)", otherBad.length, "件", otherBad.slice(0, 5).map((pg) => `${pg.step}:${pg.status ?? pg.error}`).join(" "));
 smarks.pages.forEach((pg, i) => {
-  if (!(pg.error || (pg.status && pg.status >= 500))) return;
+  if (!is503(pg)) return;
   const prevAt = i > 0 ? smarks.pages[i - 1].at : pg.at - 1000;
   const next = smarks.pages.slice(i + 1).find((q) => !q.error && q.status && q.status < 500);
   maintIv.push([Math.max(prevAt, pg.at - 1500), next ? next.at : smarks.wall_end]);

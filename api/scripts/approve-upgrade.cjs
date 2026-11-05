@@ -17,7 +17,8 @@ const { chromium } = require(process.env.PW || "playwright");
   await page.fill('input[name="password"]', "password");
   await Promise.all([page.waitForNavigation(), page.press('input[name="password"]', "Enter")]);
   await page.goto(base + "/admin/store/plugin/SelfHarden/config");
-  const card = page.locator(".sh-upgrade").first();
+  // 承認待ちのカード(古い失敗のカードが残っていても、承認ボタンのある方)
+  const card = page.locator(".sh-upgrade:has(.sh-approve-btn)").first();
   await card.waitFor({ timeout: 60000 });
   await card.scrollIntoViewIfNeeded();
   await page.waitForTimeout(800);
@@ -52,7 +53,12 @@ const { chromium } = require(process.env.PW || "playwright");
     await page.waitForTimeout(2000);
   }
   let final = await page.evaluate(() => window.__shUpgrade || null).catch(() => null);
-  if (final === "relogin" || final === "running") {
+  const gateSeen = await page.evaluate(() => !!window.__shUpgradeGate).catch(() => false);
+  // 版上げのあとも管理画面のログインが続いているか(ログインの画面へ回されないか)
+  await page.goto(base + "/admin/");
+  const loggedIn = !/\/login/.test(page.url());
+  console.log("gate seen:", gateSeen, "still logged in:", loggedIn);
+  if (final === "relogin" || final === "running" || !loggedIn) {
     // 管理画面を開き直して、終わった様子を読む(版が変わってログインが切れた場合はログインし直す)
     await page.goto(base + "/admin/store/plugin/SelfHarden/config");
     if (/\/login/.test(page.url())) {

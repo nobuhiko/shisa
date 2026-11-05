@@ -1316,7 +1316,22 @@ function sh_apply_items(array $cfg, array $args, $ref, array $items, array $dirs
 const SH_RELEASE_HOSTS = ['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'];
 const SH_MAX_RELEASE = 104857600;
 
+// 公式のリリースの取得は、GitHub の一時的な失敗(500 番台・つながらない)なら、少し待って 2 回までやり直す
 function sh_release_get($url, $dest)
+{
+    for ($k = 0;; $k++) {
+        try {
+            return sh_release_get_once($url, $dest);
+        } catch (ShError $e) {
+            if ($e->code_str !== 'official_fetch_failed' || $k >= 2 || !preg_match('/HTTP (0|5[0-9][0-9])\)/', $e->getMessage())) {
+                throw $e;
+            }
+            sleep($k === 0 ? 3 : 8);
+        }
+    }
+}
+
+function sh_release_get_once($url, $dest)
 {
     if (strpos($url, 'https://github.com/' . sh_map()['repo'] . '/releases/download/') !== 0 || !function_exists('curl_init')) {
         throw new ShError('no_official_source', '公式のリリースから取れません');
