@@ -57,10 +57,18 @@ for (const l of V4.flow) {
   }
   lines.push(l);
 }
+// この点検で出した提案(版上げの提案があれば、その版)
+const props = F.filter((f) => f.proposal_id).map((f) => { try { return JSON.parse(readFileSync(join(DATA, "proposals", f.proposal_id + ".json"), "utf8")); } catch { return null; } }).filter(Boolean);
+const upP = props.find((p) => p.from_version && p.to_version);
 // 見つけた問題の一覧(報告から作る。当てはまらなかったものと、知らせだけのものは入れない)
 const order = ["php", "tamper", "eccube", "packages", "custom", "exposure", "config"];
 const found = order.filter((c) => has(c, (f) => f.status !== "not_affected" && f.severity !== "info")).slice(0, 5)
-  .map((c) => { const n = F.filter((f) => f.category === c && f.status !== "not_affected" && f.severity !== "info").length; return V4.findings_labels[c] + (n > 1 ? `(${n} 件)` : ""); });
+  .map((c) => {
+    const n = F.filter((f) => f.category === c && f.status !== "not_affected" && f.severity !== "info").length;
+    // EC-CUBE の行は、版上げの提案があれば版の数字まで書く(報告で読んだ今の版と、提案の上げ先の版)
+    if (c === "eccube" && upP) return V4.findings_eccube_upgrade.replace("{from}", upP.from_version).replace("{to}", upP.to_version);
+    return V4.findings_labels[c] + (n > 1 ? `(${n} 件)` : "");
+  });
 console.log("読む行:", lines.map((l) => l.key).join(","), " 見つけた問題:", found.join(" / "), " 点検:", mins, "分");
 
 // 1. 音声
@@ -72,7 +80,11 @@ const tts = (key, parts) => {
 };
 for (const l of lines) tts(l.key, [{ text: l.read ?? l.text, pause: l.pause ?? 250 }]);
 for (const l of V4.health) tts(l.key, [{ text: l.read ?? l.text, pause: l.pause ?? 250 }]);
-for (const l of V4.approve) tts(l.key, [{ text: l.read ?? l.text, pause: l.pause ?? 250 }]);
+// 承認の場面の録画の目印(版上げか、カスタマイズの直しか)。台本は種類で切り替える
+const pdir = join(W, "approve");
+const pm = JSON.parse(readFileSync(join(pdir, "marks.json"), "utf8"));
+const APPROVE = pm.upgrade && V4.approve_upgrade ? V4.approve_upgrade : V4.approve;
+for (const l of APPROVE) tts(l.key, [{ text: l.read ?? l.text, pause: l.pause ?? 250 }]);
 tts("k0", [{ text: V4.ketsu0.read.replace("{mins}", String(mins)), pause: 900 }]);
 
 // 2. 承・転: 撮影モードを流しっぱなし(flow=K)で録る
@@ -97,56 +109,85 @@ const endT = cueAt.end - S;
 const place = []; let tEnd = 0.15;
 for (const l of lines) {
   const d = clip[l.key].d;
-  let at = Math.max((cueAt[l.cue] ?? cueAt.start) - S + 0.15, tEnd + 0.35);
+  let at = l.follow ? tEnd + 0.3 : Math.max((cueAt[l.cue] ?? cueAt.start) - S + 0.15, tEnd + 0.35);
   if (l.late) at = Math.max(at, endT - d - 1.5);
   place.push({ at, k: l.key, overlay: l.overlay }); tEnd = at + d;
 }
 if (tEnd > endT + 0.5) console.log(`承・転の話が、早送りの終わりより ${(tEnd - endT).toFixed(1)} 秒長い。K を下げるか、行を短く`);
+// 話し終えたあとの早送り(話が無い所)は、約 TAIL 秒に詰める(沈黙を長くしない)。詰めた分だけ、健康診断から後ろを前に寄せる
+const TAIL = Number(process.env.TAIL || 2);
+const cut = Math.min(endT, tEnd + 0.6);
+const G = endT - cut > TAIL + 0.5 ? (endT - cut) / TAIL : 1;
+const delta = G > 1 ? (endT - cut) - TAIL : 0;
+const endT2 = endT - delta;
 // 健康診断: 表が出たら読む。読み終わって少し置くまで流す
-const hAt = Math.max(endT + 0.8, tEnd + 0.4);
+const hAt = Math.max(endT2 + 0.8, tEnd + 0.4);
 let ht = hAt; for (const l of V4.health) { place.push({ at: ht, k: l.key }); ht += clip[l.key].d; }
-const E = Math.min(marks.total - 0.3 + (fok ? flips.at(-1) - marks.stops.at(-1).at : 0), S + Math.max(ht + 0.8, endT + 7));
-const flen = E - S;
+const Eavail = marks.total - 0.3 + (fok ? flips.at(-1) - marks.stops.at(-1).at : 0);
+const flen = Math.min(Eavail - S - delta, Math.max(ht + 0.8, endT2 + 7));
+const origLen = flen + delta;
+// 出力の秒 → 元の早送りの秒
+const toOrig = (t) => (t <= cut ? t : G > 1 && t <= cut + TAIL ? cut + (t - cut) * G : t + delta);
+console.log("話の後の詰め", JSON.stringify({ cut: cut.toFixed(1), endT: endT.toFixed(1), G: G.toFixed(2), saved: delta.toFixed(1) }));
 // 見つけた問題の一覧(画像)を、その行のあいだ重ねる
 const fcard = join(out, "findings.png");
 sh("node", [join(ROOT, "api/scripts/findings-card.cjs"), V4.findings_title, JSON.stringify(found), fcard]);
 const fp = place.find((p) => p.overlay === "findings");
 const ovA = fp ? fp.at - 0.2 : 0, ovB = fp ? fp.at + clip[fp.k].d + 1.6 : 0;
-// 買い物の画面を右下に重ねる
-const sdir = process.env.SHOPPING || join(W, "shopping-draft");
+// 右下の札(「点検中も営業中」・時計・ご注文の件数): 点検と同時に録った買い物の記録(video/shopping/marks.json)から、こまごとに作る
+const sdir = process.env.SHOPPING || join(W, "shopping");
 const smarks = JSON.parse(readFileSync(join(sdir, "marks.json"), "utf8"));
-const swebm = join(sdir, readdirSync(sdir).find((f) => f.endsWith(".webm")));
-const slen = dur(swebm), sspan = (smarks.wall_end - smarks.wall_start) / 1000;
-let sa = 0, sb = slen / endT; // 試作: 承・転の長さに合わせて伸び縮み
-if (process.env.SHOP_SYNC) {
-  // 本番: 早送りの t 秒目 = 点検の時刻 t0 + (t - 始め) × K。その時刻の買い物の録画を出す
-  const t0 = steps[0].at, start = cueAt.start - S;
-  // 録画も時計より遅れて進むので、倍率は名目の K ではなく、録画の中の始めと終わりの目印のあいだの実際の倍率を使う
-  const Keff = fok ? realSec / (cueAt.end - cueAt.start) : K;
-  console.log("早送りの実際の倍率", Keff.toFixed(2), "(名目", K, ")");
-  sb = (Keff * slen) / sspan;
-  sa = ((t0 - smarks.wall_start) / 1000) * (slen / sspan) - start * sb;
+const orderTimes = smarks.orders || [];
+// メンテナンス(お店が 500 番台を返した、または開けなかった)の時間: その記録の少し前から、次にふつうに開けた画面まで
+const maintIv = [];
+smarks.pages.forEach((pg, i) => {
+  if (!(pg.error || (pg.status && pg.status >= 500))) return;
+  const prevAt = i > 0 ? smarks.pages[i - 1].at : pg.at - 1000;
+  const next = smarks.pages.slice(i + 1).find((q) => !q.error && q.status && q.status < 500);
+  maintIv.push([Math.max(prevAt, pg.at - 1500), next ? next.at : smarks.wall_end]);
+});
+const inMaint = (w) => maintIv.some(([a, b]) => w >= a && w <= b);
+const ordersAt = (w) => orderTimes.filter((t) => t <= w).length;
+const BFPS = 10;
+const clockOf = (w) => new Date(w).toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo" });
+// こまを作って PNG にする。wallOf(t) = 出力の t 秒目の時計(ミリ秒)、showOf(t) = 札を出すか
+function badgeFrames(name, len, wallOf, showOf) {
+  const frames = []; let prevN = null, lastUp = -9;
+  for (let i = 0; i < Math.ceil(len * BFPS); i++) {
+    const t = i / BFPS, w = wallOf(t), n = ordersAt(w);
+    if (prevN !== null && n > prevN) lastUp = t;
+    prevN = n;
+    frames.push({ show: showOf(t), clock: clockOf(w), orders: n, maint: inMaint(w), pulse: Math.max(0, 1 - (t - lastUp) / 0.5) });
+  }
+  const dir = join(out, name); execFileSync("rm", ["-rf", dir]); mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "frames.json"), JSON.stringify({ text: V4.badge, frames }));
+  sh("node", [join(ROOT, "api/scripts/badge-frames.cjs"), join(dir, "frames.json"), dir]);
+  return { dir, frames };
 }
-const sShift = sa < 0 ? -sa / sb : 0, sTrim = Math.max(0, sa);
-const PW = 560, PX = 1920 - PW - 8 - 28, PY = 1080 - Math.round((PW * 9) / 16) - 8 - 104;
+// 早送りの実際の倍率(録画は時計より遅れて進むので、録画の中の始めと終わりの目印のあいだで測る)
+const t0 = steps[0].at, start = cueAt.start - S;
+const Keff = fok ? realSec / (cueAt.end - cueAt.start) : K;
+console.log("早送りの実際の倍率", Keff.toFixed(2), "(名目", K, ")");
+const fb = badgeFrames("badge-film", flen, (t) => t0 + Math.max(0, toOrig(t) - start) * Keff * 1000, (t) => t <= endT2 + 0.5);
 const inputs = place.flatMap((p) => ["-i", clip[p.k].file]);
 const ni = place.length;
 const filt = [
   `[0:v]drawbox=x=1896:y=0:w=24:h=24:color=0x2e3e50:t=fill[f0]`,
   `[${ni + 1}:v]format=rgba,fade=t=in:st=${ovA.toFixed(2)}:d=0.3:alpha=1,fade=t=out:st=${(ovB - 0.3).toFixed(2)}:d=0.3:alpha=1[fc]`,
   `[f0][fc]overlay=0:0:enable='between(t,${ovA.toFixed(2)},${ovB.toFixed(2)})'[f1]`,
-  `[${ni + 2}:v]trim=start=${sTrim.toFixed(3)},setpts=(PTS-STARTPTS)/${sb.toFixed(5)}+${sShift.toFixed(3)}/TB,scale=${PW}:-2,pad=iw+8:ih+8:4:4:color=white[pip]`,
-  `[f1][pip]overlay=${PX}:${PY}:eof_action=pass:enable='lte(t,${(endT + 0.5).toFixed(2)})'[fv]`,
+  G > 1
+    ? `[f1]split=3[x0][x1][x2];[x0]trim=0:${cut.toFixed(3)},setpts=PTS-STARTPTS[y0];[x1]trim=${cut.toFixed(3)}:${endT.toFixed(3)},setpts=(PTS-STARTPTS)/${G.toFixed(4)}[y1];[x2]trim=${endT.toFixed(3)}:${origLen.toFixed(3)},setpts=PTS-STARTPTS[y2];[y0][y1][y2]concat=n=3:v=1:a=0[f2]`
+    : `[f1]null[f2]`,
+  `[${ni + 2}:v]format=rgba[bd]`,
+  `[f2][bd]overlay=0:0:eof_action=pass[fv]`,
   place.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[a${i}]`).join(";"),
   place.map((_, i) => `[a${i}]`).join("") + `amix=inputs=${ni}:normalize=0,apad[aout]`,
 ].join(";");
-ff("-ss", S.toFixed(3), "-t", flen.toFixed(3), "-i", webm, ...inputs, "-loop", "1", "-t", flen.toFixed(3), "-i", fcard, "-i", swebm,
+ff("-ss", S.toFixed(3), "-t", origLen.toFixed(3), "-i", webm, ...inputs, "-loop", "1", "-t", origLen.toFixed(3), "-i", fcard, "-framerate", String(BFPS), "-i", join(fb.dir, "b%05d.png"),
   "-filter_complex", filt, "-map", "[fv]", "-map", "[aout]", "-t", flen.toFixed(3), ...enc, join(out, "3-film.mp4"));
-console.log("承・転", JSON.stringify({ K, realSec: Math.round(realSec), len: flen.toFixed(1), end: endT.toFixed(1), place: place.map((p) => `${p.k}@${p.at.toFixed(1)}`), pip: { sa: sa.toFixed(1), sb: sb.toFixed(2) } }));
+console.log("承・転", JSON.stringify({ K, realSec: Math.round(realSec), len: flen.toFixed(1), end: endT2.toFixed(1), place: place.map((p) => `${p.k}@${p.at.toFixed(1)}`), orders: fb.frames.at(-1).orders }));
 
 // 3. 承認の場面: video/approve の録画(健康診断の表 → カード → 確認コード → 承認 → 「直しました」の結果)
-const pdir = join(W, "approve");
-const pm = JSON.parse(readFileSync(join(pdir, "marks.json"), "utf8"));
 const pwebm = join(pdir, readdirSync(pdir).find((f) => f.endsWith(".webm")));
 const pr = dur(pwebm) / pm.wall_total;
 // 直ったページとお店のトップは映さない(お店が止まっていないことは、承・転の買い物の画面で見せている)。「直しました」の結果がカードに出たところで終える
@@ -154,7 +195,7 @@ const P0 = Math.max(0, (pm.health ?? pm.card) * pr - 0.1), P1 = (pm.after ?? pm.
 const at = (m) => m * pr - P0 + 0.2;
 const pplace = [];
 let pt = 0;
-for (const l of V4.approve) { const a = Math.max(at(pm[l.at]), pt + 0.3); pplace.push({ at: a, k: l.key }); pt = a + clip[l.key].d; }
+for (const l of APPROVE) { const a = Math.max(at(pm[l.at]), pt + 0.3); pplace.push({ at: a, k: l.key }); pt = a + clip[l.key].d; }
 // 結の 1 行目は、結の頭(版の違うお店の健康診断が並ぶところ)で読む。承認の場面は 3 行目を読み終えたら終える
 const plen = Math.max(P1 - P0, pt + 0.4);
 if (pm.upgrade && pm.done) {
@@ -163,17 +204,11 @@ if (pm.upgrade && pm.done) {
   const w0 = P0 / pr, wA = pm.approved + 1.2, wB = Math.max(wA + 1, pm.done - 0.3), w1 = pm.wall_total - 0.3;
   const FAST = Math.min(1, 6 / (wB - wA)); // 承認から終わりまでを約 6 秒に
   const segs = [[w0, wA, 1], [wA, wB, FAST], [wB, w1, 1]];
-  const sm = smarks, sl = slen, ss = sspan;
-  const shopT = (w) => ((pm.wall_start + w * 1000 - sm.wall_start) / 1000) * (sl / ss); // 壁時計 → 買い物の録画の秒
   const parts = [];
   segs.forEach(([a, b, f], i) => {
     const outLen = (b - a) * f, o = join(out, `3b-ap${i}.mp4`);
-    const sa2 = Math.max(0, shopT(a)), sb2 = Math.max(sa2 + 0.1, shopT(b));
-    ff("-ss", (a * pr).toFixed(3), "-t", ((b - a) * pr).toFixed(3), "-i", pwebm, "-ss", sa2.toFixed(3), "-t", (sb2 - sa2).toFixed(3), "-i", swebm, "-filter_complex",
-      `[0:v]fps=30,setpts=(PTS-STARTPTS)*${(outLen / ((b - a) * pr)).toFixed(5)}[m];` +
-      `[1:v]fps=30,setpts=(PTS-STARTPTS)*${(outLen / (sb2 - sa2)).toFixed(5)},scale=${PW}:-2,pad=iw+8:ih+8:4:4:color=white[pp];` +
-      `[m][pp]overlay=${PX}:${PY}:eof_action=repeat,trim=duration=${outLen.toFixed(3)}[v]`,
-      "-map", "[v]", "-an", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", o);
+    ff("-ss", (a * pr).toFixed(3), "-t", ((b - a) * pr).toFixed(3), "-i", pwebm, "-vf", `fps=30,setpts=(PTS-STARTPTS)*${(outLen / ((b - a) * pr)).toFixed(5)},trim=duration=${outLen.toFixed(3)}`,
+      "-an", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", o);
     parts.push({ o, a, b, f, outLen });
   });
   writeFileSync(join(out, "ap.list"), parts.map((x) => `file '${x.o}'`).join("\n"));
@@ -181,13 +216,31 @@ if (pm.upgrade && pm.done) {
   // 壁時計 → 出力の秒
   const outT = (w) => { let t = 0; for (const x of parts) { if (w <= x.b) return t + Math.max(0, w - x.a) * x.f; t += x.outLen; } return t; };
   const up = []; let ut = 0;
-  for (const l of V4.approve) { const a2 = Math.max(outT(pm[l.at]) + 0.2, ut + 0.3); up.push({ at: a2, k: l.key }); ut = a2 + clip[l.key].d; }
+  for (const l of APPROVE) { const a2 = Math.max(outT(pm[l.at]) + 0.2, ut + 0.3); up.push({ at: a2, k: l.key }); ut = a2 + clip[l.key].d; }
   const total = parts.reduce((x, y) => x + y.outLen, 0), ulen = Math.max(total, ut + 0.4);
-  ff("-i", apv, ...up.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
-    `[0:v]tpad=stop_mode=clone:stop_duration=${Math.max(0, ulen - total).toFixed(2)}[v];` +
+  // 寄せる: カードの「4.2.0 → 4.2.3-p2」(1 行目を読むあいだ)と、結果の版(終わってから)。ゆっくり寄って、ゆっくり戻る
+  const zw = [];
+  // 文字は左寄せなので、行の幅いっぱいではなく、左から 900px ほどの真ん中に寄せる
+  const box = (r) => r && r.w > 0 ? { cx: r.x + Math.min(r.w, 900) / 2, cy: r.y + r.h / 2 } : null;
+  const cb = box(pm.cardBox), rb = box(pm.resultBox);
+  // カードは「4.2.0 → 4.2.3-p2」の行が上の方に来るように寄せる(下にカードの説明が見える。上のほかのカードは映さない)
+  if (cb) zw.push({ a: outT(pm.card) + 0.4, b: Math.max(outT(pm.card) + 2.5, outT(pm.code) - 0.3), cx: cb.cx, cy: cb.cy + 170 });
+  if (rb) zw.push({ a: outT(pm.done) + 0.3, b: ulen, ...rb, end: true });
+  const ZM = 1.8, RAMP = 0.6;
+  // zoompan の式: 窓ごとの寄り具合 e(t)(0〜1)を足し合わせる
+  const eOf = (w) => `(between(it,${w.a.toFixed(2)},${w.b.toFixed(2)})*min(1,min((it-${w.a.toFixed(2)})/${RAMP},${w.end ? 1 : `(${w.b.toFixed(2)}-it)/${RAMP}`})))`;
+  const e = zw.length ? zw.map(eOf).join("+") : "0";
+  const cx = zw.length ? zw.map((w) => `${eOf(w)}*${w.cx.toFixed(0)}`).join("+") + `+(1-(${e}))*960` : "960";
+  const cy = zw.length ? zw.map((w) => `${eOf(w)}*${w.cy.toFixed(0)}`).join("+") + `+(1-(${e}))*540` : "540";
+  const zoomF = `zoompan=z='1+${ZM - 1}*(${e})':x='max(0,min(iw-iw/zoom,(${cx})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,(${cy})-ih/zoom/2))':d=1:s=1920x1080:fps=30`;
+  // 札: 承認の録画の時計 → 買い物の記録の時刻(版上げのメンテナンス中は黄色)
+  const inv = (t) => { let acc = 0; for (const x of parts) { if (t <= acc + x.outLen) return x.a + (t - acc) / x.f; acc += x.outLen; } return parts.at(-1).b; };
+  const ab = badgeFrames("badge-approve", ulen, (t) => pm.wall_start + inv(t) * 1000, () => true);
+  ff("-i", apv, ...up.flatMap((p) => ["-i", clip[p.k].file]), "-framerate", String(BFPS), "-i", join(ab.dir, "b%05d.png"), "-filter_complex",
+    `[0:v]tpad=stop_mode=clone:stop_duration=${Math.max(0, ulen - total).toFixed(2)},${zoomF}[vz];[${up.length + 1}:v]format=rgba[bd];[vz][bd]overlay=0:0:eof_action=pass[v];` +
     up.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + up.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${up.length}:normalize=0,apad[pa]`,
     "-map", "[v]", "-map", "[pa]", "-t", ulen.toFixed(3), ...enc, join(out, "3b-approve.mp4"));
-  console.log("承認(版上げ)", JSON.stringify({ len: ulen.toFixed(1), fast: FAST.toFixed(3), upgradeWall: (pm.done - pm.approved).toFixed(1), place: up.map((p) => `${p.k}@${p.at.toFixed(1)}`) }));
+  console.log("承認(版上げ)", JSON.stringify({ len: ulen.toFixed(1), fast: FAST.toFixed(3), upgradeWall: (pm.done - pm.approved).toFixed(1), place: up.map((p) => `${p.k}@${p.at.toFixed(1)}`), zoom: zw.map((w) => `${w.a.toFixed(1)}-${w.b.toFixed(1)}`), maintFrames: ab.frames.filter((f) => f.maint).length, ordersEnd: ab.frames.at(-1).orders }));
 } else
 ff("-ss", P0.toFixed(3), "-t", (P1 - P0).toFixed(3), "-i", pwebm, ...pplace.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
   `[0:v]fps=30,tpad=stop_mode=clone:stop_duration=${Math.max(0, plen - (P1 - P0)).toFixed(2)}[v];` +
@@ -221,11 +274,21 @@ for (const k of ["ketsu1", "ketsu2", "ketsu3"]) clip[k] = { file: join(prev, k +
     "-map", "[v]", "-map", "1:a", "-t", segs.reduce((a, x) => a + x, 0).toFixed(3), ...enc, join(out, "4-end.mp4"));
 }
 for (const p of ["1-ki", "2-intro"]) if (!existsSync(join(prev, p + ".mp4"))) throw new Error(`${p}.mp4 が video/full に無い(先に make-full.mjs を回す)`);
-writeFileSync(join(out, "all.list"), [join(prev, "1-ki.mp4"), join(prev, "2-intro.mp4"), join(out, "3c-film-approve.mp4"), join(out, "4-end.mp4")].map((f) => `file '${f}'`).join("\n"));
-const OUT = process.env.OUT || "full-v4-draft.mp4";
+// 0 秒: 応募先の名前(場面 O)。音は無音
+{
+  const odir = join(out, "open"); execFileSync("rm", ["-rf", odir]);
+  const olen = (story.opening?.hold || 2.5) + 0.7;
+  const orec = sh("node", [join(ROOT, "api/scripts/record-opening.cjs"), odir, String(olen)]);
+  const trim = Number((/TRIM ([0-9.]+)/.exec(orec) || [])[1] || 0.3);
+  const owebm = join(odir, readdirSync(odir).find((f) => f.endsWith(".webm")));
+  ff("-ss", Math.max(0, trim - 0.1).toFixed(3), "-t", olen.toFixed(3), "-i", owebm, "-f", "lavfi", "-t", olen.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo",
+    "-map", "0:v", "-map", "1:a", "-t", olen.toFixed(3), ...enc, join(out, "0-open.mp4"));
+}
+writeFileSync(join(out, "all.list"), [join(out, "0-open.mp4"), join(prev, "1-ki.mp4"), join(prev, "2-intro.mp4"), join(out, "3c-film-approve.mp4"), join(out, "4-end.mp4")].map((f) => `file '${f}'`).join("\n"));
+const OUT = process.env.OUT || "full-v5.mp4";
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, OUT));
 ff("-i", join(W, OUT), "-vf", "scale=1280:720", "-c:v", "libx264", "-crf", "28", "-preset", "medium", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", join(W, OUT.replace(/\.mp4$/, "-720p.mp4")));
-console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));
+console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ open: dur(join(out, "0-open.mp4")), ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));
 
 // 右上などの四角が白黒に反転した時刻を、録画の中で探す
 function lineFlips(file, x, y) {

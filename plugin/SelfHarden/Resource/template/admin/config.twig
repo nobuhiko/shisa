@@ -371,7 +371,7 @@
     filmClock = document.getElementById('sh-film-clock');
     if (!filmClock) { filmClock = el('div'); filmClock.id = 'sh-film-clock'; filmClock.style.cssText = 'position:fixed;right:40px;top:64px;z-index:2100;background:#1f2933;color:#fff;font:700 26px/1.2 sans-serif;padding:8px 16px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3)'; document.body.appendChild(filmClock); }
     var w0 = Date.now();
-    (function tick() { var d = new Date(runT0 + (Date.now() - w0) * FILM_K); filmClock.textContent = '点検の時刻 ' + d.toLocaleTimeString('ja-JP') + '(' + FILM_K + ' 倍速)'; filmClock._raf = requestAnimationFrame(tick); })();
+    (function tick() { var d = new Date(runT0 + (Date.now() - w0) * FILM_K); filmClock.textContent = '点検の時刻 ' + d.toLocaleTimeString('ja-JP') + '(早送り)'; filmClock._raf = requestAnimationFrame(tick); })();
   }
   function replay(runId) {
     clearTimeout(timer); current = runId; shown = 0; stepsEl.textContent = ''; reportEl.hidden = true; card.hidden = false;

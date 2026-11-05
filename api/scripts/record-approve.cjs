@@ -67,6 +67,9 @@ const { mkdirSync, writeFileSync } = require("node:fs");
   }), [hy, cy]);
   await page.waitForTimeout(200);
   marks.card = at();
+  // 寄せる場所(動画で拡大して見せる): 版上げなら「EC-CUBE 4.2.0 → 4.2.3-p2」の行と見出し
+  const rectOf = (sel) => page.evaluate((sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }, sel).catch(() => null);
+  if (upgrade) marks.cardBox = await rectOf(".sh-upgrade .path");
   await page.waitForTimeout(Number(cardMs));
 
   marks.code = at();
@@ -105,6 +108,8 @@ const { mkdirSync, writeFileSync } = require("node:fs");
     status = fin;
     await page.locator(".sh-upgrade").first().scrollIntoViewIfNeeded().catch(() => {});
     marks.done = at();
+    await page.waitForTimeout(300);
+    marks.resultBox = await rectOf(".sh-upgrade .sh-fix-result");
   } else {
     await page.locator(".sh-fix-result").first().scrollIntoViewIfNeeded();
   }

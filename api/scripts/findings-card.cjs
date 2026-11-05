@@ -10,7 +10,7 @@ const { chromium } = require(process.env.PW || "playwright");
   await p.setContent(`<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:transparent}
     .c{position:fixed;left:50%;top:46%;transform:translate(-50%,-50%);background:rgba(20,30,44,.94);color:#fff;border-radius:18px;padding:36px 56px 40px;box-shadow:0 12px 48px rgba(0,0,0,.45);min-width:980px}
     h2{margin:0 0 22px;font:700 40px "Hiragino Sans","Noto Sans JP",sans-serif;color:#ffcc80}
-    ol{margin:0;padding:0 0 0 1.4em;font:600 36px/1.65 "Hiragino Sans","Noto Sans JP",sans-serif;white-space:nowrap}</style>
+    ol{margin:0;padding:0 0 0 1.4em;font:600 36px/1.5 "Hiragino Sans","Noto Sans JP",sans-serif;max-width:1480px} li{margin:4px 0}</style>
     <div class="c"><h2></h2><ol></ol></div>`);
   await p.evaluate(([t, xs]) => {
     document.querySelector("h2").textContent = t;
