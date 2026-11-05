@@ -18,6 +18,10 @@ const SH_LAB_DIR = 'self-harden-lab';
 const SH_VAR_DIR = 'var/self-harden';
 const SH_MAX_OFFICIAL = 4194304;
 const SH_AUDIT_MAX = 1048576;
+// 店主の承認で書く直し: 承認の鍵(お店の中だけ。API には渡さない)と、使った印の記録
+const SH_APPROVE_KEY = 'approve-key.php';
+const SH_APPROVE_MAX_TTL = 3600;
+const SH_APPROVE_EXT = '/\\.(php|twig|tpl|html?)$/i';
 // 本体のファイルを書くときに中身を取ってきてよい、決まった公式の場所(受け口が自分で組み立てる。API からは URL を渡せない)
 const SH_OFFICIAL_RAW = 'https://raw.githubusercontent.com/';
 // 地図: 仕組み(アプリと版の系統)ごとの違いをここにまとめる。書いてよい場所、版の読み方、公式の置き場、版の形。
@@ -770,6 +774,7 @@ function op_inspect(array $args)
             'receiver' => __FILE__, 'public' => sh_pub(), 'map' => sh_map()['name'], 'flat' => !empty(sh_map()['flat']),
             'lab' => $root . '/' . sh_pub(SH_LAB_DIR), 'lab_exists' => is_dir($root . '/' . sh_pub(SH_LAB_DIR)),
             'var' => sh_var(), 'var_writable' => is_writable(sh_var()),
+            'approve_ready' => sh_approve_key() !== null, 'approve_dirs' => sh_approve_dirs(),
         ];
     }
     return $r;
@@ -1460,6 +1465,187 @@ function op_clear_cache(array $cfg, array $args)
     return $res;
 }
 
+// ---- 店主が承認した直し(カスタマイズしたファイルだけ) ----
+// 窓口が書けるプログラムは、公式の中身か、店主がお店の管理画面で中身を見て承認したものだけ。
+// 承認の印は、お店の中だけにある承認の鍵で、プラグイン(管理画面)が作る。API はこの鍵を持たないので、
+// API の鍵が漏れても印は作れず、ここで断る。印には、直す先・書く中身のハッシュ・書く前のハッシュ・期限・お店の ID が入る
+
+// 承認の鍵(var の中。先頭行は PHP の exit だけ、2 行目が JSON)。無ければ null
+function sh_approve_key()
+{
+    $raw = @file_get_contents(sh_var(SH_APPROVE_KEY));
+    if (!is_string($raw) || ($pos = strpos($raw, "\n")) === false) {
+        return null;
+    }
+    $c = json_decode(substr($raw, $pos + 1), true);
+    return is_array($c) && isset($c['key']) && is_string($c['key']) && preg_match('/^[0-9a-f]{64}$/', $c['key']) ? $c['key'] : null;
+}
+
+// 承認で直してよい場所(カスタマイズの置き場)。公式の本体・部品・設定・窓口自身は入らない
+function sh_approve_dirs()
+{
+    switch (sh_map()['name']) {
+        case 'eccube4': return ['app/Customize', 'app/template'];
+        case 'eccube3': return ['app/template'];
+        case 'eccube2': return [sh_pub('user_data'), 'data/Smarty/templates', 'data/class_extends'];
+    }
+    return [];
+}
+
+function sh_approval_string($sid, $pid, $path, $new, $before, $exp)
+{
+    return implode("\n", ['SH-APPROVE1', $sid, $pid, $path, $new, $before, (string) $exp]);
+}
+
+// 直す先を確かめる: 今あるふつうのファイル(新しく作らない)、カスタマイズの置き場の中、決めた種類だけ
+function sh_approved_path($p)
+{
+    $abs = sh_safe_path($p, true);
+    $rel = sh_rel($abs);
+    if (!is_file($abs) || is_link($abs)) {
+        throw new ShError('bad_target', '今あるふつうのファイルだけ直せます(新しいファイルは作りません)');
+    }
+    if (sh_is_protected($rel) || !preg_match(SH_APPROVE_EXT, $rel)) {
+        throw new ShError('bad_target', 'そのファイルは承認の直しでも書けません: ' . $rel);
+    }
+    foreach (sh_approve_dirs() as $d) {
+        if ($rel !== $d && sh_is_inside($rel, $d)) {
+            return $rel;
+        }
+    }
+    throw new ShError('bad_target', '承認の直しで書けるのは、カスタマイズの置き場(' . implode('・', sh_approve_dirs()) . ')の中だけです');
+}
+
+// Twig の組み立て済みのテンプレートを捨てる(本番の設定では書き換えを自分で読み直さないため)。プログラムの設定や経路の控えは残す
+function sh_clear_twig_cache()
+{
+    $name = sh_map()['name'];
+    $dirs = [];
+    if ($name === 'eccube4') {
+        foreach ((array) @glob(sh_root() . '/var/cache/*/twig', GLOB_ONLYDIR) as $d) {
+            $dirs[] = $d;
+        }
+    } elseif ($name === 'eccube3') {
+        $dirs[] = sh_root() . '/app/cache/twig';
+    }
+    foreach ($dirs as $d) {
+        if (!is_string($d) || !is_dir($d) || is_link($d)) {
+            continue;
+        }
+        $old = dirname($d) . '/.sh-old-twig-' . bin2hex(random_bytes(4));
+        if (!@rename($d, $old)) {
+            continue;
+        }
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($old, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($it as $f) {
+            if ($f->isLink() || $f->isFile()) {
+                @unlink($f->getPathname());
+            } elseif ($f->isDir()) {
+                @rmdir($f->getPathname());
+            }
+        }
+        @rmdir($old);
+    }
+}
+
+function op_apply_approved_fix(array $cfg, array $args)
+{
+    $key = sh_approve_key();
+    if ($key === null) {
+        throw new ShError('no_approval_key', 'このお店には承認の鍵がありません(プラグインを有効にし直してください)');
+    }
+    $a = isset($args['approval']) && is_array($args['approval']) ? $args['approval'] : null;
+    if ($a === null) {
+        throw new ShError('not_approved', '店主の承認の印がありません');
+    }
+    foreach (['proposal_id', 'path', 'sha256_new', 'sha256_before', 'expires_at', 'shop_id', 'sig'] as $k) {
+        if (!isset($a[$k]) || !is_scalar($a[$k])) {
+            throw new ShError('not_approved', '承認の印の形が正しくありません');
+        }
+    }
+    $pid = (string) $a['proposal_id'];
+    $path = (string) $a['path'];
+    $new = (string) $a['sha256_new'];
+    $before = (string) $a['sha256_before'];
+    $exp = (int) $a['expires_at'];
+    $sid = (string) $a['shop_id'];
+    $sig = (string) $a['sig'];
+    if (!preg_match('/^prp_[0-9a-f]{16}$/', $pid) || !preg_match('/^[0-9a-f]{64}$/', $new) || !preg_match('/^[0-9a-f]{64}$/', $before) || !preg_match('/^[0-9a-f]{64}$/', $sig)) {
+        throw new ShError('not_approved', '承認の印の形が正しくありません');
+    }
+    if (!hash_equals((string) $cfg['shop_id'], $sid)) {
+        throw new ShError('not_approved', '別のお店の承認です');
+    }
+    if (!hash_equals(hash_hmac('sha256', sh_approval_string($sid, $pid, $path, $new, $before, $exp), $key), $sig)) {
+        throw new ShError('not_approved', '承認の印が合いません');
+    }
+    $now = time();
+    if ($exp < $now || $exp > $now + SH_APPROVE_MAX_TTL) {
+        throw new ShError('approval_expired', '承認の期限が切れています。管理画面でもう一度承認してください');
+    }
+    $content = isset($args['content']) ? $args['content'] : null;
+    if (!is_string($content) || strlen($content) > SH_MAX_READ) {
+        throw new ShError('bad_content', '書く中身がないか、大きすぎます');
+    }
+    if (!hash_equals($new, hash('sha256', $content))) {
+        throw new ShError('not_approved', '承認された中身と、書こうとしている中身が違います');
+    }
+    $rel = sh_approved_path($path);
+    $abs = sh_root() . '/' . $rel;
+    if (preg_match('/\\.php$/i', $rel)) {
+        // 動かさずに、PHP の書き方として正しいかだけ確かめる
+        try {
+            token_get_all($content, defined('TOKEN_PARSE') ? TOKEN_PARSE : 0);
+        } catch (ParseError $e) {
+            throw new ShError('php_syntax', 'PHP の書き方に誤りがあるので書きません(' . $e->getLine() . ' 行目)');
+        }
+    }
+    $lock = @fopen(sh_var('lock'), 'c');
+    if ($lock) {
+        flock($lock, LOCK_EX);
+    }
+    // 1 回きり: 使った印を覚える(書く前に。失敗して戻しても、同じ印はもう使えない)
+    $used_dir = sh_var('approvals');
+    if (!is_dir($used_dir)) {
+        @mkdir($used_dir, 0700, true);
+    }
+    $used = $used_dir . '/' . $sig;
+    if (file_exists($used)) {
+        throw new ShError('approval_used', 'この承認はもう使われています');
+    }
+    if (!hash_equals($before, (string) hash_file('sha256', $abs))) {
+        throw new ShError('conflict', '承認したあとに、ファイルの中身が変わっています。もう一度見てから承認してください');
+    }
+    if (@file_put_contents($used, json_encode(['proposal_id' => $pid, 'path' => $rel, 'at' => $now])) === false) {
+        throw new ShError('io', '承認の記録を書けません');
+    }
+    $meta = sh_backup($rel, $abs, 'code:' . $rel);
+    sh_atomic_write($abs, $content);
+    if (function_exists('opcache_invalidate')) {
+        @opcache_invalidate($abs, true);
+    }
+    if (preg_match('/\\.twig$/i', $rel)) {
+        sh_clear_twig_cache();
+    }
+    $res = ['proposal_id' => $pid, 'path' => $rel, 'backup_id' => $meta['backup_id'], 'sha256_before' => $before,
+        'sha256_after' => $new, 'verify' => null, 'rolled_back' => false];
+    if (isset($args['verify'])) {
+        $res['verify'] = sh_verify($cfg, $args['verify']);
+        if (sh_verify_failed($res['verify'])) {
+            sh_atomic_write($abs, (string) file_get_contents(sh_var('backups/' . $meta['backup_id'] . '.bak')));
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate($abs, true);
+            }
+            if (preg_match('/\\.twig$/i', $rel)) {
+                sh_clear_twig_cache();
+            }
+            $res['rolled_back'] = true;
+            $res['rollback_verify'] = sh_verify($cfg, $args['verify']);
+        }
+    }
+    return $res;
+}
+
 // 公式に無い不審なファイルを、消さずに Web から読めない場所へ移す
 function op_quarantine(array $cfg, array $args)
 {
@@ -2019,6 +2205,7 @@ function sh_main()
             case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
             case 'apply_official_release': $r = op_apply_official_release($cfg, $args); break;
             case 'quarantine': $r = op_quarantine($cfg, $args); break;
+            case 'apply_approved_fix': $r = op_apply_approved_fix($cfg, $args); break;
             case 'clear_cache': $r = op_clear_cache($cfg, $args); break;
             case 'release_quarantine': $r = sh_release(isset($args['quarantine_id']) ? $args['quarantine_id'] : null); break;
             case 'list_quarantine': $r = op_list_quarantine(); break;
