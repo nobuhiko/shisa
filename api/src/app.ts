@@ -5,7 +5,7 @@ import { verifyRequest, randomHex, NONCE_TTL_SEC, apiResponseSignature } from ".
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store, Proposal } from "./store.js";
-import { applyApproved, applyUpgrade, rollbackUpgrade } from "./tools.js";
+import { applyApproved, applyUpgrade, rollbackUpgrade, isUpgradeStalled } from "./tools.js";
 import { dailyQuotaExceeded, isFirstRun, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
@@ -108,7 +108,7 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null,
     fingerprint: p.fingerprint ?? null, keep: p.keep ?? [],
     // 止まっているか(管理画面に「止まった作業を戻す」を出す): 自動で戻せなかった、窓口に届かない、10 分以上動きが無い
-    stalled: p.kind === "upgrade" && (p.status === "stuck" || (p.status === "running" && (((p.upgrade as any)?.status === "unreachable") || Date.now() - 1000 * Number((p.upgrade as any)?.updated_at ?? 0) > 600_000))) });
+    stalled: isUpgradeStalled(p, Date.now()) });
 
   app.get("/v1/shops/:id/proposals", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");

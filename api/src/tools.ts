@@ -1050,6 +1050,21 @@ export async function recordUpgrade(shop: Shop, store: Store, p: Proposal) {
   await store.addApplied(shop.shop_id, [marker, ...kept]);
 }
 
+// 管理画面に「止まっています」と「止まった作業を戻す」を出すか。本当に止まったときだけ出す:
+// 窓口が自分で戻せずに止まった(stuck)、窓口に長く届かない(unreachable)、窓口の作業の記録が 10 分以上動いていない。
+// 最初の呼び出しが長い段(公式の配布物を取る)で時間切れになると、窓口の記録(updated_at)がまだ無い。そのときは承認した時刻から数える
+// (以前は記録が無いと 0 として数え、普通に進んでいるのに毎回「止まっています」と出ていた)
+export const UPGRADE_STALL_MS = 600_000;
+export function isUpgradeStalled(p: Pick<Proposal, "kind" | "status" | "upgrade" | "decided_at">, now: number): boolean {
+  if (p.kind !== "upgrade") return false;
+  if (p.status === "stuck") return true;
+  if (p.status !== "running") return false;
+  const u = (p.upgrade ?? {}) as any;
+  if (u.status === "unreachable") return true;
+  const last = Number(u.updated_at) > 0 ? 1000 * Number(u.updated_at) : Number(p.decided_at ?? now);
+  return now - last > UPGRADE_STALL_MS;
+}
+
 // 版上げを、窓口が着地させる(終わる・戻す・断る・止まる)まで呼び続ける。API が再起動しても、控えた印で続きから駆動する(resumeUpgrades)。
 // 窓口につながらない時間が続いても、あきらめる前に長めの間隔でもう一度試す。それでもだめなら、窓口が自分で(点検の ping・inspect のたびに)10 分で戻す
 export const UPGRADE_RETRY = { shortMs: 3000, shortTries: 5, longMs: 60_000 };

@@ -612,7 +612,7 @@
         rb.addEventListener('click', function () { rollbackStalled(p, rb, res); });
         box.appendChild(rb);
       }
-      else if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '上げています: ' + (UP_STEPS[u.step] || u.step || '始めています') + ' …'; }
+      else if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '進めています(' + (UP_STEPS[u.step] || u.step || '公式の配布物を取っています') + ')…'; }
       else if (p.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = p.to_version + ' に上げました。お店を開いて確かめました'; }
       else if (p.status === 'stale') { res.className = 'sh-fix-result ng'; res.textContent = '調べたときから、お店のファイルが変わっています。もう一度調べてから、提案し直します(何も書いていません)'; }
       else if (p.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = '途中で失敗したので、控えから ' + p.from_version + ' に戻しました。お店は開いています'; }
