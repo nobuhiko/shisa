@@ -67,7 +67,8 @@ class LC_Page_Plugin_SelfHarden2_Config extends LC_Page_Admin_Ex
     private function show()
     {
         $c = $this->api->config();
-        $origin = (SC_Utils_Ex::sfIsHTTPS() ? 'https' : 'http') . '://' . $_SERVER['HTTP_HOST'];
+        // お店がサブディレクトリにあれば、その下までをお店の URL にする
+        $origin = (SC_Utils_Ex::sfIsHTTPS() ? 'https' : 'http') . '://' . $_SERVER['HTTP_HOST'] . rtrim(ROOT_URLPATH, '/');
         $this->connected = $c !== null;
         $this->shop_id = $c && isset($c['shop_id']) ? $c['shop_id'] : '';
         $this->api_base = $c && isset($c['api_base']) ? $c['api_base'] : (getenv('SELF_HARDEN_API') ?: 'http://api:8787');
@@ -111,7 +112,7 @@ class LC_Page_Plugin_SelfHarden2_Config extends LC_Page_Admin_Ex
         $urls = array();
         foreach (array('api_base', 'self_base', 'public_base') as $k) {
             $v = isset($_POST[$k]) ? trim((string) $_POST[$k]) : '';
-            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?/?$#', $v)) {
+            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?(/[A-Za-z0-9._~\-/]*)?$#', $v)) {
                 $this->flash('error', 'URL の形が正しくありません: ' . $k);
 
                 return;

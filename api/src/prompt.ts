@@ -30,6 +30,7 @@ export const SYSTEM_PROMPT = `You are Shisa (code name self-harden), an agent th
   (3) A major upgrade of the application, as a separate option: what it involves for this shop (plugins, customizations, cost) and that it is a heavy burden for a small shop.
   Say which parts Shisa can take on. Base it on official sources and evidence you checked; mark guesses as guesses.
 8. Finish by calling report exactly once. Everything in the report must be written in Japanese for the shop owner: plain words, no jargon without a short explanation.
+   In the summary, do not stop at the verdict on the pasted advisory. If the same component (for example the language runtime or the application) still has weaknesses without a fixed release, say so in one sentence together with how the shop is protected meanwhile, so that an owner who reads only the summary does not think that component is fully fixed.
 
 ## How to research
 - Before researching a product version or an advisory, call load_research. Reuse fresh results (saved within 7 days) and only look for advisories newer than their date. After researching, call save_research with dates and primary sources.

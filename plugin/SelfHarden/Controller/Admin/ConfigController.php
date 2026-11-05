@@ -30,7 +30,8 @@ class ConfigController extends AbstractController
     public function index(Request $request)
     {
         $c = $this->api->config();
-        $origin = $request->getSchemeAndHttpHost();
+        // お店がサブディレクトリにあれば、その下までをお店の URL にする
+        $origin = $request->getSchemeAndHttpHost().rtrim($request->getBasePath(), '/');
 
         return [
             'connected' => $c !== null,
@@ -52,7 +53,7 @@ class ConfigController extends AbstractController
         $urls = [];
         foreach (['api_base', 'self_base', 'public_base'] as $k) {
             $v = trim((string) $request->get($k));
-            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?/?$#', $v)) {
+            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?(/[A-Za-z0-9._~\-/]*)?$#', $v)) {
                 $this->addError('URL の形が正しくありません: '.$k, 'admin');
 
                 return $this->redirectToRoute('self_harden_admin_config');

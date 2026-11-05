@@ -17,7 +17,8 @@ class ConfigController extends AbstractController
     {
         $api = $app['self_harden3.api'];
         $c = $api->config();
-        $origin = $request->getSchemeAndHttpHost();
+        // お店がサブディレクトリにあれば、その下までをお店の URL にする
+        $origin = $request->getSchemeAndHttpHost().rtrim($request->getBasePath(), '/');
         $runs = array();
         if ($c) {
             $r = $api->listRuns();
@@ -45,7 +46,7 @@ class ConfigController extends AbstractController
         $urls = array();
         foreach (array('api_base', 'self_base', 'public_base') as $k) {
             $v = trim((string) $request->get($k));
-            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?/?$#', $v)) {
+            if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?(/[A-Za-z0-9._~\-/]*)?$#', $v)) {
                 $app->addError('URL の形が正しくありません: '.$k, 'admin');
 
                 return $app->redirect($app->url('plugin_SelfHarden3_config'));

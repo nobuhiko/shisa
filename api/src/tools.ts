@@ -46,7 +46,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "http_get",
     description:
-      "Fetch a path of this shop from the outside, like a visitor would (GET, no redirects followed). Returns status, headers and the first 4KB of the body. Only this shop's origin is allowed.",
+      "Fetch a path of this shop from the outside, like a visitor would (GET, no redirects followed). Returns status, headers and the first 4KB of the body. The path is relative to the shop's URL (if the shop lives in a subdirectory, / is that subdirectory); paths outside the shop are refused. extra_verify_paths of the writing tools use the same form.",
     input_schema: obj({ path: { type: "string", description: "Must start with /" } }, ["path"]),
   },
   {
@@ -84,7 +84,7 @@ export const CLIENT_TOOLS: Tool[] = [
   {
     name: "compare_with_official",
     description:
-      "Compare every file of the shop (root files, app/, html/, src/, vendor/) with the official EC-CUBE release of the installed version, by SHA-256. Returns files that differ from the official release, files that are not in the official release, and files of the official release that are missing. Files that self-harden itself changed by applying official fixes (and that still have the content it wrote) are listed separately as intended; do not revert them to the release. Takes some time on large installations.",
+      "Compare every file of the shop (root files, app/, html/, src/, vendor/) with the official EC-CUBE release of the installed version, by SHA-256. Returns files that differ from the official release, files that are not in the official release, and files of the official release that are missing. Files that self-harden itself changed by applying official fixes (and that still have the content it wrote) are listed separately as intended; do not revert them to the release. Takes some time on large installations. In an EC-CUBE 2 shop whose data/ folder sits inside the public folder (inspect paths.flat = true), the official html/x is the shop's x: this comparison reports official names (html/x, data/...), and the restore/fix/diff/quarantine tools accept either form.",
     input_schema: obj({
       only_php: { type: "boolean", description: "List only PHP-like files among the added files (default true)" },
     }),
@@ -291,25 +291,55 @@ const LAB_PATH = { ".htaccess": "self-harden-lab/.htaccess", ".user.ini": "self-
 const PHP_LIKE = /\.(php[0-9]?|phtml|phar|inc)$/i;
 
 // 店の公開の場所(本体の一番上からの相対)。4 系は ""、3 系・2 系は "html"。窓口が自分の居場所から決めたものを聞く
-const layoutCache = new Map<string, { pub: string; map: string }>();
-async function layoutOf(shop: Shop): Promise<{ pub: string; map: string }> {
+const layoutCache = new Map<string, { pub: string; map: string; flat: boolean }>();
+async function layoutOf(shop: Shop): Promise<{ pub: string; map: string; flat: boolean }> {
   const hit = layoutCache.get(shop.shop_id);
   if (hit) return hit;
   const r = await callReceiver(shop, "inspect", { sections: ["paths"] });
-  const l = { pub: r.ok && typeof r.result.paths?.public === "string" ? r.result.paths.public : "", map: (r.ok && r.result.paths?.map) || "eccube4" };
+  const l = { pub: r.ok && typeof r.result.paths?.public === "string" ? r.result.paths.public : "", map: (r.ok && r.result.paths?.map) || "eccube4", flat: !!(r.ok && r.result.paths?.flat) };
   if (r.ok) layoutCache.set(shop.shop_id, l);
   return l;
 }
 async function pubDir(shop: Shop): Promise<string> {
   return (await layoutOf(shop)).pub;
 }
+// data/ を公開の場所の中に置いた 2 系(flat): 公式の配布物の html/x は、お店の x。data/ と composer.* はそのまま。
+// 公式との照らし合わせ・差分・公式の中身を置く操作は、公式の名前(html/x)で考え、窓口には店の名前(x)で渡す。どちらの形で渡されても受ける
+async function shopPathOf(shop: Shop, p: string): Promise<string> {
+  return (await layoutOf(shop)).flat && p.startsWith("html/") ? p.slice(5) : p;
+}
+async function officialPathOf(shop: Shop, p: string): Promise<string> {
+  const shopPath = await shopPathOf(shop, p);
+  if (!(await layoutOf(shop)).flat || shopPath.startsWith("data/") || shopPath === "composer.json" || shopPath === "composer.lock") return shopPath;
+  return `html/${shopPath}`;
+}
+// お店の URL(サブディレクトリでもよい)を起点に、お店の中のパス(/ で始まる)を URL にする。お店の外へは出さない
+function shopPrefix(shop: Shop): string {
+  return new URL(shop.shop_url).pathname.replace(/\/+$/, "");
+}
+function urlInShop(shop: Shop, path: string): URL {
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) throw new Error("path must start with a single /");
+  const base = new URL(shop.shop_url);
+  const prefix = shopPrefix(shop);
+  const url = new URL(prefix + path, base.origin);
+  if (url.origin !== base.origin || (prefix !== "" && url.pathname !== prefix && !url.pathname.startsWith(prefix + "/"))) throw new Error("only paths inside this shop are allowed");
+  return url;
+}
+// 窓口のページの、お店の URL からのパス
+function receiverPathOf(shop: Shop): string {
+  const p = new URL(shop.receiver_url).pathname;
+  const prefix = shopPrefix(shop);
+  return prefix !== "" && p.startsWith(prefix + "/") ? p.slice(prefix.length) : p;
+}
+
 // 部品のフォルダ(2 系は data/vendor)
 async function vendorDir(shop: Shop): Promise<string> {
   return (await layoutOf(shop)).map === "eccube2" ? "data/vendor" : "vendor";
 }
 // 書いたあとに開いて確かめるページ(版の系統ごと)
 async function verifyPathsFor(shop: Shop, extra: unknown): Promise<string[]> {
-  const receiverPath = new URL(shop.receiver_url).pathname;
+  // パスはお店の URL からの相対(お店がサブディレクトリなら、その下)。窓口がお店の URL の下を開く
+  const receiverPath = receiverPathOf(shop);
   const ex = Array.isArray(extra) ? extra.filter((p): p is string => typeof p === "string" && p.startsWith("/")).slice(0, 2) : [];
   const pages = (await layoutOf(shop)).map === "eccube2" ? ["/", "/products/list.php", "/cart/"] : ["/", "/products/list", "/cart"];
   return [...pages, receiverPath, ...ex].slice(0, 6);
@@ -324,7 +354,7 @@ async function targetToPath(shop: Shop, target: string): Promise<string | null> 
 }
 
 async function currentFile(shop: Shop, path: string): Promise<{ sha: string | null; content: string }> {
-  const r = await callReceiver(shop, "read_file", { path });
+  const r = await callReceiver(shop, "read_file", { path: await shopPathOf(shop, path) });
   if (r.ok && r.result.exists) return { sha: r.result.sha256 as string, content: r.result.content as string };
   return { sha: null, content: "" };
 }
@@ -340,10 +370,7 @@ function lineDiff(before: string, after: string) {
 }
 
 export async function httpGet(shop: Shop, path: string) {
-  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) throw new Error("path must start with a single /");
-  const origin = new URL(shop.shop_url).origin;
-  const url = new URL(path, origin);
-  if (url.origin !== origin) throw new Error("only this shop's origin is allowed");
+  const url = urlInShop(shop, path);
   const t0 = Date.now();
   const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
   const body = await res.text();
@@ -357,7 +384,7 @@ export async function httpGet(shop: Shop, path: string) {
 async function probe(shop: Shop, iniKeys?: string[]) {
   const arm = await callReceiver(shop, "lab_arm", {});
   if (!arm.ok) return { error: arm };
-  const url = new URL(`${arm.result.probe_path}?t=${arm.result.token}`, new URL(shop.shop_url).origin);
+  const url = urlInShop(shop, `${arm.result.probe_path}?t=${arm.result.token}`);
   const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
   const text = await res.text();
   const out: Record<string, unknown> = { status: res.status };
@@ -385,7 +412,7 @@ async function shopHashes(shop: Shop): Promise<Record<string, string>> {
   for (let i = 0; i < 100; i++) {
     const r = await callReceiver(shop, "hash_tree", { limit: 5000, cursor });
     if (!r.ok) throw new Error(`hash_tree: ${r.error} ${r.detail ?? ""}`);
-    for (const [p, sha] of r.result.files as [string, string, number][]) out[p] = sha;
+    for (const [p, sha] of r.result.files as [string, string, number][]) out[await officialPathOf(shop, p)] = sha;
     if (!r.result.next_cursor) return out;
     cursor = r.result.next_cursor;
   }
@@ -504,26 +531,28 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
         const lastRelease = applied.filter((a) => a.via === "release").sort((a, b) => b.at - a.at)[0];
         const fixBase = applied.filter((a) => a.via === "fix" && a.from_version && (!lastRelease || a.at > lastRelease.at)).sort((a, b) => a.at - b.at)[0]?.from_version;
-        const version = fixBase && fixBase !== installed && !applied.some((a) => a.path === input.path && a.via === "fix") ? fixBase : installed;
-        const r = await callReceiver(shop, "read_file", { path: input.path });
+        const op = await officialPathOf(shop, String(input.path));
+        const version = fixBase && fixBase !== installed && !applied.some((a) => a.path === op && a.via === "fix") ? fixBase : installed;
+        const r = await callReceiver(shop, "read_file", { path: await shopPathOf(shop, String(input.path)) });
         if (!r.ok) return { content: j(r), isError: true, title: `公式との違いを見る: ${input.path}` };
-        const off = await officialContent(version, input.path);
+        const off = await officialContent(version, op);
         if (!off) return { content: j({ official: null, note: "not in the official release" }), title: `公式との違いを見る: ${input.path}` };
         const mineText = r.result.exists ? (r.result.content as string) : "";
-        const patch = createPatch(input.path, off.toString("utf8"), mineText, `official ${version}`, "shop");
+        const patch = createPatch(op, off.toString("utf8"), mineText, `official ${version}`, "shop");
         return { content: j({ version, diff: patch.length > 12000 ? patch.slice(0, 12000) + "\n…(truncated)" : patch }), title: `公式との違いを見る: ${input.path}` };
       } catch (e) {
         return { content: j({ error: (e as Error).message }), isError: true, title: `公式との違いを見る: ${input.path}` };
       }
     }
     case "restore_official": {
-      const args: Record<string, unknown> = { path: input.path, ref: input.ref, verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 } };
+      const op = await officialPathOf(shop, String(input.path));
+      const args: Record<string, unknown> = { path: await shopPathOf(shop, String(input.path)), ref: input.ref, verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 } };
       try {
         // 入っている版と同じタグに戻すときは、公式リリースの SHA-256 と一致することも受け口に確かめさせる
         const version = await installedVersion(shop);
         if (input.ref === version) {
           const m = await manifest(version);
-          if (m.files[input.path]) args.expected_sha256 = m.files[input.path];
+          if (m.files[op]) args.expected_sha256 = m.files[op];
         }
       } catch {
         /* 一覧が無くても、受け口は公式の場所からしか取らない */
@@ -534,13 +563,14 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         let installed: string | null = null;
         try { installed = await installedVersion(shop); } catch { /* 分からなければ記録する */ }
         if (input.ref !== installed) {
-          await ctx.store.addApplied(shop.shop_id, [{ path: input.path, sha256: r.result.sha256_after, ref: String(input.ref), source: r.result.source, reason: "restore_official", run_id: ctx.runId, at: Date.now() }]);
+          await ctx.store.addApplied(shop.shop_id, [{ path: op, sha256: r.result.sha256_after, ref: String(input.ref), source: r.result.source, reason: "restore_official", run_id: ctx.runId, at: Date.now() }]);
         }
       }
       return { content: j(r), isError: !r.ok, title: `公式の中身に戻す: ${input.path} @ ${input.ref}` };
     }
     case "apply_official_fix": {
-      const paths: string[] = Array.isArray(input.paths) ? input.paths.map(String) : [];
+      const paths: string[] = [];
+      for (const p of Array.isArray(input.paths) ? input.paths.map(String) : []) paths.push(await officialPathOf(shop, p));
       // 部品の修正も、その部品の公式リポジトリの差分で「全部のファイル」がそろっているかを確かめてから当てる
       const vd = await vendorDir(shop);
       const vpkg = (new RegExp(`^${vd.replace("/", "\\/")}\\/([^/]+\\/[^/]+)\\/`).exec(paths[0] ?? "") ?? [])[1];
@@ -589,15 +619,17 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       }
       let fromVersion: string | undefined;
       try { fromVersion = await installedVersion(shop); } catch { /* 分からなければ記録しない */ }
+      const shopPaths: string[] = [];
+      for (const p of paths) shopPaths.push(await shopPathOf(shop, p));
       const r = await callReceiver(shop, "apply_official_fix", {
         ref: input.ref,
-        paths: input.paths,
+        paths: shopPaths,
         verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 },
       }, vpkg ? 100_000 : 28_000);
       if (r.ok && !r.result.rolled_back && ctx) {
         await ctx.store.addApplied(
           shop.shop_id,
-          (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const, package_complete: vpkg ? true : undefined })),
+          await Promise.all((r.result.applied as any[]).map(async (a) => ({ path: await officialPathOf(shop, a.path), sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const, package_complete: vpkg ? true : undefined }))),
         );
       }
       return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
@@ -635,13 +667,18 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const todo = paths.filter((p) => mine[p] !== to.files[p]);
         if (!todo.length) return { content: j({ ok: true, detail: "Already identical to the release." }), title };
         const expected: Record<string, string> = {};
-        for (const p of todo) expected[p] = to.files[p];
+        const todoShop: string[] = [];
+        for (const p of todo) {
+          const sp = await shopPathOf(shop, p);
+          todoShop.push(sp);
+          expected[sp] = to.files[p];
+        }
         const r = await callReceiver(shop, "apply_official_release", {
-          ref, paths: todo, expected_sha256: expected,
+          ref, paths: todoShop, expected_sha256: expected,
           verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths ?? ["/admin/login"]), timeout_sec: 8 },
         }, 170_000);
         if (r.ok && !r.result.rolled_back && ctx) {
-          await ctx.store.addApplied(shop.shop_id, (r.result.applied as any[]).map((a) => ({ path: a.path, sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: installed, via: "release" as const })));
+          await ctx.store.addApplied(shop.shop_id, await Promise.all((r.result.applied as any[]).map(async (a) => ({ path: await officialPathOf(shop, a.path), sha256: a.sha256_after, ref, source: to.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: installed, via: "release" as const }))));
         }
         const by = (ps: string[]) => ps.reduce<Record<string, number>>((a, p) => ((a[p.split("/")[0]] = (a[p.split("/")[0]] ?? 0) + 1), a), {});
         const summary = r.ok
@@ -653,7 +690,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       }
     }
     case "quarantine": {
-      const r = await callReceiver(shop, "quarantine", { path: input.path, verify: { paths: await verifyPathsFor(shop, null), timeout_sec: 8 } });
+      const r = await callReceiver(shop, "quarantine", { path: await shopPathOf(shop, String(input.path)), verify: { paths: await verifyPathsFor(shop, null), timeout_sec: 8 } });
       return { content: j(r), isError: !r.ok, title: `隔離する: ${input.path}` };
     }
     case "release_quarantine": {
@@ -695,12 +732,11 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           title: `本番に入れる: ${input.target}`,
         };
       }
-      const receiverPath = new URL(shop.receiver_url).pathname;
       const r = await callReceiver(shop, "write_file", {
         target: input.target,
         content: input.content,
         expected_sha256: cur.sha,
-        verify: { paths: ["/", "/products/list", receiverPath], timeout_sec: 8 },
+        verify: { paths: await verifyPathsFor(shop, input.extra_verify_paths), timeout_sec: 8 },
       });
       const content = r.ok ? { ...r, added_lines: d.added, removed_lines: d.removed, removing_reason: d.removed.length ? input.removing_reason : undefined } : r;
       return { content: j(content), isError: !r.ok, title: `本番に入れる: ${input.target}` };
