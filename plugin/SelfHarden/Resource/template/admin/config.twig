@@ -60,7 +60,8 @@
   .sh-fix-diff div { white-space: pre-wrap; word-break: break-all; padding: 0 10px; }
   .sh-fix-diff .del { background: #fde0e0; } .sh-fix-diff .add { background: #e3f6e3; } .sh-fix-diff .gap { color: #999; }
   .sh-fix-diff .add.risky { background: #ffe9a8; outline: 2px solid #e0a000; } .sh-fix-warn { color: #9a5b00; background: #fff6dc; padding: 6px 10px; margin: 6px 0; border-radius: 4px; font-size: 13px; }
-  .sh-fix-note { font-size: 13px; color: #555; margin: 6px 0; } .sh-confirm-code { display: inline-block; width: 90px; margin: 0 8px; } .sh-code-label { font-size: 13px; }
+  .sh-fix-note { font-size: 13px; color: #555; margin: 6px 0; }
+  .sh-upgrade-sum { font-size: 13px; color: #555; margin: 6px 0; } .sh-upgrade-log { font-size: 13px; margin: 8px 0; padding-left: 20px; } .sh-upgrade-log li { margin: 2px 0; } .sh-confirm-code { display: inline-block; width: 90px; margin: 0 8px; } .sh-code-label { font-size: 13px; }
   .sh-fix .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .sh-fix-result { margin-top: 8px; font-weight: bold; } .sh-fix-result.ok { color: #2e7d32; } .sh-fix-result.ng { color: #b00020; }
   .sh-fix details { margin-top: 8px; } .sh-fix details pre { white-space: pre-wrap; background: #f7f7f7; padding: 8px; font-size: 13px; }
@@ -108,7 +109,7 @@
       </div>
 
       <div class="card rounded border-0 mb-4" id="sh-fix-card" hidden>
-        <div class="card-header"><span>店主の承認で直せること</span> <span class="ml-2 text-muted small">中身を見て「承認して直す」を押すと、Shisa が控えを取ってから直し、すぐにお店を開いて確かめます。開けなくなったら、その場で元に戻します</span></div>
+        <div class="card-header"><span>店主の承認でできること</span> <span class="ml-2 text-muted small">中身を見て承認すると、Shisa が控えを取ってから行い、すぐにお店を開いて確かめます。うまくいかなければ、その場で元に戻します</span></div>
         <div class="card-body" id="sh-fix-list"></div>
       </div>
 
@@ -463,11 +464,15 @@
     return box;
   }
   function renderProposals(d) {
+    // 版上げの途中で一時的に失敗の返事が来ても、画面は消さずに見に行き続ける
+    if ((!d || !d.ok) && upRunning) { clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000); return []; }
     var list = (d && d.ok && d.proposals) || [];
-    var show = list.filter(function (p) { return p.status === 'pending' || ((p.status === 'applied' || p.status === 'rolled_back') && p.decided_at && Date.now() - p.decided_at < 86400000); });
+    var show = list.filter(function (p) { return p.status === 'pending' || p.status === 'running' || ((p.status === 'applied' || p.status === 'rolled_back' || (p.kind === 'upgrade' && p.status === 'failed')) && p.decided_at && Date.now() - p.decided_at < 86400000); });
     fixList.textContent = '';
     fixCard.hidden = !show.length;
+    var running = false;
     show.forEach(function (p) {
+      if (p.kind === 'upgrade') { if (renderUpgrade(p, d)) running = true; return; }
       var box = el('div', 'sh-fix'); box.id = 'sh-fix-' + p.proposal_id;
       box.appendChild(el('h4', null, p.title || '直し方の提案'));
       box.appendChild(el('div', 'path', p.path));
@@ -512,20 +517,86 @@
       }
       fixList.appendChild(box);
     });
+    clearTimeout(upTimer);
+    upRunning = running;
+    if (running) upTimer = setTimeout(loadProposals, 3000);
     return show;
   }
+  // ---- 店主の承認で、同じ系列の公式の修正版に上げる(データベースの作り変えを含む) ----
+  var upTimer = null, upRunning = false;
+  var UP_STEPS = { fetch: '公式の配布物を取る', stage: '上げ先の版を広げる', fetch_from: '今の版の配布物を取る', plan: 'カスタマイズを見分ける',
+    maint_on: 'メンテナンスに入れる', db_backup: 'データベースの控え', db: 'データベースの作り変え', files: 'ファイルの置き換え', cache: 'キャッシュを消す',
+    maint_off: 'メンテナンスを外す', verify: 'お店を開いて確かめる', done: '終わり', rb_maint_on: '戻す: メンテナンス', rb_files: '戻す: ファイル', rb_db: '戻す: データベース',
+    rb_cache: '戻す: キャッシュ', rb_maint_off: '戻す: メンテナンスを外す', rb_verify: '戻す: 確かめる', rolled_back: '元に戻した' };
+  function renderUpgrade(p, d) {
+    var box = el('div', 'sh-fix sh-upgrade'); box.id = 'sh-fix-' + p.proposal_id;
+    box.appendChild(el('h4', null, p.title || ('EC-CUBE を ' + p.to_version + ' に上げる')));
+    box.appendChild(el('div', 'path', 'EC-CUBE ' + p.from_version + ' → ' + p.to_version + '(公式の修正版)'));
+    box.appendChild(el('p', 'owner', p.owner_text));
+    box.appendChild(el('div', 'sh-upgrade-sum', p.diff || ''));
+    var res = el('div', 'sh-fix-result'); res.id = 'sh-fix-result-' + p.proposal_id;
+    var u = p.upgrade || {};
+    if (p.status === 'pending') {
+      box.appendChild(el('div', 'sh-fix-note', '承認すると、お店を数分メンテナンスにして、公式の手順で上げます。先にファイルとデータベースの控えを取り、途中で失敗したら控えから元に戻します。リスクは店主さんが取ります。'));
+      var act = el('div', 'actions');
+      var codeIn = el('input', 'form-control sh-confirm-code'); codeIn.type = 'text'; codeIn.inputMode = 'numeric'; codeIn.maxLength = 4; codeIn.placeholder = p.confirm_code || ''; codeIn.id = 'sh-code-' + p.proposal_id;
+      var btn = el('button', 'btn btn-ec-conversion sh-approve-btn', '承認して上げる'); btn.type = 'button'; btn.id = 'sh-approve-' + p.proposal_id;
+      var stop = p.changed ? '提案のあとに EC-CUBE の版が変わっています。次の点検で提案し直します' : !p.content_ok ? '提案の中身が合わないので、承認できません'
+        : !d.can_approve ? '承認できるのは、システム管理者か店舗オーナーの権限の管理者だけです' : !p.confirm_code ? '画面を開き直してください' : '';
+      if (stop) { btn.disabled = true; codeIn.disabled = true; res.className = 'sh-fix-result ng'; res.textContent = stop; }
+      btn.addEventListener('click', function () { approve(p, btn, res, codeIn.value.trim()); });
+      if (!stop) { act.appendChild(el('span', 'sh-code-label', '確認コード ' + p.confirm_code + ' を入力:')); act.appendChild(codeIn); }
+      act.appendChild(btn);
+      box.appendChild(act);
+    } else {
+      var ul = el('ul', 'sh-upgrade-log');
+      (u.log || []).forEach(function (l) { ul.appendChild(el('li', null, l.text)); });
+      box.appendChild(ul);
+      if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '上げています: ' + (UP_STEPS[u.step] || u.step || '始めています') + ' …'; }
+      else if (p.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = p.to_version + ' に上げました。お店を開いて確かめました'; }
+      else if (p.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = '途中で失敗したので、控えから ' + p.from_version + ' に戻しました。お店は開いています'; }
+      else { res.className = 'sh-fix-result ng'; res.textContent = '上げられませんでした' + (u.error && u.error.detail ? ': ' + u.error.detail : ''); }
+      window.__shUpgrade = p.status;
+    }
+    box.appendChild(res);
+    fixList.appendChild(box);
+    return p.status === 'running';
+  }
   function loadProposals() {
-    return fetch(proposalsUrl, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(renderProposals).catch(function () { return []; });
+    // 版上げの途中は、管理画面が一時的に答えないことがある。そのときも少し待って見に行き続ける
+    // 版上げでファイルを置き換えている間は、答えが返らないままの呼び出しもある。10 秒で切って、見に行き直す
+    var ac = window.AbortController ? new AbortController() : null;
+    var cut = ac ? setTimeout(function () { ac.abort(); }, 10000) : null;
+    return fetch(proposalsUrl, { credentials: 'same-origin', signal: ac ? ac.signal : undefined }).then(function (r) {
+      clearTimeout(cut);
+      // EC-CUBE の版が変わると、管理画面のログインが切れることがある(ログインの画面へ回される)
+      if (r.redirected && /\/login/.test(r.url)) throw { relogin: true };
+      return r.json();
+    }).then(renderProposals)
+      .catch(function (e) {
+        if (upRunning && e && e.relogin) {
+          upRunning = false; clearTimeout(upTimer);
+          var box = document.querySelector('.sh-upgrade .sh-fix-result');
+          if (box) { box.className = 'sh-fix-result'; box.textContent = 'EC-CUBE の版が変わったので、管理画面のログインが切れました。もう一度ログインして、この画面を開くと結果が出ます'; }
+          window.__shUpgrade = 'relogin';
+        } else if (upRunning) { clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000); }
+        return [];
+      });
   }
   function approve(p, btn, res, code) {
     if (!/^[0-9]{4}$/.test(code || '')) { res.className = 'sh-fix-result ng'; res.textContent = '確認コード(4 けたの数字)を入力してください'; return; }
-    btn.disabled = true; res.className = 'sh-fix-result'; res.textContent = '控えを取って直し、お店を開いて確かめています…';
+    btn.disabled = true; res.className = 'sh-fix-result'; res.textContent = p.kind === 'upgrade' ? '承認しました。版上げを始めています…' : '控えを取って直し、お店を開いて確かめています…';
     // 画面で見た中身(ハッシュ)と確認コードを一緒に送る。お店の側で、見せたものと同じかを確かめてから印を作る
     var body = new URLSearchParams({ _token: token, sha256_new: p.sha256_new || '', sha256_before: p.sha256_before || '', confirm_code: code });
     fetch(approveBase + encodeURIComponent(p.proposal_id), { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: body })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var v = d.result && d.result.verify ? d.result.verify.map(function (x) { return x.path + ' ' + x.status; }).join('、') : '';
+        if (p.kind === 'upgrade') {
+          if (d.ok && d.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '版上げを始めました。進み具合はこの下に出ます'; window.__shApproved = 'running'; upRunning = true; loadProposals(); }
+          else { res.className = 'sh-fix-result ng'; res.textContent = '始められませんでした: ' + (d.detail || d.error || ''); btn.disabled = false; window.__shApproved = 'failed'; }
+          return;
+        }
         if (d.ok && d.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = '直しました。控えを取ってから書き、お店を開いて確かめました(' + v + ')'; }
         else if (d.ok && d.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = 'お店が開けなくなったので、すぐに元に戻しました(' + v + ')'; }
         else { res.className = 'sh-fix-result ng'; res.textContent = '直せませんでした: ' + (d.detail || d.error || ''); btn.disabled = false; }

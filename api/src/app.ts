@@ -5,7 +5,7 @@ import { verifyRequest, randomHex, NONCE_TTL_SEC, apiResponseSignature } from ".
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store, Proposal } from "./store.js";
-import { applyApproved } from "./tools.js";
+import { applyApproved, applyUpgrade } from "./tools.js";
 import { dailyQuotaExceeded, isFirstRun, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
@@ -104,7 +104,8 @@ export function createApp(store: Store, kick: (runId: string) => void) {
 
   // 店主の承認で直す提案。新しいものから。中身(書く中身の全部と差分)も渡す。管理画面はお店の中で今の中身と比べて見せる
   const proposalOut = (p: Proposal) => ({ proposal_id: p.proposal_id, run_id: p.run_id, path: p.path, title: p.title, owner_text: p.owner_text, developer_text: p.developer_text,
-    sha256_before: p.sha256_before, sha256_new: p.sha256_new, new_content: p.new_content, diff: p.diff, status: p.status, created_at: p.created_at, decided_at: p.decided_at ?? null, result: p.result ?? null });
+    sha256_before: p.sha256_before, sha256_new: p.sha256_new, new_content: p.new_content, diff: p.diff, status: p.status, created_at: p.created_at, decided_at: p.decided_at ?? null, result: p.result ?? null,
+    kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null });
 
   app.get("/v1/shops/:id/proposals", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");
@@ -131,7 +132,7 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     if (p.status !== "pending") return signedJson(c, shop, { ok: false, error: "not_pending", detail: "この提案はもう決まっています", status: p.status }, 409);
     let req: any;
     try { req = JSON.parse(body); } catch { return signedJson(c, shop, { ok: false, error: "bad_request" }, 400); }
-    return signedJson(c, shop, await applyApproved(shop, store, p, req?.approval));
+    return signedJson(c, shop, p.kind === "upgrade" ? await applyUpgrade(shop, store, p, req?.approval) : await applyApproved(shop, store, p, req?.approval));
   });
 
   return app;

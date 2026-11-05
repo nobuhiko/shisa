@@ -9,6 +9,8 @@ namespace Plugin\SelfHarden\Service;
 class Installer
 {
     public const RECEIVER = 'self-harden.php';
+    // 店主が承認した版上げの途中で、データベースの作り変えだけを行う入口(窓口が置く 1 回きりの合図があるときだけ動く)
+    public const UPGRADE_RUNNER = 'self-harden-upgrade.php';
     public const VAR_DIR = 'var/self-harden';
     public const LAB_DIR = 'self-harden-lab';
     // 店主の承認の印を作る鍵。お店の中だけに置き、API には決して渡さない(窓口も同じ場所から読む)
@@ -29,6 +31,16 @@ class Installer
             throw new \RuntimeException('受け口を置けませんでした');
         }
         @chmod($dst, 0644);
+        $rsrc = dirname(__DIR__).'/Resource/receiver/'.self::UPGRADE_RUNNER;
+        $rdst = $root.'/'.self::UPGRADE_RUNNER;
+        if (is_file($rsrc) && !is_link($rdst)) {
+            $tmp = $rdst.'.tmp-'.bin2hex(random_bytes(4));
+            if (copy($rsrc, $tmp) && rename($tmp, $rdst)) {
+                @chmod($rdst, 0644);
+            } else {
+                @unlink($tmp);
+            }
+        }
         $var = $root.'/'.self::VAR_DIR;
         foreach (['', '/backups', '/nonces'] as $sub) {
             if (!is_dir($var.$sub)) {
@@ -77,6 +89,7 @@ class Installer
     public static function remove($root)
     {
         @unlink($root.'/'.self::RECEIVER);
+        @unlink($root.'/'.self::UPGRADE_RUNNER);
         @unlink($root.'/'.self::VAR_DIR.'/config.php');
         @unlink($root.'/'.self::VAR_DIR.'/lab-token');
         @unlink($root.'/'.self::VAR_DIR.'/'.self::APPROVE_KEY);
