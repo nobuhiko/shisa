@@ -41,6 +41,8 @@ mountDemo(app, store);
 // 時計は API が持つ。店には cron も常駐も無いので、決まった間隔で API が自分で点検を始める
 const INTERVAL_MS = Number(process.env.SH_AUTO_INTERVAL_HOURS ?? 24) * 3600_000;
 async function tick() {
+  // SH_SCHEDULE=0 のときは、決まった間隔の点検も調べ直しもしない(手元のデモで API のクレジットを使い切らないため)
+  if (process.env.SH_SCHEDULE === "0") return;
   for (const shop of await store.listShops()) {
     if (shop.status !== "connected") continue;
     const runs = await store.listRuns(shop.shop_id);
