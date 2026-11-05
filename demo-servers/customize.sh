@@ -13,19 +13,24 @@
 #        4 系: app/Customize/Controller/ShopNoteController.php + app/template/default/ShopNote/index.twig(/shop_note)
 #        3 系: html/shop_note.php(値は htmlspecialchars。DB は使わない)
 #        2 系: html/user_data/shop_note.php(SC_Query のプレースホルダーと htmlspecialchars)
+#   server-b(動画のお店、4.2.3)だけは、a・b を入れず、c と、外から届く弱いカスタマイズ w を 1 つ入れる(承認して直すを撮るため):
+#     w: app/Customize/Controller/OrderCheckController.php + app/template/default/OrderCheck/index.twig(/order_check?no=)
+#        お問い合わせ番号を、テンプレートで escape を外して(|raw)そのまま出す。ログインなしで開ける。実害の出ないデモ用(DB も使わない)
+#     w の控えは .cache/customize-server-b-weak.txt(承認して直したあとは変わるのが正しい)
 # 控えは .cache/customize-<server>.txt(ファイル<TAB>sha256)
 set -eu
 cd "$(dirname "$0")"
 mkdir -p .cache
 mode=put
 [ "${1:-}" = check ] && { mode=check; shift; }
-S="${1:?server-d|server-f|server-g|server-h}"
+S="${1:?server-b|server-d|server-f|server-g|server-h}"
 case "$S" in
+  server-b) C=self-harden-demo-server-b-php-1; V=4; B=http://127.0.0.1:8082; FIX=;;
   server-d) C=self-harden-demo-server-d-1; V=4; B=http://127.0.0.1:8084; FIX=src/Eccube/Controller/Admin/Setting/Shop/PaymentController.php;;
   server-f) C=self-harden-demo-server-f-1; V=4; B=http://127.0.0.1:8086; FIX=src/Eccube/Service/TwoFactorAuthService.php;;
   server-g) C=self-harden-demo-server-g-1; V=3; B=http://127.0.0.1:8087; FIX=src/Eccube/Form/Type/Admin/ProductType.php;;
   server-h) C=self-harden-demo-ec2-server-h-1; V=2; B=http://127.0.0.1:8088; FIX=data/class/pages/admin/contents/LC_Page_Admin_Contents_FileManager.php;;
-  *) echo "server-d|server-f|server-g|server-h" >&2; exit 1;;
+  *) echo "server-b|server-d|server-f|server-g|server-h" >&2; exit 1;;
 esac
 R=/var/www/html
 LOG=.cache/customize-$S.txt
@@ -35,6 +40,9 @@ case "$V" in
   2) FOOT=data/Smarty/templates/default/footer.tpl; CLS=data/class/pages/LC_Page_Index.php; PAGE=html/user_data/shop_note.php; TPL=; URL=/user_data/shop_note.php;;
 esac
 FILES="$FOOT $CLS $FIX $PAGE $TPL"
+# 動画のお店は、公式のファイルは書き換えない(a・b を入れない)。安全なページと、弱いページ w だけ
+[ "$S" = server-b ] && FILES="$PAGE $TPL"
+WPAGE=app/Customize/Controller/OrderCheckController.php; WTPL=app/template/default/OrderCheck/index.twig; WURL=/order_check
 
 if [ "$mode" = check ]; then
   bad=0
@@ -46,9 +54,14 @@ if [ "$mode" = check ]; then
   # 3 系は、点検でお店の名前以外の Host を断る守りが入ることがある。そのときはお店の名前で開き直す
   [ "$code" = 403 ] && [ "$V" = 3 ] && code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: server-g' "$B$URL?q=test")(Host: server-g)"
   echo "[$S] 独自のページ $URL: HTTP ${code}"
+  if [ "$S" = server-b ]; then
+    body=$(curl -s "$B$WURL?no=%3Cb%3Ex%3C%2Fb%3E")
+    case "$body" in *"<b>x</b>"*) echo "[$S] 弱いページ $WURL: 入れた値がそのまま出る(直っていない)";; *"&lt;b&gt;x&lt;/b&gt;"*) echo "[$S] 弱いページ $WURL: escape されて出る(直った)";; *) echo "[$S] 弱いページ $WURL: 開けない";; esac
+  fi
   exit $bad
 fi
 
+if [ "$S" != server-b ]; then
 # a. フッターの文言(公式のファイルを書き換える)
 if [ "$V" = 2 ]; then
   docker exec "$C" sed -i 's| All rights reserved\.| All rights reserved. (カスタマイズ: 送料のご案内はお問い合わせから)|' "$R/$FOOT"
@@ -59,6 +72,7 @@ fi
 docker exec "$C" sed -i '1a // カスタマイズ: トップページの表示は店舗の運用に合わせて調整している(デモ用の説明コメント)' "$R/$CLS"
 # b. 修正版が直すファイルに、直しとは関係のないコメント行
 docker exec "$C" sed -i '1a // カスタマイズ: 管理画面の運用メモ(デモ用。修正版の直しとは関係のない行)' "$R/$FIX"
+fi
 
 # c. 安全な独自のページ
 T=.cache/customize-$S
@@ -119,6 +133,46 @@ TWIG
   docker exec "$C" mkdir -p "$R/app/Customize/Controller" "$R/app/template/default/ShopNote"
   docker cp "$T/page" "$C:$R/$PAGE"
   docker cp "$T/tpl" "$C:$R/$TPL"
+  if [ "$S" = server-b ]; then
+    cat > "$T/wpage" <<'PHP'
+<?php
+// カスタマイズ: お問い合わせ番号で受付の状況を確かめる小さなページ(デモ用。DB は使わない)
+namespace Customize\Controller;
+
+use Eccube\Controller\AbstractController;
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\Template;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\Routing\Annotation\Route;
+
+class OrderCheckController extends AbstractController
+{
+    /**
+     * @Route("/order_check", name="customize_order_check", methods={"GET"})
+     * @Template("OrderCheck/index.twig")
+     */
+    public function index(Request $request)
+    {
+        $no = mb_substr((string) $request->query->get('no', ''), 0, 200);
+
+        return ['no' => $no];
+    }
+}
+PHP
+    cat > "$T/wtpl" <<'TWIG'
+{# カスタマイズ: お問い合わせ番号で受付の状況を確かめる小さなページ #}
+{% extends 'default_frame.twig' %}
+{% block main %}
+<div class="ec-role">
+  <h1>お問い合わせの受付状況</h1>
+  <p>お問い合わせ番号「{{ no|raw }}」は受け付けています。担当から 2 営業日以内にご連絡します。</p>
+</div>
+{% endblock %}
+TWIG
+    docker exec "$C" mkdir -p "$R/app/template/default/OrderCheck"
+    docker cp "$T/wpage" "$C:$R/$WPAGE"
+    docker cp "$T/wtpl" "$C:$R/$WTPL"
+    docker exec "$C" sh -c "chown www-data:www-data $R/$WPAGE $R/$WTPL"
+  fi
   ;;
 3)
   cat > "$T/page" <<'PHP'
@@ -174,6 +228,14 @@ for f in $FILES; do
   h=$(docker exec "$C" sh -c "sha256sum $R/$f | cut -d' ' -f1")
   printf '%s\t%s\n' "$f" "$h" >> "$LOG"
 done
+if [ "$S" = server-b ]; then
+  : > ".cache/customize-server-b-weak.txt"
+  for f in $WPAGE $WTPL; do
+    h=$(docker exec "$C" sh -c "sha256sum $R/$f | cut -d' ' -f1")
+    printf '%s\t%s\n' "$f" "$h" >> ".cache/customize-server-b-weak.txt"
+  done
+  echo "[$S] 弱いページ $WURL: HTTP $(curl -s -o /dev/null -w '%{http_code}' "$B$WURL?no=A-1024")"
+fi
 code=$(curl -s -o /dev/null -w '%{http_code}' "$B$URL?q=test")
 top=$(curl -s -o /dev/null -w '%{http_code}' "$B/")
 echo "[$S] カスタマイズを入れた(控え: $LOG)。独自のページ $URL: HTTP ${code}、トップ: HTTP ${top}"
