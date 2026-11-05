@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // 動画用: プラグインの管理画面の撮影モードを 1920x1080 で録る。お知らせの URL を打ち込んで「通知を渡す」を押す所作から、記録の早送りの終わりまで
-// 使い方: PW=<playwright> node api/scripts/record-film.cjs <店の URL> <記録の ID> <お知らせの URL> <止めどころの長さ(ms)> <出力ディレクトリ>
+// 使い方: [FLOW=<倍率>] PW=<playwright> node api/scripts/record-film.cjs <店の URL> <記録の ID> <お知らせの URL> <止めどころの長さ(ms)> <出力ディレクトリ>
 // 出力: 録画(webm)と marks.json(録画の頭からの秒: paste=貼り始め、start=押した、stops=止めどころ、end=健康診断の表)
 // ログインはデモのお店の初期値。手元の検証環境だけで使う
 const { chromium } = require(process.env.PW || "playwright");
@@ -24,7 +24,7 @@ const { writeFileSync } = require("node:fs");
   const page = await ctx.newPage();
   const sec = (t) => +((t - t0) / 1000).toFixed(2);
   const marks = {};
-  await page.goto(`${base}/admin/store/plugin/SelfHarden/config?film=${run}&big=1&hold=${hold.split(",")[0] === hold ? hold : 1200}&holds=${hold.includes(",") ? hold : ""}`);
+  await page.goto(`${base}/admin/store/plugin/SelfHarden/config?film=${run}&big=1&hold=${hold.split(",")[0] === hold ? hold : 1200}&holds=${hold.includes(",") ? hold : ""}${process.env.FLOW ? `&flow=${process.env.FLOW}` : ""}`);
   await page.waitForTimeout(1500);
   marks.ready = sec(Date.now());
   await page.click("#sh-advisory");
