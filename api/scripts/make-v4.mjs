@@ -253,6 +253,38 @@ if (pm.upgrade && pm.done) {
   });
   writeFileSync(join(out, "ap.list"), parts.map((x) => `file '${x.o}'`).join("\n"));
   const apv = join(out, "3b-ap-v.mp4"); ff("-f", "concat", "-safe", "0", "-i", join(out, "ap.list"), "-c", "copy", apv);
+  // 版上げのカードの下にある、ほかの承認待ちのカード(カスタマイズの直しなど)は暗くする(版上げを承認しているのが分かるように)。
+  // カードとカードのあいだは「枠線(暗い 1 行)→ 明るい隙間 15 行 → 枠線」なので、x=1000 の 1 列でそれを探し、下のカードの上端を 0.1 秒ごとに求める
+  const below = [];
+  {
+    const raw = execFileSync("ffmpeg", ["-v", "error", "-i", apv, "-vf", "fps=10,crop=2:1080:1000:0", "-f", "rawvideo", "-pix_fmt", "gray", "-"], { maxBuffer: 1 << 28 });
+    for (let f = 0; (f + 1) * 1080 * 2 <= raw.length; f++) {
+      const g = (y) => raw[(f * 1080 + y) * 2];
+      let top = null;
+      for (let y = 280; y < 1060; y++) {
+        if (g(y) >= 232) continue;
+        for (const d of [14, 15, 16]) {
+          if (y + d < 1080 && g(y + d) < 232) {
+            let ok = true; for (let k = y + 2; k < y + d - 1; k++) if (g(k) < 240) { ok = false; break; }
+            if (ok) { top = y + d; break; }
+          }
+        }
+        if (top !== null) break;
+      }
+      below.push(top);
+    }
+  }
+  // 同じ高さが続く区間にまとめて、半透明の紺を重ねる式にする
+  const dim = [];
+  below.forEach((y, i) => {
+    const q = y === null ? null : Math.round(y / 4) * 4, t = i / 10, last = dim.at(-1);
+    if (last && last.y === q) last.b = t + 0.1; else dim.push({ y: q, a: t, b: t + 0.1 });
+  });
+  if (dim.length) dim.at(-1).b = 9999;
+  // 健康診断の表を見せているあいだ(カードへスクロールする前)は暗くしない(早送りの最後の表とのつなぎ目を変えないため)
+  const dimFrom = Math.max(0, (pm.scroll - w0));
+  const dimF = dim.filter((d) => d.y !== null && d.b > dimFrom).map((d) => ({ ...d, a: Math.max(d.a, dimFrom) })).map((d) => `drawbox=x=0:y=${d.y}:w=1920:h=${1080 - d.y}:color=0x0d172a@0.82:t=fill:enable='between(t,${d.a.toFixed(2)},${d.b.toFixed(2)})'`).join(",");
+  const belowAt = (t) => below[Math.max(0, Math.min(below.length - 1, Math.round(t * 10)))];
   // 壁時計 → 出力の秒
   const outT = (w) => { let t = 0; for (const x of parts) { if (w <= x.b) return t + Math.max(0, w - x.a) * x.f; t += x.outLen; } return t; };
   const up = []; let ut = 0;
@@ -264,23 +296,32 @@ if (pm.upgrade && pm.done) {
   const box = (r) => r && r.w > 0 ? { cx: r.x + Math.min(r.w, 900) / 2, cy: r.y + r.h / 2 } : null;
   const cb = box(pm.cardBox), rb = box(pm.resultBox);
   // カードは「4.2.0 → 4.2.3-p2」の行が上の方に来るように寄せる(下にカードの説明が見える。上のほかのカードは映さない)
-  if (cb) zw.push({ a: outT(pm.card) + 0.4, b: Math.max(outT(pm.card) + 2.5, outT(pm.code) - 0.3), cx: cb.cx, cy: cb.cy + 170 });
-  if (rb) zw.push({ a: outT(pm.done) + 0.3, b: ulen, ...rb, end: true });
+  // 寄る先は版上げのカードだけ: カードの上端(管理画面の見出しの下、64px)から、下のカードの上端までの真ん中。下のカードは暗くしてある
+  const cardWinA = outT(pm.card) + 0.4, cardWinB = Math.max(outT(pm.card) + 2.5, outT(pm.code) - 0.3);
+  const bCard = belowAt((cardWinA + cardWinB) / 2) ?? 360;
+  if (cb) zw.push({ a: cardWinA, b: cardWinB, cx: cb.cx, cy: Math.min(cb.cy + 170, (64 + bCard) / 2 + 30) });
+  // 進み具合: 版上げの記録の行(カードの中で下へ伸びていく)のあたりに、少しだけ寄る
+  const pA = outT(pm.approved) + 0.6, pB = outT(pm.done) - 0.2;
+  // (進み具合には寄らない。記録の途中の一時的な表示まで大きく見せないため)
+  void pA; void pB;
+  // 結果: 結果の行と、その上の記録の終わりのほう。下のカードは暗い
+  if (rb) zw.push({ a: outT(pm.done) + 0.3, b: ulen, cx: rb.cx, cy: rb.cy - 150, end: true });
   const ZM = 1.8, RAMP = 0.6;
   // zoompan の式: 窓ごとの寄り具合 e(t)(0〜1)を足し合わせる
   const eOf = (w) => `(between(it,${w.a.toFixed(2)},${w.b.toFixed(2)})*min(1,min((it-${w.a.toFixed(2)})/${RAMP},${w.end ? 1 : `(${w.b.toFixed(2)}-it)/${RAMP}`})))`;
   const e = zw.length ? zw.map(eOf).join("+") : "0";
   const cx = zw.length ? zw.map((w) => `${eOf(w)}*${w.cx.toFixed(0)}`).join("+") + `+(1-(${e}))*960` : "960";
   const cy = zw.length ? zw.map((w) => `${eOf(w)}*${w.cy.toFixed(0)}`).join("+") + `+(1-(${e}))*540` : "540";
-  const zoomF = `zoompan=z='1+${ZM - 1}*(${e})':x='max(0,min(iw-iw/zoom,(${cx})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,(${cy})-ih/zoom/2))':d=1:s=1920x1080:fps=30`;
+  const zz = zw.length ? zw.map((w) => `${eOf(w)}*${((w.z ?? ZM) - 1).toFixed(2)}`).join("+") : "0";
+  const zoomF = `zoompan=z='1+(${zz})':x='max(0,min(iw-iw/zoom,(${cx})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,(${cy})-ih/zoom/2))':d=1:s=1920x1080:fps=30`;
   // 札: 承認の録画の時計 → 買い物の記録の時刻(版上げのメンテナンス中は黄色)
   const inv = (t) => { let acc = 0; for (const x of parts) { if (t <= acc + x.outLen) return x.a + (t - acc) / x.f; acc += x.outLen; } return parts.at(-1).b; };
   const ab = badgeFrames("badge-approve", ulen, (t) => pm.wall_start + inv(t) * 1000, () => true);
   ff("-i", apv, ...up.flatMap((p) => ["-i", clip[p.k].file]), "-framerate", String(BFPS), "-i", join(ab.dir, "b%05d.png"), "-filter_complex",
-    `[0:v]tpad=stop_mode=clone:stop_duration=${Math.max(0, ulen - total).toFixed(2)},${zoomF}[vz];[${up.length + 1}:v]format=rgba[bd];[vz][bd]overlay=0:0:eof_action=pass[v];` +
+    `[0:v]tpad=stop_mode=clone:stop_duration=${Math.max(0, ulen - total).toFixed(2)},${dimF ? dimF + "," : ""}${zoomF}[vz];[${up.length + 1}:v]format=rgba[bd];[vz][bd]overlay=0:0:eof_action=pass[v];` +
     up.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + up.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${up.length}:normalize=0,apad[pa]`,
     "-map", "[v]", "-map", "[pa]", "-t", ulen.toFixed(3), ...enc, join(out, "3b-approve.mp4"));
-  console.log("承認(版上げ)", JSON.stringify({ len: ulen.toFixed(1), fast: FAST.toFixed(3), upgradeWall: (pm.done - pm.approved).toFixed(1), place: up.map((p) => `${p.k}@${p.at.toFixed(1)}`), zoom: zw.map((w) => `${w.a.toFixed(1)}-${w.b.toFixed(1)}`), maintFrames: ab.frames.filter((f) => f.maint).length, ordersEnd: ab.frames.at(-1).orders }));
+  console.log("承認(版上げ)", JSON.stringify({ len: ulen.toFixed(1), fast: FAST.toFixed(3), upgradeWall: (pm.done - pm.approved).toFixed(1), place: up.map((p) => `${p.k}@${p.at.toFixed(1)}`), zoom: zw.map((w) => `${w.a.toFixed(1)}-${w.b.toFixed(1)}`), maintFrames: ab.frames.filter((f) => f.maint).length, dim: dim.filter((d) => d.y !== null).map((d) => `${d.y}@${d.a.toFixed(1)}`).slice(0, 12).join(" "), ordersEnd: ab.frames.at(-1).orders }));
 } else
 ff("-ss", P0.toFixed(3), "-t", (P1 - P0).toFixed(3), "-i", pwebm, ...pplace.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
   `[0:v]fps=30,tpad=stop_mode=clone:stop_duration=${Math.max(0, plen - (P1 - P0)).toFixed(2)}[v];` +

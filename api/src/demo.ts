@@ -102,13 +102,13 @@ const PAGE = String.raw`<!doctype html>
   .band div.show { opacity: 1; } .band div.warn { color: #ffcc80; } .band div.good { color: #a5d6a7; }
   .band div.fixed { opacity: 1; text-align: center; }
   /* 通し再生: 場面の間の見出し(記録ではなく編集の文字) */
-  .title-card { position: fixed; inset: 0; background: #111827; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 10; text-align: center; padding: 40px; }
+  .title-card { position: fixed; inset: 0; background: #0d172a; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 10; text-align: center; padding: 40px; }
   .title-card b { font-size: 44px; line-height: 1.35; }
   .title-card small { font-size: 18px; color: #9ca3af; }
   /* 説明の場面は暗い背景と大きな字。実際の画面の場面は枠と「実際の動作(早送り)」の印 */
-  body.explain { background: #0f172a; color: #f1f5f9; }
-  html.dark-start { background: #0f172a; } html.dark-start body:not(.real) { background: #0f172a; } html.dark-start body:not(.real) header { visibility: hidden; }
-  body.explain header { background: #0f172a; }
+  body.explain { background: #0d172a; color: #f1f5f9; }
+  html.dark-start { background: #0d172a; } html.dark-start body:not(.real) { background: #0d172a; } html.dark-start body:not(.real) header { visibility: hidden; }
+  body.explain header { background: #0d172a; }
   body.explain .diagram h2 { color: #fff; }
   body.explain .chain .row { color: #e2e8f0; } body.explain .chain .row b { color: #fbbf24; }
   body.explain .chain .last { color: #93c5fd; } body.explain .chain small, body.explain .chain .arrow { color: #64748b; }
@@ -174,7 +174,7 @@ const PAGE = String.raw`<!doctype html>
   .ke-name p { margin: 0; color: #cbd5e1; font-size: clamp(18px, 3vh, 32px); }
   .ke-credit { color: #e2e8f0; font-size: clamp(14px, 2.2vh, 22px); margin-top: 2vh; }
   .ke-notice { position: absolute; left: 6vw; right: 6vw; bottom: 3vh; color: #64748b; font-size: 13px; text-align: center; }
-  .opening { flex: 1; display: grid; place-items: center; }
+  .opening { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; background: #0d172a; }
   .opening b { font-size: clamp(32px, 6vh, 64px); color: #fff; letter-spacing: .02em; opacity: 0; transition: opacity .8s; } .opening b.in { opacity: 1; }
   body.bare header { visibility: hidden; }
   .namecard { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4vh; padding: 0 8vw; text-align: center; }
