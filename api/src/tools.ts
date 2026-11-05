@@ -5,9 +5,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { createPatch } from "diff";
 import { callReceiver } from "./receiver.js";
 import { vendorFixScope, manifest, officialContent, officialFixScope } from "./official.js";
-import type { Shop, Store } from "./store.js";
+import type { Shop, Store, Proposal } from "./store.js";
 import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
 import { fixAlreadyIn } from "./manualfix.js";
+import { sha256Hex, randomHex } from "./sign.js";
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 
@@ -104,6 +105,22 @@ export const CLIENT_TOOLS: Tool[] = [
     input_schema: obj({
       paths: { type: "array", items: { type: "string" }, maxItems: 400, description: "Custom files to check (shop paths or official names)" },
     }),
+  },
+  {
+    name: "propose_fix",
+    description:
+      "Propose a fix to one existing file of the shop's own custom code (only inside the shop's customization folders, for example app/Customize and app/template on EC-CUBE 4; never official files, components, settings or new files). Nothing is written now: the proposal (the whole new content, a diff, and your explanations) is shown on the shop's admin screen, and only when the owner reads it and presses the approve button does the receiver back up the file, write it, open the shop to check, and roll back if the shop breaks. Use it after you have confirmed a weakness in custom code is reachable from the outside and you can make a small fix that does not change what the page does (for example escaping a value that is printed, or passing a value to SQL as a parameter). Keep the change minimal and keep everything else of the file exactly as it is. Then report the weakness as needs_approval with the returned proposal_id, and also add a request for the developer as the alternative if the owner prefers not to approve.",
+    input_schema: obj(
+      {
+        path: { type: "string", description: "The custom file to fix (shop path, it must exist)" },
+        new_content: { type: "string", description: "The complete new content of the file (not a diff)" },
+        title: { type: "string", description: "Short title in Japanese for the owner (what gets fixed)" },
+        owner_text: { type: "string", description: "In Japanese for the owner, plain words: what is dangerous now, what this change does, and what could be lost or change for the shop" },
+        developer_text: { type: "string", description: "In Japanese for the developer: file, line, where it is reachable from, why it is dangerous, and what the proposed change does" },
+        extra_verify_paths: { type: "array", items: { type: "string" }, maxItems: 2, description: "Pages of the shop (relative to the shop URL, starting with /) to open after writing, for example the page that uses this file" },
+      },
+      ["path", "new_content", "title", "owner_text", "developer_text"],
+    ),
   },
   {
     name: "find_misplaced_php",
@@ -250,6 +267,7 @@ export const CLIENT_TOOLS: Tool[] = [
               severity: { type: "string", enum: ["high", "medium", "low", "info"] },
               evidence: { type: "string" },
               status: { type: "string", enum: ["fixed", "mitigated", "scheduled", "needs_approval", "needs_human", "not_affected"], description: "fixed / mitigated (workaround in place) / scheduled (Shisa itself will handle it in a later inspection; also list it in next_by_self_harden) / needs_approval (the owner has to decide: work that needs maintenance mode or stops the shop, database migrations, large component or major version upgrades, settings that change how the owner works) / needs_human (work Shisa must not do itself: on the hosting side, the language runtime build, the web server, TLS certificates, server settings; or changes to the shop's own custom code, which only its developer may make) / not_affected" },
+              proposal_id: { type: "string", description: "Only with needs_approval for a fix you proposed with propose_fix: its proposal_id, so the admin screen can show the approve button next to this finding" },
               to: { type: "string", enum: ["server_company", "developer"], description: "Only with needs_human: who does the work. server_company: the hosting company / developer: the shop's developer (the company that built or customizes the shop)" },
             },
             required: ["title", "category", "severity", "evidence", "status"],
@@ -555,6 +573,15 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       const r = await callReceiver(shop, "find_misplaced_php", {}, 30_000);
       return { content: j(r), isError: !r.ok, title: `置き場所違いの PHP を探す: ${r.ok ? `${r.result.walked} 件を歩いて ${(r.result.found as unknown[]).length} 件${r.result.complete ? "" : "(最後までは調べられなかった)"}` : "できなかった"}` };
     }
+    case "propose_fix": {
+      if (!ctx) return { content: j({ error: "no context" }), isError: true, title: "直し方を提案する" };
+      try {
+        const p = await proposeFix(shop, ctx, input);
+        return { content: j({ ok: true, proposal_id: p.proposal_id, path: p.path, diff: p.diff.length > 6000 ? p.diff.slice(0, 6000) + "\n…(truncated)" : p.diff, note: "Nothing is written yet. The owner decides on the admin screen." }), title: `直し方を提案する(店主の承認待ち): ${p.path}` };
+      } catch (e) {
+        return { content: j({ error: (e as Error).message }), isError: true, title: `直し方を提案する: ${input.path}` };
+      }
+    }
     case "scan_custom": {
       const raw: unknown[] = Array.isArray(input.paths) ? input.paths.slice(0, 400) : [];
       const paths = await Promise.all(raw.filter((p): p is string => typeof p === "string").map((p) => shopPathOf(shop, p)));
@@ -824,4 +851,72 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
     default:
       return { content: j({ error: `unknown tool ${name}` }), isError: true, title: name };
   }
+}
+
+// ---- 店主の承認で直す ----
+// 承認の鍵はお店の中にしかない。ここでは提案を作って控えるだけで、書くのは店主が承認したあと(applyApproved)
+const PROPOSAL_MAX = 262144;
+async function approveInfo(shop: Shop): Promise<{ ready: boolean; dirs: string[] }> {
+  const r = await callReceiver(shop, "inspect", { sections: ["paths"] });
+  if (!r.ok) throw new Error(`inspect: ${r.error}`);
+  return { ready: !!r.result.paths?.approve_ready, dirs: Array.isArray(r.result.paths?.approve_dirs) ? r.result.paths.approve_dirs : [] };
+}
+
+export async function proposeFix(shop: Shop, ctx: ToolContext, input: any): Promise<Proposal> {
+  const path = await shopPathOf(shop, String(input.path ?? ""));
+  if (!/^[A-Za-z0-9._\-/]+$/.test(path) || path.split("/").some((x) => x === "" || x === "." || x === "..")) throw new Error("path の形が正しくありません");
+  const newContent = typeof input.new_content === "string" ? input.new_content : "";
+  if (!newContent || newContent.length > PROPOSAL_MAX) throw new Error("new_content がないか、大きすぎます");
+  const info = await approveInfo(shop);
+  if (!info.ready) throw new Error("このお店には承認の鍵がありません(プラグインが古いか、有効にし直していない)。提案はできないので、制作会社への依頼にしてください");
+  if (!info.dirs.some((d) => path.startsWith(d + "/"))) throw new Error(`承認の直しで書けるのは、カスタマイズの置き場(${info.dirs.join("・")})の中だけです`);
+  const r = await callReceiver(shop, "read_file", { path });
+  if (!r.ok) throw new Error(`今の中身を読めません: ${r.error} ${r.detail ?? ""}`);
+  if (!r.result.exists) throw new Error("今あるファイルだけ直せます(新しいファイルは作りません)");
+  const current = String(r.result.content);
+  if (current === newContent) throw new Error("今の中身と同じです");
+  const extra = Array.isArray(input.extra_verify_paths) ? input.extra_verify_paths.filter((p: unknown): p is string => typeof p === "string" && /^\/[A-Za-z0-9._~\-/%?=&]*$/.test(p)).slice(0, 2) : [];
+  const p: Proposal = {
+    proposal_id: `prp_${randomHex(8)}`,
+    shop_id: shop.shop_id,
+    run_id: ctx.runId,
+    path,
+    title: String(input.title ?? "").slice(0, 200),
+    owner_text: String(input.owner_text ?? "").slice(0, 2000),
+    developer_text: String(input.developer_text ?? "").slice(0, 4000),
+    sha256_before: await sha256Hex(current),
+    sha256_new: await sha256Hex(newContent),
+    new_content: newContent,
+    diff: createPatch(path, current, newContent, "今", "直したあと"),
+    verify_paths: await verifyPathsFor(shop, extra),
+    status: "pending",
+    created_at: Date.now(),
+  };
+  // 同じファイルへの前の提案は、新しい提案に置き換える(古い方は承認できなくする)
+  for (const old of await ctx.store.listProposals(shop.shop_id)) {
+    if (old.path === path && old.status === "pending") await ctx.store.putProposal({ ...old, status: "superseded" });
+  }
+  await ctx.store.putProposal(p);
+  return p;
+}
+
+// 店主の承認の印(お店の中で作られたもの)を受け取り、窓口に書かせる。印が提案と合わなければ窓口に渡さない
+export async function applyApproved(shop: Shop, store: Store, p: Proposal, approval: any) {
+  const ok = approval && typeof approval === "object" && approval.proposal_id === p.proposal_id && approval.path === p.path
+    && approval.sha256_new === p.sha256_new && approval.sha256_before === p.sha256_before && approval.shop_id === shop.shop_id
+    && typeof approval.sig === "string" && Number.isInteger(approval.expires_at);
+  if (!ok) return { ok: false as const, error: "approval_mismatch", detail: "承認の印が提案と合いません" };
+  const r = await callReceiver(shop, "apply_approved_fix", { approval, content: p.new_content, verify: { paths: p.verify_paths, timeout_sec: 8 } }, 45_000);
+  const status: Proposal["status"] = !r.ok ? "failed" : r.result.rolled_back ? "rolled_back" : "applied";
+  await store.putProposal({ ...p, status, decided_at: Date.now(), result: r.ok ? r.result : { error: r.error, detail: r.detail } });
+  // 点検の経過にも残す(管理画面で、承認して直したことが流れるように)
+  const run = await store.getRun(p.run_id);
+  if (run) {
+    const v = r.ok ? ((r.result.verify ?? []) as any[]).map((x) => `${x.path} ${x.status}`).join("、") : "";
+    const title = status === "applied" ? `店主の承認で直した: ${p.path}` : status === "rolled_back" ? `店主の承認で直したが、お店が開けなくなったので戻した: ${p.path}` : `店主の承認で直そうとしたが、できなかった: ${p.path}`;
+    run.steps.push({ at: Date.now(), kind: "decision", title, tool: "承認して直す", result: status === "applied" ? `控えを取って書き、お店を開いて確かめた(${v})` : r.ok ? `戻した(${v})` : `${r.error}: ${r.detail ?? ""}` });
+    run.updated_at = Date.now();
+    await store.putRun(run);
+  }
+  return r.ok ? { ok: true as const, status, result: r.result } : { ok: false as const, status, error: r.error, detail: r.detail };
 }

@@ -147,6 +147,8 @@ export function summarize(name: string, content: string, isError?: boolean): str
       const v = (r.verify ?? []).map((x: any) => `${x.path} ${x.status}`).join("、");
       return r.rolled_back ? `店が開けなくなったので、全部戻した(${v})` : `${r.applied.length} ファイルをそろえて当てた。店を開いて確かめた(${v})`;
     }
+    case "propose_fix":
+      return d.error ? `提案できなかった: ${d.error}` : "直し方を管理画面に出した(書くのは店主が承認してから)";
     case "quarantine": {
       if (errOf(d)) return errOf(d)!;
       const r = d.result ?? {};

@@ -4,7 +4,8 @@ import { Hono, type Context } from "hono";
 import { verifyRequest, randomHex, NONCE_TTL_SEC } from "./sign.js";
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
-import type { Shop, Store } from "./store.js";
+import type { Shop, Store, Proposal } from "./store.js";
+import { applyApproved } from "./tools.js";
 import { dailyQuotaExceeded, isFirstRun, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
@@ -93,6 +94,38 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     if (!shop) return unauthorized(c);
     const runs = await store.listRuns(shop.shop_id);
     return c.json({ ok: true, runs: runs.slice(0, 20).map((r) => ({ run_id: r.run_id, status: r.status, trigger: r.trigger, advisory_url: r.advisory_url, created_at: r.created_at, usd: Number(usd(r.usage).toFixed(2)) })) });
+  });
+
+  // 店主の承認で直す提案。新しいものから。中身(書く中身の全部と差分)も渡す。管理画面はお店の中で今の中身と比べて見せる
+  const proposalOut = (p: Proposal) => ({ proposal_id: p.proposal_id, run_id: p.run_id, path: p.path, title: p.title, owner_text: p.owner_text, developer_text: p.developer_text,
+    sha256_before: p.sha256_before, sha256_new: p.sha256_new, new_content: p.new_content, diff: p.diff, status: p.status, created_at: p.created_at, decided_at: p.decided_at ?? null, result: p.result ?? null });
+
+  app.get("/v1/shops/:id/proposals", async (c) => {
+    const shop = await authShop(c, c.req.param("id"), "");
+    if (!shop) return unauthorized(c);
+    const list = (await store.listProposals(shop.shop_id)).filter((p) => p.status !== "superseded").slice(0, 20);
+    return c.json({ ok: true, proposals: list.map(proposalOut) });
+  });
+
+  app.get("/v1/shops/:id/proposals/:pid", async (c) => {
+    const shop = await authShop(c, c.req.param("id"), "");
+    if (!shop) return unauthorized(c);
+    const p = await store.getProposal(c.req.param("pid"));
+    if (!p || p.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
+    return c.json({ ok: true, proposal: proposalOut(p) });
+  });
+
+  // 承認の印は、お店の管理画面(プラグイン)がお店の中の承認の鍵で作る。API は印を作れず、窓口へ取り次ぐだけ
+  app.post("/v1/shops/:id/proposals/:pid/approve", async (c) => {
+    const body = await c.req.text();
+    const shop = await authShop(c, c.req.param("id"), body);
+    if (!shop) return unauthorized(c);
+    const p = await store.getProposal(c.req.param("pid"));
+    if (!p || p.shop_id !== shop.shop_id) return c.json({ ok: false, error: "not_found" }, 404);
+    if (p.status !== "pending") return c.json({ ok: false, error: "not_pending", detail: "この提案はもう決まっています", status: p.status }, 409);
+    let req: any;
+    try { req = JSON.parse(body); } catch { return c.json({ ok: false, error: "bad_request" }, 400); }
+    return c.json(await applyApproved(shop, store, p, req?.approval));
   });
 
   return app;

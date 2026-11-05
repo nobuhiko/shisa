@@ -53,6 +53,26 @@ export interface AppliedFix {
   package_complete?: boolean; // 部品の修正を、公式の差分で全部のファイルをそろえて当てたもの
 }
 
+// 店主の承認で直す提案(カスタマイズしたファイルの直し)。書くのは、店主がお店の管理画面で承認したあとだけ
+export interface Proposal {
+  proposal_id: string;
+  shop_id: string;
+  run_id: string;
+  path: string; // お店の中の相対パス
+  title: string;
+  owner_text: string; // 店主向け: 何が危ないか・何を変えるか・失うもの
+  developer_text: string; // 制作会社向け: 自分で直すのが不安なときに渡す説明
+  sha256_before: string;
+  sha256_new: string;
+  new_content: string;
+  diff: string;
+  verify_paths: string[]; // 書いたあとに開いて確かめる、お店の中のページ
+  status: "pending" | "applied" | "rolled_back" | "failed" | "superseded";
+  created_at: number;
+  decided_at?: number;
+  result?: unknown;
+}
+
 export interface Store {
   getShop(id: string): Promise<Shop | null>;
   putShop(shop: Shop): Promise<void>;
@@ -70,6 +90,9 @@ export interface Store {
   // 調べた結果の控え(版・部品・通知ごと。この API につながる店で使い回す)
   getResearch(key: string): Promise<any | null>;
   putResearch(key: string, rec: any): Promise<void>;
+  getProposal(id: string): Promise<Proposal | null>;
+  putProposal(p: Proposal): Promise<void>;
+  listProposals(shopId: string): Promise<Proposal[]>;
   // 使った nonce を記録する。既にあれば false
   useNonce(key: string, ttlSec: number): Promise<boolean>;
 }
@@ -125,6 +148,11 @@ export class FileStore implements Store {
     const byPath = new Map(cur.map((f) => [f.path, f]));
     for (const f of fixes) byPath.set(f.path, f);
     await this.write("applied", shopId, [...byPath.values()]);
+  }
+  getProposal(id: string) { return this.read<Proposal>("proposals", id); }
+  putProposal(p: Proposal) { return this.write("proposals", p.proposal_id, p); }
+  async listProposals(shopId: string) {
+    return (await this.all<Proposal>("proposals")).filter((p) => p.shop_id === shopId).sort((a, b) => b.created_at - a.created_at);
   }
   getResearch(key: string) { return this.read<any>("intel", key); }
   putResearch(key: string, rec: any) { return this.write("intel", key, rec); }
