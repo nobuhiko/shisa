@@ -13,7 +13,7 @@
 #        4 系: app/Customize/Controller/ShopNoteController.php + app/template/default/ShopNote/index.twig(/shop_note)
 #        3 系: html/shop_note.php(値は htmlspecialchars。DB は使わない)
 #        2 系: html/user_data/shop_note.php(SC_Query のプレースホルダーと htmlspecialchars)
-#   server-b(動画のお店、4.2.3)だけは、a・b を入れず、c と、外から届く弱いカスタマイズ w を 1 つ入れる(承認して直すを撮るため):
+#   server-b(動画のお店、4.2.0)だけは、a・b を入れず、c と、外から届く弱いカスタマイズ w を 1 つ入れる(承認して直すを撮るため):
 #     w: app/Customize/Controller/OrderCheckController.php + app/template/default/OrderCheck/index.twig(/order_check?no=)
 #        お問い合わせ番号を、テンプレートで escape を外して(|raw)そのまま出す。ログインなしで開ける。実害の出ないデモ用(DB も使わない)
 #     w の控えは .cache/customize-server-b-weak.txt(承認して直したあとは変わるのが正しい)

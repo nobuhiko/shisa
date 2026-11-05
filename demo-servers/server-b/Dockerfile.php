@@ -1,8 +1,8 @@
 # サーバー Bの PHP 側: PHP-FPM。.user.ini が効く(user_ini.cache_ttl は既定の 300 秒のまま)
 FROM self-harden/php-fpm:8.1.10
-# 1 台で全部が起きるお店にする: EC-CUBE 4.2.3(修正版 4.2.3-p2 に上げる余地)+ 照らし合わせの仕込み
-COPY .cache/eccube-4.2.3.tar.gz /opt/eccube/eccube-4.2.3.tar.gz
-ENV ECCUBE_VERSION=4.2.3
+# 1 台で全部が起きるお店にする: EC-CUBE 4.2.0(同じ系列の修正版 4.2.3-p2 へは、データベースの作り変えが要る = 店主の承認で上げる)+ 照らし合わせの仕込み
+COPY .cache/eccube-4.2.0.tar.gz /opt/eccube/eccube-4.2.0.tar.gz
+ENV ECCUBE_VERSION=4.2.0
 COPY common/web-limits.ini /usr/local/etc/php/web.d/zz-web-limits.ini
 COPY common/setup-eccube.sh /usr/local/bin/setup-eccube
 COPY common/plant-demo.sh /usr/local/bin/plant-demo
