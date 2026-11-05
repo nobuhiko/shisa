@@ -42,9 +42,11 @@ const { chromium } = require(process.env.PW || "playwright");
     return;
   }
   let mid = false;
-  // 終わるまで待つ(進み具合はカードが 3 秒ごとに読み直す)
+  let stalledSeen = 0;
+  // 終わるまで待つ(進み具合はカードが 3 秒ごとに読み直す)。普通に進んでいるのに「止まっています」が出ないかも数える
   for (let i = 0; i < 150; i++) {
     const st = await page.evaluate(() => window.__shUpgrade || null).catch(() => null);
+    if (await page.locator('[id^="sh-stalled-"], .sh-rollback-btn').count().catch(() => 0)) stalledSeen++;
     if (!mid && st === "running") {
       await page.locator(".sh-upgrade").first().screenshot({ path: `${shot}-progress.png` }).catch(() => {});
       mid = true;
@@ -57,7 +59,7 @@ const { chromium } = require(process.env.PW || "playwright");
   // 版上げのあとも管理画面のログインが続いているか(ログインの画面へ回されないか)
   await page.goto(base + "/admin/");
   const loggedIn = !/\/login/.test(page.url());
-  console.log("gate seen:", gateSeen, "still logged in:", loggedIn);
+  console.log("gate seen:", gateSeen, "still logged in:", loggedIn, "stalled shown (polls):", stalledSeen);
   if (final === "relogin" || final === "running" || !loggedIn) {
     // 管理画面を開き直して、終わった様子を読む(版が変わってログインが切れた場合はログインし直す)
     await page.goto(base + "/admin/store/plugin/SelfHarden/config");
