@@ -67,7 +67,12 @@ export interface Proposal {
   new_content: string;
   diff: string;
   verify_paths: string[]; // 書いたあとに開いて確かめる、お店の中のページ
-  status: "pending" | "applied" | "rolled_back" | "failed" | "superseded";
+  status: "pending" | "running" | "applied" | "rolled_back" | "failed" | "superseded";
+  // kind が upgrade のときは、同じ系列の公式の修正版への版上げ(データベースの作り変えを含む)。path・new_content は使わない
+  kind?: "fix" | "upgrade";
+  from_version?: string;
+  to_version?: string;
+  upgrade?: unknown; // 窓口が返した作業の様子(段・記録)
   created_at: number;
   decided_at?: number;
   result?: unknown;

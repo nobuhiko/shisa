@@ -123,6 +123,19 @@ export const CLIENT_TOOLS: Tool[] = [
     ),
   },
   {
+    name: "propose_upgrade",
+    description:
+      "Propose updating EC-CUBE (4 series only) to a newer official release on the same line when that update needs database changes (schema differences and official migrations), which you must not do on your own. Nothing is changed now: the proposal is shown on the shop's admin screen, and only when the owner approves it does the receiver do the official procedure under maintenance (take a backup of the files and the database, apply the database changes, replace the files with the official release verified by checksum, clear the cache, open the shop to check) and roll everything back if something fails. The tool refuses when files that the update would replace are customized, when the database type is not supported, or when the shop has no approval key; then report as before (needs_human / needs_approval). After it succeeds, report the update as needs_approval with the returned proposal_id, and explain in plain words what the update fixes.",
+    input_schema: obj(
+      {
+        to: { type: "string", description: "Target official release tag on the same line, normally the newest (e.g. 4.2.3-p2)" },
+        title: { type: "string", description: "Short title in Japanese for the owner" },
+        owner_text: { type: "string", description: "In Japanese for the owner, plain words: why update, what it fixes, what changes for the shop" },
+      },
+      ["to", "title", "owner_text"],
+    ),
+  },
+  {
     name: "find_misplaced_php",
     description:
       "Walk, to the end, the folders where PHP should never be (image and upload folders, user files, logs; generated caches are excluded) and list every PHP-like file there: PHP extensions in any case (.php, .phtml, .phar, .php5, .php7, .pht, .phps, .inc) and files with another extension whose first bytes are PHP code. Unlike file listings, it is not cut off by the listing limit. Returns path, reason, size and mtime only (never contents); complete=false means it stopped at its own walk/time limit and the rest was not checked. Each file found is a possible trace of intrusion: read it (read_file) to judge, and quarantine it under the usual tamper rules.",
@@ -573,6 +586,14 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       const r = await callReceiver(shop, "find_misplaced_php", {}, 30_000);
       return { content: j(r), isError: !r.ok, title: `置き場所違いの PHP を探す: ${r.ok ? `${r.result.walked} 件を歩いて ${(r.result.found as unknown[]).length} 件${r.result.complete ? "" : "(最後までは調べられなかった)"}` : "できなかった"}` };
     }
+    case "propose_upgrade": {
+      try {
+        const p = await proposeUpgrade(shop, ctx as ToolContext, input);
+        return { content: j({ proposal_id: p.proposal_id, from: p.from_version, to: p.to_version, summary: p.diff, note: "Not changed yet. The owner approves it on the admin screen." }), title: `版上げを提案する(店主の承認待ち): ${p.from_version} → ${p.to_version}` };
+      } catch (e) {
+        return { content: j({ error: (e as Error).message }), isError: true, title: "版上げを提案できなかった" };
+      }
+    }
     case "propose_fix": {
       if (!ctx) return { content: j({ error: "no context" }), isError: true, title: "直し方を提案する" };
       try {
@@ -742,7 +763,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const changed = Object.keys(to.files).filter((p) => to.files[p] !== from.files[p]);
         const blockers = changed.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p));
         if (blockers.length) {
-          return { content: j({ ok: false, error: "needs_db_change", detail: "This release changes the database schema; it cannot be applied with these tools. Apply nothing and report it.", blockers: blockers.slice(0, 20) }), isError: true, title };
+          return { content: j({ ok: false, error: "needs_db_change", detail: "This release changes the database schema; it cannot be applied with this tool. On EC-CUBE 4 use propose_upgrade so the owner can approve the official procedure; otherwise apply nothing and report it.", blockers: blockers.slice(0, 20) }), isError: true, title };
         }
         // 店から消されているファイル(公式の前の版にあったもの)は置き直さない。書けない場所は外す
         const skippedRemoved = changed.filter((p) => p in from.files && !(p in mine));
@@ -909,6 +930,98 @@ export async function proposeFix(shop: Shop, ctx: ToolContext, input: any): Prom
   }
   await ctx.store.putProposal(p);
   return p;
+}
+
+// ---- 版上げの提案(データベースの作り変えを含む)。上げるのは、店主がお店の管理画面で承認したあとだけ ----
+const MIGRATION_DIR = "app/DoctrineMigrations/";
+const UPGRADE_SKIP = ["var/", "app/Plugin/", "app/Customize/", "app/proxy/", "app/template/", "html/upload/", "html/user_data/", "html/plugin/"];
+
+export async function proposeUpgrade(shop: Shop, ctx: ToolContext, input: any): Promise<Proposal> {
+  const to = String(input.to ?? "");
+  if (!/^4\.\d+\.\d+(-p\d+)?$/.test(to)) throw new Error("to は 4 系の公式の版(例 4.2.3-p2)にしてください");
+  const from = await installedVersion(shop);
+  const line = (v: string) => v.split(".").slice(0, 2).join(".");
+  const num = (v: string) => v.replace(/-p(\d+)$/, ".$1").split(".").map(Number);
+  const newer = (a: string, b: string) => { const x = num(a), y = num(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0); } return false; };
+  if (!/^4\./.test(from) || line(from) !== line(to) || !newer(to, from)) throw new Error(`上げ先は、今の版(${from})と同じ系列の新しい公式の版だけです`);
+  const info = await approveInfo(shop);
+  if (!info.ready) throw new Error("このお店には承認の鍵がありません(プラグインが古いか、有効にし直していない)。版上げは店主の判断待ちとして報告してください");
+  const [mf, mt] = [await manifest(from), await manifest(to)];
+  const mine = await shopHashes(shop);
+  const skip = (p: string) => UPGRADE_SKIP.some((d) => p.startsWith(d)) || p === ".env";
+  const changed = Object.keys(mt.files).filter((p) => !skip(p) && mt.files[p] !== mf.files[p]);
+  // 部品(vendor/)は公式の手順どおり上書きする(Shisa が部品ごとに当てた修正は、次の点検で当て直す)
+  const blocked = changed.filter((p) => !p.startsWith("vendor/") && p in mine && mine[p] !== mf.files[p] && mine[p] !== mt.files[p]);
+  if (blocked.length) throw new Error(`版上げで置き換えるファイルのうち ${blocked.length} 件がカスタマイズされているので、承認での版上げは提案しません(例: ${blocked.slice(0, 5).join("、")})。制作会社の作業か店主の判断として報告してください`);
+  const migrations = Object.keys(mt.files).filter((p) => p.startsWith(MIGRATION_DIR) && !(p in mf.files)).map((p) => p.slice(MIGRATION_DIR.length).replace(/\.php$/, ""));
+  const entities = changed.filter((p) => p.startsWith("src/Eccube/Entity/")).map((p) => p.replace("src/Eccube/Entity/", "").replace(/\.php$/, ""));
+  const summary = `${from} → ${to}: 置き換えるファイル ${changed.length} 件(うち部品 ${changed.filter((p) => p.startsWith("vendor/")).length} 件)、公式のマイグレーション ${migrations.length} 件(${migrations.join("・") || "なし"})、データベースの作りが変わるもの ${entities.join("・") || "なし"}`;
+  const p: Proposal = {
+    proposal_id: `prp_${randomHex(8)}`,
+    shop_id: shop.shop_id,
+    run_id: ctx.runId,
+    path: "",
+    kind: "upgrade",
+    from_version: from,
+    to_version: to,
+    title: String(input.title ?? `EC-CUBE を ${to} に上げる`).slice(0, 200),
+    owner_text: String(input.owner_text ?? "").slice(0, 2000),
+    developer_text: `公式の手順(doc4.ec-cube.net/update42x)に沿って、メンテナンス中に ${summary}。ファイルとデータベースの控えを取り、失敗したら戻します。`,
+    sha256_before: await sha256Hex(`SH-UPGRADE|${from}`),
+    sha256_new: await sha256Hex(`SH-UPGRADE|${to}`),
+    new_content: "",
+    diff: summary,
+    verify_paths: [],
+    status: "pending",
+    created_at: Date.now(),
+  };
+  for (const old of await ctx.store.listProposals(shop.shop_id)) {
+    if (old.kind === "upgrade" && old.status === "pending") await ctx.store.putProposal({ ...old, status: "superseded" });
+  }
+  await ctx.store.putProposal(p);
+  return p;
+}
+
+const UPGRADE_REFUSALS = ["not_approved", "approval_expired", "approval_used", "conflict", "no_approval_key", "bad_ref", "not_supported"];
+
+// 承認された版上げを始める。窓口が段ごとに進めるので、終わるまで裏で呼び続ける(管理画面は提案の様子を見て進み具合を出す)
+export async function applyUpgrade(shop: Shop, store: Store, p: Proposal, approval: any) {
+  const ok = approval && typeof approval === "object" && approval.proposal_id === p.proposal_id && approval.from === p.from_version
+    && approval.to === p.to_version && approval.shop_id === shop.shop_id && typeof approval.sig === "string" && Number.isInteger(approval.expires_at);
+  if (!ok) return { ok: false as const, error: "approval_mismatch", detail: "承認の印が提案と合いません" };
+  const r = await callReceiver(shop, "upgrade", { approval }, 30_000);
+  if (!r.ok && UPGRADE_REFUSALS.includes(String(r.error))) return { ok: false as const, status: p.status, error: r.error, detail: r.detail };
+  const first: Proposal = { ...p, status: "running", decided_at: Date.now(), upgrade: r.ok ? r.result : { error: r.error, detail: r.detail } };
+  await store.putProposal(first);
+  void driveUpgrade(shop, store, first, approval, r.ok ? r.result : null);
+  return { ok: true as const, status: "running", upgrade: first.upgrade };
+}
+
+async function driveUpgrade(shop: Shop, store: Store, p: Proposal, approval: any, state: any) {
+  let st = state;
+  let fails = 0;
+  for (let i = 0; i < 200; i++) {
+    if (st && ["done", "rolled_back", "stuck", "refused"].includes(st.status)) break;
+    const r = await callReceiver(shop, "upgrade", { approval }, 180_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
+    if (!r.ok) {
+      if (++fails > 5) { st = { ...(st ?? {}), status: "stuck", error: { code: r.error, detail: r.detail } }; break; }
+      await new Promise((res) => setTimeout(res, 3000));
+      continue;
+    }
+    fails = 0;
+    st = r.result;
+    await store.putProposal({ ...p, status: "running", upgrade: st });
+  }
+  const status: Proposal["status"] = st?.status === "done" ? "applied" : st?.status === "rolled_back" ? "rolled_back" : "failed";
+  await store.putProposal({ ...p, status, decided_at: Date.now(), upgrade: st, result: st });
+  const run = await store.getRun(p.run_id);
+  if (run) {
+    const title = status === "applied" ? `店主の承認で ${p.to_version} に上げた(データベースの作り変えを含む)` : status === "rolled_back" ? `店主の承認で上げようとしたが、途中で失敗したので ${p.from_version} に戻した` : `店主の承認で上げようとしたが、できなかった`;
+    const last = Array.isArray(st?.log) ? st.log.slice(-3).map((l: any) => l.text).join(" / ") : "";
+    run.steps.push({ at: Date.now(), kind: "decision", title, tool: "承認して上げる", result: last });
+    run.updated_at = Date.now();
+    await store.putRun(run);
+  }
 }
 
 // 店主の承認の印(お店の中で作られたもの)を受け取り、窓口に書かせる。印が提案と合わなければ窓口に渡さない
