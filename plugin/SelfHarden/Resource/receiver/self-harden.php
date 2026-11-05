@@ -820,6 +820,15 @@ function op_read_file(array $args)
         throw new ShError('too_large', '256KB までのふつうのファイルだけ読めます');
     }
     $c = (string) file_get_contents($abs);
+    // 行の範囲を渡されたら、その行だけ返す(改造の点検で、怪しい所の前後だけ読む)。1 回に 80 行まで
+    if (isset($args['from']) || isset($args['to'])) {
+        $lines = preg_split("/\r\n|\n|\r/", $c);
+        $from = isset($args['from']) ? max(1, (int) $args['from']) : 1;
+        $to = isset($args['to']) ? (int) $args['to'] : $from + 79;
+        $to = max($from, min($to, $from + 79, count($lines)));
+        return ['exists' => true, 'from' => $from, 'to' => $to, 'total_lines' => count($lines),
+            'lines' => implode("\n", array_slice($lines, $from - 1, $to - $from + 1)), 'sha256' => hash('sha256', $c), 'size' => strlen($c), 'mtime' => filemtime($abs)];
+    }
     return ['exists' => true, 'content' => $c, 'sha256' => hash('sha256', $c), 'size' => strlen($c), 'mtime' => filemtime($abs)];
 }
 
@@ -1516,6 +1525,246 @@ function op_list_quarantine()
     return ['quarantine' => $out];
 }
 
+// 改造の点検: 改造したコード(公式に無い・公式と違うファイル)を窓口の手元で調べ、一般的な危ない形がある行だけを返す。読むだけ。
+// 返すのは「ファイル、行、理由の種類、その 1 行(長い文字列は伏せる)」まで。ファイルの中身を丸ごとは返さない
+const SH_SCAN_MAX_FILES = 400;
+const SH_SCAN_MAX_HITS = 300;
+const SH_SCAN_MAX_PER_FILE = 20;
+const SH_SCAN_EXCERPT = 160;
+const SH_SCAN_EXT = '/\.(php|phtml|php[0-9]|inc|tpl|twig)$/i';
+
+function op_scan_custom(array $args)
+{
+    $max = isset($args['max_files']) ? max(1, min(SH_SCAN_MAX_FILES, (int) $args['max_files'])) : SH_SCAN_MAX_FILES;
+    $skipped = ['not_allowed' => 0, 'missing' => 0, 'too_large' => 0, 'not_code' => 0];
+    $cands = [];
+    if (isset($args['paths']) && is_array($args['paths'])) {
+        foreach (array_slice($args['paths'], 0, SH_SCAN_MAX_FILES * 2) as $rel) {
+            if (!is_string($rel)) {
+                continue;
+            }
+            $cands[] = $rel;
+        }
+    } else {
+        // 渡されなければ、本体の場所を歩く(部品の置き場・.git・作った画面の置き場は除く)
+        $walk = [];
+        sh_scan_walk(sh_root(), '', $walk, 0);
+        $cands = $walk;
+    }
+    $files = [];
+    foreach ($cands as $rel) {
+        if (count($files) >= $max) {
+            break;
+        }
+        try {
+            $abs = sh_safe_path($rel, false);
+        } catch (ShError $e) {
+            $skipped['not_allowed']++;
+            continue;
+        }
+        $r = sh_rel($abs);
+        $top = strpos($r, '/') === false ? '' : substr($r, 0, strpos($r, '/'));
+        if ($r === '' || !sh_code_top_ok($top) || sh_is_protected($r) || preg_match('/(^|\/)\.env/', $r)) {
+            $skipped['not_allowed']++;
+            continue;
+        }
+        if (!preg_match(SH_SCAN_EXT, $r)) {
+            $skipped['not_code']++;
+            continue;
+        }
+        if (!is_file($abs) || is_link($abs)) {
+            $skipped['missing']++;
+            continue;
+        }
+        if (filesize($abs) > SH_MAX_READ) {
+            $skipped['too_large']++;
+            continue;
+        }
+        $files[$r] = $abs;
+    }
+    $hits = [];
+    $list = [];
+    $truncated = false;
+    foreach ($files as $r => $abs) {
+        $n = 0;
+        $place = sh_scan_place($r);
+        if ($place !== null) {
+            $hits[] = [$r, 0, $place, ''];
+            $n++;
+        }
+        $lines = preg_split("/\r\n|\n|\r/", (string) @file_get_contents($abs));
+        $tainted = sh_scan_tainted($lines);
+        foreach ($lines as $i => $line) {
+            if ($n >= SH_SCAN_MAX_PER_FILE || count($hits) >= SH_SCAN_MAX_HITS) {
+                break;
+            }
+            foreach (sh_scan_line($line, $tainted, $r) as $kind) {
+                $hits[] = [$r, $i + 1, $kind, sh_scan_excerpt($line)];
+                $n++;
+                break;
+            }
+        }
+        if (count($hits) >= SH_SCAN_MAX_HITS) {
+            $truncated = true;
+        }
+        $list[] = [$r, (int) @filemtime($abs), (int) @filesize($abs), $n];
+        if ($truncated) {
+            break;
+        }
+    }
+    // 補助の手がかり: ほかのファイルと日時が大きく離れたもの(調べたファイルの中央より 180 日以上新しい)
+    $times = array_column($list, 1);
+    sort($times);
+    $median = $times ? $times[(int) floor(count($times) / 2)] : 0;
+    $late = [];
+    foreach ($list as $f) {
+        if ($median > 0 && $f[1] - $median > 180 * 86400) {
+            $late[] = $f[0];
+        }
+    }
+    // PHP が置かれるはずのない場所の PHP は、件数の上限で打ち切ったあとも、選んだファイル全部から拾う(中身は読まない)
+    $misplaced = [];
+    foreach (array_keys($files) as $r) {
+        if (sh_scan_place($r) !== null && count($misplaced) < 100) {
+            $misplaced[] = $r;
+        }
+    }
+    return ['scanned' => count($list), 'skipped' => $skipped, 'hits' => $hits, 'files' => $list, 'misplaced' => $misplaced, 'newer_than_most' => array_slice($late, 0, 50),
+        'truncated' => $truncated || count($cands) > count($files) + array_sum($skipped)];
+}
+
+function sh_scan_walk($abs, $rel, array &$out, $depth)
+{
+    if ($depth > 12 || count($out) >= SH_SCAN_MAX_FILES * 4) {
+        return;
+    }
+    $vendor = sh_map()['vendor_dir'];
+    foreach ((array) @scandir($abs) as $name) {
+        if ($name === '.' || $name === '..' || $name === '.git' || $name === 'node_modules' || $name === 'templates_c') {
+            continue;
+        }
+        $r = $rel === '' ? $name : $rel . '/' . $name;
+        $p = $abs . '/' . $name;
+        if (is_link($p) || sh_is_protected($r) || $r === $vendor || $r === 'vendor') {
+            continue;
+        }
+        if (is_dir($p)) {
+            $top = $rel === '' ? $name : substr($r, 0, strpos($r, '/'));
+            if ($rel === '' && !sh_code_top_ok($top)) {
+                continue;
+            }
+            sh_scan_walk($p, $r, $out, $depth + 1);
+        } elseif (preg_match(SH_SCAN_EXT, $name)) {
+            if ($rel === '' && !sh_code_top_ok('')) {
+                continue;
+            }
+            $out[] = $r;
+        }
+    }
+}
+
+// PHP が置かれるはずのない場所(画像・アップロード・一時の置き場)にある PHP
+function sh_scan_place($rel)
+{
+    if (!preg_match('/\.(php|phtml|php[0-9])$/i', $rel)) {
+        return null;
+    }
+    $dirs = explode('/', strtolower(dirname($rel)));
+    foreach ($dirs as $d) {
+        if (in_array($d, ['upload', 'uploads', 'save_image', 'temp_image', 'tmp', 'temp', 'images', 'image', 'img', 'photo', 'photos', 'media'], true)) {
+            return 'php_in_data_dir';
+        }
+    }
+    return null;
+}
+
+// 外から来る値を入れた変数(同じファイルの中だけ。代入の左側)
+function sh_scan_tainted(array $lines)
+{
+    $vars = [];
+    foreach ($lines as $line) {
+        if (preg_match('/(\$[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?\.?=(?!=)\s*(.*)$/', $line, $m) && sh_scan_has_source($m[2], [])) {
+            $vars[$m[1]] = true;
+        }
+        if (count($vars) > 200) {
+            break;
+        }
+    }
+    unset($vars['$this']);
+    return array_keys($vars);
+}
+
+function sh_scan_has_source($s, array $tainted)
+{
+    if (preg_match('/\$_(GET|POST|REQUEST|COOKIE|FILES)\b|\$_SERVER\s*\[\s*[\'"](HTTP_[A-Z_]+|QUERY_STRING|REQUEST_URI|PHP_SELF|PATH_INFO)[\'"]|\$smarty\.(get|post|request|cookies)\./i', $s)) {
+        return true;
+    }
+    foreach ($tainted as $v) {
+        if (preg_match('/' . preg_quote($v, '/') . '(?![A-Za-z0-9_])/', $s)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 1 行の危ない形。返すのは理由の種類だけ(当てはまる順に 1 つ使う)
+function sh_scan_line($line, array $tainted, $rel)
+{
+    $t = trim($line);
+    if ($t === '' || $t[0] === '*' || strpos($t, '//') === 0 || $t[0] === '#') {
+        return [];
+    }
+    $kinds = [];
+    $src = sh_scan_has_source($line, $tainted);
+    // 難読化: とても長い文字列、16 進の続き、復元の関数の重ね掛け
+    if (preg_match('/[A-Za-z0-9+\/=]{200,}/', $line) || preg_match('/(\\\\x[0-9a-fA-F]{2}){20,}/', $line)
+        || preg_match('/\b(base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|hex2bin)\s*\(\s*(base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|hex2bin)\s*\(/i', $line)) {
+        $kinds[] = 'obfuscated';
+    }
+    // 実行の関数・動的なコード(外の値が無くても、これ自体が珍しい)
+    if (preg_match('/(?<![A-Za-z0-9_>:$])(eval|assert|create_function)\s*\(/i', $line) || preg_match('/preg_replace\s*\(\s*[\'"](.).*\1[a-zA-Z]*e[a-zA-Z]*[\'"]/', $line)) {
+        $kinds[] = 'dynamic_code';
+    }
+    if ($src) {
+        if (preg_match('/(?<![A-Za-z0-9_>:$])(system|exec|passthru|shell_exec|popen|proc_open|pcntl_exec|call_user_func|call_user_func_array)\s*\(|`/i', $line)
+            || preg_match('/\$_(GET|POST|REQUEST|COOKIE)\s*\[[^\]]*\]\s*\(/', $line)) {
+            $kinds[] = 'exec_with_input';
+        }
+        if (preg_match('/(?<![A-Za-z0-9_>:$])(include|include_once|require|require_once|fopen|file_get_contents|file_put_contents|readfile|unlink|copy|rename|move_uploaded_file|opendir|scandir)\b/i', $line)) {
+            $kinds[] = 'file_with_input';
+        }
+        if (preg_match('/\b(SELECT|INSERT|UPDATE|DELETE|WHERE|ORDER\s+BY|GROUP\s+BY|LIMIT|VALUES)\b/i', $line) && preg_match('/[\'"]\s*\.\s*\$|\$[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[\'"]|"[^"]*\$[A-Za-z_{]/', $line)) {
+            $kinds[] = 'sql_with_input';
+        }
+        if (preg_match('/(?<![A-Za-z0-9_>:$])(echo|print|printf|die|exit)\b|<\?=/i', $line) && !preg_match('/htmlspecialchars|htmlentities|h\(|escape|json_encode|intval|\(int\)/i', $line)) {
+            $kinds[] = 'output_with_input';
+        }
+        if (preg_match('/\{\$smarty\.(get|post|request|cookies)\.[^}]*\}/i', $line) && !preg_match('/\|\s*(h|escape|htmlspecialchars)\b/i', $line)) {
+            $kinds[] = 'output_with_input';
+        }
+    }
+    if (preg_match('/\.twig$/i', $rel) && preg_match('/\|\s*raw\b/', $line)) {
+        $kinds[] = 'output_unescaped';
+    }
+    if (preg_match('/\.tpl$/i', $rel) && preg_match('/\{\$[^}|]+\|\s*(nofilter|smarty:nodefaults)\b/i', $line)) {
+        $kinds[] = 'output_unescaped';
+    }
+    return $kinds;
+}
+
+// 返す 1 行: 長い文字列と、秘密らしい名前のそばの文字列は伏せる。長すぎれば切る
+function sh_scan_excerpt($line)
+{
+    $t = trim($line);
+    $t = preg_replace_callback('/([\'"])((?:\\\\.|(?!\1).){25,})\1/', function ($m) { return $m[1] . '<str:' . strlen($m[2]) . '>' . $m[1]; }, $t);
+    $t = preg_replace('/((?:pass(?:word|wd)?|secret|token|api[_-]?key|auth[_-]?magic|private[_-]?key)[A-Za-z0-9_]*[\'"]?\s*(?:=>|=|,)\s*)([\'"])((?:\\\\.|(?!\2).)*)\2/i', '$1$2<redacted>$2', (string) $t);
+    $t = preg_replace('/[A-Za-z0-9+\/=]{60,}/', '<long>', (string) $t);
+    if (strlen($t) > SH_SCAN_EXCERPT) {
+        $t = function_exists('mb_strcut') ? mb_strcut($t, 0, SH_SCAN_EXCERPT, 'UTF-8') . '…' : substr($t, 0, SH_SCAN_EXCERPT) . '…';
+    }
+    return function_exists('mb_convert_encoding') ? mb_convert_encoding($t, 'UTF-8', 'UTF-8') : $t;
+}
+
 // ファイルの一覧と SHA-256。読むだけ。件数と時間の上限があり、cursor から続きを取れる
 function op_hash_tree(array $args)
 {
@@ -1669,6 +1918,7 @@ function sh_main()
             case 'list_backups': $r = ['backups' => array_slice(sh_backup_list(), 0, 200)]; break;
             case 'lab_arm': $r = op_lab_arm(); break;
             case 'hash_tree': $r = op_hash_tree($args); break;
+            case 'scan_custom': $r = op_scan_custom($args); break;
             case 'restore_official': $r = op_restore_official($cfg, $args); break;
             case 'apply_official_fix': $r = op_apply_official_fix($cfg, $args); break;
             case 'apply_official_release': $r = op_apply_official_release($cfg, $args); break;
