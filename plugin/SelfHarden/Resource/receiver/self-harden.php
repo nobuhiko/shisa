@@ -22,8 +22,12 @@ const SH_AUDIT_MAX = 1048576;
 const SH_APPROVE_KEY = 'approve-key.php';
 const SH_APPROVE_MAX_TTL = 3600;
 const SH_APPROVE_EXT = '/\\.(php|twig|tpl|html?)$/i';
+// 承認の直しは小さく: 変わる行の幅(先頭と末尾の同じ行を除いた範囲)の上限
+const SH_APPROVE_MAX_LINES = 200;
 // 本体のファイルを書くときに中身を取ってきてよい、決まった公式の場所(受け口が自分で組み立てる。API からは URL を渡せない)
 const SH_OFFICIAL_RAW = 'https://raw.githubusercontent.com/';
+// コミットの番号が公式のものかを確かめる先(受け口が自分で組み立てる)。フォークにだけあるコミットも、親のリポジトリの名前で取れてしまうため
+const SH_GITHUB_API = 'https://api.github.com/repos/';
 // 地図: 仕組み(アプリと版の系統)ごとの違いをここにまとめる。書いてよい場所、版の読み方、公式の置き場、版の形。
 // どの地図を使うかは、窓口が自分の居場所を見て決める。API からは選べない(鍵が漏れても、ゆるい地図を選ばせない)
 const SH_MAPS = [
@@ -39,6 +43,9 @@ const SH_MAPS = [
         'version_file' => 'src/Eccube/Common/Constant.php',
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
         'repo' => 'EC-CUBE/ec-cube',
+        // 書いたあとに必ず開いて確かめるページ(API が渡すものに足す。API 任せにしない)
+        'verify_paths' => ['/', '/products/list', '/cart'],
+        'official_branches' => ['%line%', 'maintenance/%line%'],
         'tag_re' => '/^4\\.[0-9]+\\.[0-9]+(-p[0-9]+)?$/',
         'line_re' => '/^(4\\.[0-9]+)\\./',
         'release_asset' => 'eccube-%s.tar.gz',
@@ -56,6 +63,9 @@ const SH_MAPS = [
         'version_re' => "/const\\s+VERSION\\s*=\\s*'([^']+)'/",
         // 3 系の修正版(3.0.18-p1〜)は EC-CUBE/ec-cube3 のタグにある
         'repo' => 'EC-CUBE/ec-cube3',
+        // 書いたあとに必ず開いて確かめるページ(API が渡すものに足す。API 任せにしない)
+        'verify_paths' => ['/', '/products/list', '/cart'],
+        'official_branches' => ['3.0'],
         'tag_re' => '/^3\\.0\\.[0-9]+(-p[0-9]+)?$/',
         'line_re' => '/^(3\\.0)\\./',
         'release_asset' => null,
@@ -73,6 +83,9 @@ const SH_MAPS = [
         'version_file' => 'data/class/SC_Initial.php',
         'version_re' => "/define\\(\\s*'ECCUBE_VERSION'\\s*,\\s*'([^']+)'\\s*\\)/",
         'repo' => 'EC-CUBE/ec-cube2',
+        // 書いたあとに必ず開いて確かめるページ(API が渡すものに足す。API 任せにしない)
+        'verify_paths' => ['/', '/products/list.php', '/cart/'],
+        'official_branches' => ['master'],
         'tag_prefix' => 'eccube-',
         'tag_re' => '/^eccube-2\\.[0-9]+\\.[0-9]+(-p[0-9]+)?$/',
         'line_re' => '/^(2\\.[0-9]+)\\./',
@@ -90,6 +103,9 @@ const SH_MAPS = [
         'version_file' => null,
         'version_re' => null,
         'repo' => null,
+        // 書いたあとに必ず開いて確かめるページ(API が渡すものに足す。API 任せにしない)
+        'verify_paths' => ['/'],
+        'official_branches' => [],
         'tag_re' => null,
         'line_re' => null,
         'release_asset' => null,
@@ -913,10 +929,13 @@ function op_lab_arm()
 // 受け口から触ってはいけない場所
 function sh_is_protected($rel)
 {
+    // 大文字と小文字を区別しないファイルシステム(Windows・macOS)でも破れないよう、小文字にそろえて比べる
+    $rel = strtolower((string) $rel);
     $base = basename($rel);
-    return $rel === sh_pub('self-harden.php') || sh_is_inside($rel, 'var') || sh_is_inside($rel, sh_map()['var_dir']) || sh_is_inside($rel, sh_pub(SH_LAB_DIR))
+    $low = function ($x) { return strtolower((string) $x); };
+    return $rel === $low(sh_pub('self-harden.php')) || sh_is_inside($rel, 'var') || sh_is_inside($rel, $low(sh_map()['var_dir'])) || sh_is_inside($rel, $low(sh_pub(SH_LAB_DIR)))
         || preg_match('/^\.env|\.env$/', $base) || $rel === 'composer.json' || $rel === 'composer.lock' || sh_is_inside($rel, '.git')
-        || in_array($rel, sh_map()['secrets'], true);
+        || in_array($rel, array_map($low, sh_map()['secrets']), true);
 }
 
 // 公式の中身で書いてよい本体のファイル: src/ app/ html/ vendor/ の中と、root 直下のファイル
@@ -1016,6 +1035,8 @@ function sh_official_url($rel, $ref)
         if (!preg_match(sh_map()['version_re'], $c, $m) || $installed === null || version_compare($m[1], $installed, '<')) {
             throw new ShError('bad_ref', 'そのコミットの版(' . (isset($m[1]) ? $m[1] : '不明') . ')は今の版(' . $installed . ')より古いので使えません');
         }
+        // そのコミットが公式のブランチかタグから辿れること(フォークにだけあるコミットを断る)
+        sh_require_official_commit($ref, $installed);
     }
     if (!$sha) {
         if (!preg_match(sh_map()['tag_re'], $ref) || $installed === null || version_compare(sh_tagver($ref), $installed, '<')) {
@@ -1025,12 +1046,95 @@ function sh_official_url($rel, $ref)
     return SH_OFFICIAL_RAW . sh_map()['repo'] . '/' . $ref . '/' . sh_official_rel($rel);
 }
 
+// GitHub の compare(base...sha)の返事を固く読む。sha が base の祖先(behind)か同じ(identical)で、
+// 共通の祖先がその sha そのものであるときだけ「base から辿れる」とする。形が違えば辿れないとする
+function sh_compare_reaches($json, $sha)
+{
+    $d = json_decode((string) $json, true);
+    if (!is_array($d) || !isset($d['status'], $d['merge_base_commit']['sha']) || !is_string($d['status']) || !is_string($d['merge_base_commit']['sha'])) {
+        return false;
+    }
+    if ($d['status'] !== 'behind' && $d['status'] !== 'identical') {
+        return false;
+    }
+    if (isset($d['ahead_by']) && (int) $d['ahead_by'] !== 0) {
+        return false;
+    }
+    return hash_equals(strtolower($sha), strtolower($d['merge_base_commit']['sha']));
+}
+
+// コミットの番号(40 文字)が、公式のリポジトリの公式のブランチか、今の版以上の公式のタグから辿れることを確かめる。
+// 確かめる先は地図とタグの一覧で受け口が決め、API からは選べない。辿れなければ断る(迷えば断る)
+function sh_require_official_commit($sha, $installed)
+{
+    $map = sh_map();
+    if (empty($map['repo']) || !preg_match('/^[0-9a-f]{40}$/', $sha)) {
+        throw new ShError('bad_ref', '公式のコミットとして確かめられません');
+    }
+    $cache = sh_var('official-commits.json');
+    $known = json_decode((string) @file_get_contents($cache), true);
+    $known = is_array($known) ? $known : [];
+    if (isset($known[$map['repo'] . '@' . $sha])) {
+        return;
+    }
+    $line = ($installed !== null && preg_match($map['line_re'], $installed, $lm)) ? $lm[1] : null;
+    $remember = function ($base) use ($cache, $known, $map, $sha) {
+        $known[$map['repo'] . '@' . $sha] = $base;
+        if (count($known) > 500) {
+            $known = array_slice($known, -500, null, true);
+        }
+        @file_put_contents($cache, json_encode($known), LOCK_EX);
+    };
+    $reaches = function ($base) use ($map, $sha) {
+        try {
+            return sh_compare_reaches(sh_fetch_official(SH_GITHUB_API . $map['repo'] . '/compare/' . rawurlencode($base) . '...' . $sha), $sha);
+        } catch (ShError $e) {
+            return false;
+        }
+    };
+    // まず地図に決めた公式のブランチ、だめなら今の版以上の公式のタグ(新しい順に 4 つまで)
+    foreach ($map['official_branches'] as $br) {
+        if (strpos($br, '%line%') !== false) {
+            if ($line === null) {
+                continue;
+            }
+            $br = str_replace('%line%', $line, $br);
+        }
+        if ($reaches($br)) {
+            $remember($br);
+            return;
+        }
+    }
+    try {
+        $tags = json_decode((string) sh_fetch_official(SH_GITHUB_API . $map['repo'] . '/tags?per_page=100'), true);
+    } catch (ShError $e) {
+        $tags = null;
+    }
+    $cands = [];
+    foreach (is_array($tags) ? $tags : [] as $t) {
+        if (isset($t['name']) && is_string($t['name']) && preg_match($map['tag_re'], $t['name'])
+            && $installed !== null && version_compare(sh_tagver($t['name']), $installed, '>=')
+            && ($line === null || strpos(sh_tagver($t['name']), $line . '.') === 0)) {
+            $cands[] = $t['name'];
+        }
+    }
+    usort($cands, function ($a, $b) { return version_compare(sh_tagver($b), sh_tagver($a)); });
+    foreach (array_slice($cands, 0, 4) as $tag) {
+        if ($reaches($tag)) {
+            $remember($tag);
+            return;
+        }
+    }
+    throw new ShError('not_official_commit', 'そのコミットは、公式のブランチやタグから辿れません(公式のものと確かめられないので使いません)');
+}
+
 function sh_fetch_official($url)
 {
-    if (strpos($url, SH_OFFICIAL_RAW) !== 0 || !function_exists('curl_init')) {
+    if ((strpos($url, SH_OFFICIAL_RAW) !== 0 && strpos($url, SH_GITHUB_API) !== 0) || !function_exists('curl_init')) {
         throw new ShError('no_official_source', '公式の場所から取れません');
     }
     $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['User-Agent: self-harden-receiver', 'Accept: application/vnd.github+json']);
     $buf = '';
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => false, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 12,
         CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
@@ -1592,6 +1696,9 @@ function op_apply_approved_fix(array $cfg, array $args)
     }
     $rel = sh_approved_path($path);
     $abs = sh_root() . '/' . $rel;
+    if (sh_changed_span((string) file_get_contents($abs), $content) > SH_APPROVE_MAX_LINES) {
+        throw new ShError('too_large_change', '変わる行が多すぎます(' . SH_APPROVE_MAX_LINES . ' 行まで)。承認の直しは小さな直しだけにしています');
+    }
     if (preg_match('/\\.php$/i', $rel)) {
         // 動かさずに、PHP の書き方として正しいかだけ確かめる
         try {
@@ -1629,21 +1736,57 @@ function op_apply_approved_fix(array $cfg, array $args)
     }
     $res = ['proposal_id' => $pid, 'path' => $rel, 'backup_id' => $meta['backup_id'], 'sha256_before' => $before,
         'sha256_after' => $new, 'verify' => null, 'rolled_back' => false];
-    if (isset($args['verify'])) {
-        $res['verify'] = sh_verify($cfg, $args['verify']);
-        if (sh_verify_failed($res['verify'])) {
-            sh_atomic_write($abs, (string) file_get_contents(sh_var('backups/' . $meta['backup_id'] . '.bak')));
-            if (function_exists('opcache_invalidate')) {
-                @opcache_invalidate($abs, true);
+    // 書いたあとは必ず確かめる。確かめるページは窓口の決めたもの(地図)に、API が渡したものを足す。確かめが例外で終わっても戻す
+    $paths = sh_map()['verify_paths'];
+    if (isset($args['verify']['paths']) && is_array($args['verify']['paths'])) {
+        foreach ($args['verify']['paths'] as $p) {
+            if (is_string($p) && !in_array($p, $paths, true)) {
+                $paths[] = $p;
             }
-            if (preg_match('/\\.twig$/i', $rel)) {
-                sh_clear_twig_cache();
-            }
-            $res['rolled_back'] = true;
-            $res['rollback_verify'] = sh_verify($cfg, $args['verify']);
+        }
+    }
+    $verify = ['paths' => array_slice($paths, 0, 6), 'timeout_sec' => 8];
+    try {
+        $res['verify'] = sh_verify($cfg, $verify);
+        $failed = sh_verify_failed($res['verify']);
+    } catch (Throwable $e) {
+        $res['verify'] = ['error' => $e instanceof ShError ? $e->code_str : 'internal'];
+        $failed = true;
+    }
+    if ($failed) {
+        sh_atomic_write($abs, (string) file_get_contents(sh_var('backups/' . $meta['backup_id'] . '.bak')));
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($abs, true);
+        }
+        if (preg_match('/\\.twig$/i', $rel)) {
+            sh_clear_twig_cache();
+        }
+        $res['rolled_back'] = true;
+        try {
+            $res['rollback_verify'] = sh_verify($cfg, $verify);
+        } catch (Throwable $e) {
+            $res['rollback_verify'] = null;
         }
     }
     return $res;
+}
+
+// 2 つの中身で、先頭と末尾の同じ行を除いた「変わる範囲」の行数(多い方)。差分の大きさの上限を、軽く・確実に測る
+function sh_changed_span($old, $new)
+{
+    $a = preg_split("/\r\n|\n|\r/", (string) $old);
+    $b = preg_split("/\r\n|\n|\r/", (string) $new);
+    $i = 0;
+    $na = count($a);
+    $nb = count($b);
+    while ($i < $na && $i < $nb && $a[$i] === $b[$i]) {
+        $i++;
+    }
+    $j = 0;
+    while ($j < $na - $i && $j < $nb - $i && $a[$na - 1 - $j] === $b[$nb - 1 - $j]) {
+        $j++;
+    }
+    return max($na - $i - $j, $nb - $i - $j);
 }
 
 // 公式に無い不審なファイルを、消さずに Web から読めない場所へ移す
@@ -2126,12 +2269,20 @@ function sh_audit($op, array $args, $ok, $code, $result)
             break;
         }
     }
+    $extra = [];
+    if ($op === 'apply_approved_fix' && isset($args['approval']) && is_array($args['approval'])) {
+        // 承認で書いた記録: どの提案の、どのファイルに、どの中身(ハッシュ)を書いたか。印そのものは残さない
+        foreach (['proposal_id', 'path', 'sha256_new'] as $k) {
+            $extra[$k] = isset($args['approval'][$k]) && is_scalar($args['approval'][$k]) ? substr((string) $args['approval'][$k], 0, 300) : null;
+        }
+        $path = $extra['path'];
+    }
     if ($path === null && isset($args['paths']) && is_array($args['paths'])) {
         $path = substr(implode(',', array_filter($args['paths'], 'is_string')), 0, 300);
     }
     $line = ['t' => gmdate('c'), 'op' => $op, 'path' => $path, 'ok' => $ok, 'code' => $code,
         'backup_id' => is_array($result) && isset($result['backup_id']) ? $result['backup_id'] : null,
-        'rolled_back' => is_array($result) && !empty($result['rolled_back']) ? true : null];
+        'rolled_back' => is_array($result) && !empty($result['rolled_back']) ? true : null] + $extra;
     @file_put_contents($f, json_encode($line, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND | LOCK_EX);
     @chmod($f, 0600);
 }

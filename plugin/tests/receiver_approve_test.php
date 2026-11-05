@@ -132,7 +132,12 @@ $r = call('apply_approved_fix', ['approval' => $a, 'content' => $fixed, 'verify'
 check('正しい印なら書く', !empty($r['json']['ok']) && file_get_contents($pageAbs) === $fixed && $r['json']['result']['rolled_back'] === false, $r['body']);
 $bid = isset($r['json']['result']['backup_id']) ? $r['json']['result']['backup_id'] : '';
 check('控えを取っている', $bid !== '' && file_get_contents($shop . '/var/self-harden/backups/' . $bid . '.bak') === $weak);
-check('書いたあとページが開く', isset($r['json']['result']['verify'][1]['status']) && $r['json']['result']['verify'][1]['status'] === 200, $r['body']);
+$vs = [];
+foreach ((array) (isset($r['json']['result']['verify']) ? $r['json']['result']['verify'] : []) as $v) {
+    $vs[$v['path']] = $v['status'];
+}
+check('書いたあとページが開く', isset($vs['/app/Customize/Controller/Page.php']) && $vs['/app/Customize/Controller/Page.php'] === 200, $r['body']);
+check('確かめるページには、窓口の決めたもの(/ と商品一覧・カート)が必ず入る', isset($vs['/'], $vs['/products/list'], $vs['/cart']), $r['body']);
 check('同じ印の使い回しは断る', err(call('apply_approved_fix', ['approval' => $a, 'content' => $fixed])) === 'approval_used');
 $r = call('restore', ['backup_id' => $bid]);
 check('控えから戻せる', !empty($r['json']['ok']) && file_get_contents($pageAbs) === $weak, $r['body']);
@@ -142,6 +147,28 @@ $broken = "<?php\nhttp_response_code(500);\necho 'broken';\n";
 $r = call('apply_approved_fix', ['approval' => approval($page, $broken, hash('sha256', $weak)), 'content' => $broken, 'verify' => $verify]);
 check('開けなくなったら、その場で戻す', !empty($r['json']['ok']) && $r['json']['result']['rolled_back'] === true && file_get_contents($pageAbs) === $weak, $r['body']);
 
+echo "確かめを渡さなくても、必ず確かめる\n";
+$r = call('apply_approved_fix', ['approval' => approval($page, $fixed, hash('sha256', $weak)), 'content' => $fixed]);
+$paths = array_map(function ($v) { return $v['path']; }, (array) (isset($r['json']['result']['verify']) ? $r['json']['result']['verify'] : []));
+check('verify を渡さなくても、窓口の決めたページ(/・商品一覧・カート)を開いて確かめる', !empty($r['json']['ok']) && $paths === ['/', '/products/list', '/cart'], $r['body']);
+if (!empty($r['json']['result']['backup_id'])) {
+    call('restore', ['backup_id' => $r['json']['result']['backup_id']]);
+}
+check('(戻して元の中身)', file_get_contents($pageAbs) === $weak);
+
+echo "確かめが例外で終わっても戻す\n";
+$cfgFile = $shop . '/var/self-harden/config.php';
+$cfgSave = file_get_contents($cfgFile);
+file_put_contents($cfgFile, "<?php exit; ?>\n" . json_encode(['shop_id' => $shopId, 'secret' => $secret, 'self_base' => 'not a url', 'api_base' => 'http://api.invalid']));
+$r = call('apply_approved_fix', ['approval' => approval($page, $fixed, hash('sha256', $weak)), 'content' => $fixed]);
+file_put_contents($cfgFile, $cfgSave);
+check('確かめが例外でも、書いたものを戻す', !empty($r['json']['ok']) && $r['json']['result']['rolled_back'] === true && file_get_contents($pageAbs) === $weak, $r['body']);
+
+echo "大きすぎる直しは断る\n";
+$bigNew = $weak . str_repeat("// 行\n", 250);
+$r = call('apply_approved_fix', ['approval' => approval($page, $bigNew, hash('sha256', $weak)), 'content' => $bigNew]);
+check('変わる行が 200 を超える直しは書かない', err($r) === 'too_large_change' && file_get_contents($pageAbs) === $weak, $r['body']);
+
 echo "テンプレート\n";
 $tpl = 'app/template/default/Note/index.twig';
 $tnew = "<p>{{ q }}</p>\n";
@@ -150,6 +177,7 @@ check('テンプレートも直せる', !empty($r['json']['ok']) && file_get_con
 check('Twig の組み立て済みを捨てる(本番は読み直さないため)', !file_exists($shop . '/var/cache/prod/twig/ab/compiled.php'));
 $r = call('audit_tail', []);
 check('記録に中身も印も残さない', strpos($r['body'], 'htmlspecialchars') === false && strpos($r['body'], $a['sig']) === false);
+check('記録に、承認で書いた提案・ファイル・中身のハッシュを残す', strpos($r['body'], $a['proposal_id']) !== false && strpos($r['body'], $a['sha256_new']) !== false && strpos($r['body'], $page) !== false, $r['body']);
 
 echo "\n$pass ok, $fail fail\n";
 exit($fail ? 1 : 0);

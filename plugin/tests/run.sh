@@ -14,5 +14,6 @@ for v in $VERSIONS; do
   docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver2flat_test.php || status=1
   docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver_scan_test.php || status=1
   docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin -e PHP_CLI_SERVER_WORKERS=8 "php:$v-cli" php tests/receiver_approve_test.php || status=1
+  docker run --rm -v "$(cd .. && pwd):/repo" -w /repo/plugin "php:$v-cli" php tests/receiver_unit_test.php || status=1
 done
 exit $status
