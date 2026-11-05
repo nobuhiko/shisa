@@ -59,6 +59,8 @@
   .sh-fix-diff { font-family: monospace; font-size: 12px; background: #fafafa; border: 1px solid #eee; padding: 6px 0; max-height: 320px; overflow: auto; margin: 8px 0; }
   .sh-fix-diff div { white-space: pre-wrap; word-break: break-all; padding: 0 10px; }
   .sh-fix-diff .del { background: #fde0e0; } .sh-fix-diff .add { background: #e3f6e3; } .sh-fix-diff .gap { color: #999; }
+  .sh-fix-diff .add.risky { background: #ffe9a8; outline: 2px solid #e0a000; } .sh-fix-warn { color: #9a5b00; background: #fff6dc; padding: 6px 10px; margin: 6px 0; border-radius: 4px; font-size: 13px; }
+  .sh-fix-note { font-size: 13px; color: #555; margin: 6px 0; } .sh-confirm-code { display: inline-block; width: 90px; margin: 0 8px; } .sh-code-label { font-size: 13px; }
   .sh-fix .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .sh-fix-result { margin-top: 8px; font-weight: bold; } .sh-fix-result.ok { color: #2e7d32; } .sh-fix-result.ng { color: #b00020; }
   .sh-fix details { margin-top: 8px; } .sh-fix details pre { white-space: pre-wrap; background: #f7f7f7; padding: 8px; font-size: 13px; }
@@ -397,26 +399,44 @@
   var approveBase = '{{ url('self_harden_admin_config') }}'.replace(/config$/, 'approve/');
   var fixCard = document.getElementById('sh-fix-card'), fixList = document.getElementById('sh-fix-list');
   // 今の中身と書く中身を、行ごとに見比べる(お店の中で読んだ今の中身と比べるので、見せたものと書くものがずれない)
+  // 先頭と末尾の同じ行を除いた範囲だけを見比べる(長いファイルでも重くならない)。変わる範囲が 200 行を超えたら見比べない(承認もさせない)
+  var FIX_MAX_LINES = 200;
   function lineDiff(a, b) {
-    var A = a.split('\n'), B = b.split('\n'), n = A.length, m = B.length;
-    if (n * m > 4000000) return null;
+    var A = a.split('\n'), B = b.split('\n');
+    var pre = 0; while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre++;
+    var suf = 0; while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf]) suf++;
+    var MA = A.slice(pre, A.length - suf), MB = B.slice(pre, B.length - suf), n = MA.length, m = MB.length;
+    if (n > FIX_MAX_LINES || m > FIX_MAX_LINES) return null;
     var w = m + 1, dp = new Int32Array((n + 1) * w);
-    for (var i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) dp[i * w + j] = A[i] === B[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
-    var ops = []; i = 0; j = 0;
+    for (var i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) dp[i * w + j] = MA[i] === MB[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    var ops = [];
+    for (var k = 0; k < pre; k++) ops.push([' ', A[k]]);
+    i = 0; j = 0;
     while (i < n || j < m) {
-      if (i < n && j < m && A[i] === B[j]) { ops.push([' ', A[i]]); i++; j++; }
-      else if (i < n && (j >= m || dp[(i + 1) * w + j] >= dp[i * w + j + 1])) { ops.push(['-', A[i]]); i++; }
-      else { ops.push(['+', B[j]]); j++; }
+      if (i < n && j < m && MA[i] === MB[j]) { ops.push([' ', MA[i]]); i++; j++; }
+      else if (i < n && (j >= m || dp[(i + 1) * w + j] >= dp[i * w + j + 1])) { ops.push(['-', MA[i]]); i++; }
+      else { ops.push(['+', MB[j]]); j++; }
     }
+    for (k = A.length - suf; k < A.length; k++) ops.push([' ', A[k]]);
     return ops;
   }
-  function diffEl(cur, next) {
+  // 見えない文字・向きを変える文字・制御文字(タブ以外)・行末の \r を、見える形(\u{202E} など)にする。見つけたら知らせる
+  var HIDDEN_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB]/g;
+  function visible(s) { return s.replace(HIDDEN_RE, function (c) { return '\\u{' + c.charCodeAt(0).toString(16).toUpperCase() + '}'; }); }
+  // 足す行に出たら目立たせる、一般的に危ない書き方(実行・ファイル操作・PHP の開け閉め・テンプレートで escape を外す・関数を渡すフィルター)
+  var RISKY_RE = /\b(eval|assert|system|exec|passthru|shell_exec|popen|proc_open|pcntl_exec|create_function|call_user_func(_array)?|include(_once)?|require(_once)?|file_put_contents|fopen|fwrite|unlink|rename|copy|move_uploaded_file|base64_decode|gzinflate|str_rot13|unserialize|curl_exec|file_get_contents)\s*\(|<\?|\?>|`|\|\s*raw\b|\|\s*(map|filter|reduce|sort)\b|\b_self\b|\bsource\s*\(|\binclude\s*\(|autoescape\s+false/i;
+  function diffEl(cur, next, warn) {
     var box = el('div', 'sh-fix-diff'), ops = lineDiff(cur, next);
-    if (!ops) { box.appendChild(el('div', 'gap', '(大きすぎて見比べられません)')); return box; }
+    if (!ops) { box.appendChild(el('div', 'gap', '(変わる行が多すぎて見比べられません。承認では直せないので、制作会社に任せてください)')); warn.big = true; return box; }
     var keep = ops.map(function (o, k) { for (var d = -2; d <= 2; d++) { var x = ops[k + d]; if (x && x[0] !== ' ') return true; } return false; }), gap = false;
     ops.forEach(function (o, k) {
       if (!keep[k]) { if (!gap) box.appendChild(el('div', 'gap', '…')); gap = true; return; }
-      gap = false; box.appendChild(el('div', o[0] === '+' ? 'add' : o[0] === '-' ? 'del' : '', (o[0] === ' ' ? '  ' : o[0] + ' ') + o[1]));
+      gap = false;
+      var line = o[1], shown = visible(line.replace(/\r$/, '')) + (/\r$/.test(line) ? '\\r' : '');
+      if (o[0] !== ' ' && shown !== line) warn.hidden = true;
+      var cls = o[0] === '+' ? 'add' : o[0] === '-' ? 'del' : '';
+      if (o[0] === '+' && RISKY_RE.test(line)) { cls += ' risky'; warn.risky = true; }
+      box.appendChild(el('div', cls, (o[0] === ' ' ? '  ' : o[0] + ' ') + shown));
     });
     return box;
   }
@@ -432,13 +452,29 @@
       box.appendChild(el('p', 'owner', p.owner_text));
       var res = el('div', 'sh-fix-result'); res.id = 'sh-fix-result-' + p.proposal_id;
       if (p.status === 'pending') {
-        if (typeof p.current === 'string' && typeof p.new_content === 'string') box.appendChild(diffEl(p.current, p.new_content));
+        var warn = {};
+        var hasDiff = typeof p.current === 'string' && typeof p.new_content === 'string';
+        if (hasDiff) box.appendChild(diffEl(p.current, p.new_content, warn));
+        if (warn.hidden) box.appendChild(el('div', 'sh-fix-warn', '注意: 見えない文字や、文字の向きを変える文字が入っています(\\u{…} と表示)。心当たりがなければ承認しないでください'));
+        if (warn.risky) box.appendChild(el('div', 'sh-fix-warn', '注意: 足す行に、プログラムを動かす・ファイルを書き換える・表示の守りを外すような書き方があります(色の付いた行)。よく確かめてください'));
+        // 承認したものは、そのままお店で動く(固定の注意書き。提案の説明だけに頼らない)
+        box.appendChild(el('div', 'sh-fix-note', '承認した中身は、そのままお店のプログラムとして動きます。中身を見て、納得できるときだけ承認してください。'));
         var act = el('div', 'actions');
+        var codeIn = el('input', 'form-control sh-confirm-code'); codeIn.type = 'text'; codeIn.inputMode = 'numeric'; codeIn.maxLength = 4; codeIn.placeholder = p.confirm_code || ''; codeIn.id = 'sh-code-' + p.proposal_id;
         var btn = el('button', 'btn btn-ec-conversion sh-approve-btn', '承認して直す'); btn.type = 'button'; btn.id = 'sh-approve-' + p.proposal_id;
-        if (p.changed || !p.content_ok) { btn.disabled = true; res.className = 'sh-fix-result ng'; res.textContent = p.changed ? '提案のあとにファイルが変わっています。次の点検で提案し直します' : '提案の中身が合わないので、承認できません'; }
-        btn.addEventListener('click', function () { approve(p, btn, res); });
-        act.appendChild(btn);
-        act.appendChild(el('span', 'text-muted small', 'リスクは店主さんが取ります。控えから、いつでも元に戻せます'));
+        var stop = !hasDiff ? '今のファイルを読めないので、承認できません' : warn.big ? '変わる行が多すぎるので、承認では直せません。制作会社に任せてください'
+          : p.changed ? '提案のあとにファイルが変わっています。次の点検で提案し直します' : !p.content_ok ? '提案の中身が合わないので、承認できません'
+          : !d.can_approve ? '承認できるのは、システム管理者か店舗オーナーの権限の管理者だけです' : !p.confirm_code ? '画面を開き直してください' : '';
+        if (stop) { btn.disabled = true; codeIn.disabled = true; res.className = 'sh-fix-result ng'; res.textContent = stop; }
+        btn.addEventListener('click', function () { approve(p, btn, res, codeIn.value.trim()); });
+        if (!stop) {
+          act.appendChild(el('span', 'sh-code-label', '確認コード ' + p.confirm_code + ' を入力:'));
+          act.appendChild(codeIn);
+          act.appendChild(btn);
+          act.appendChild(el('span', 'text-muted small', 'リスクは店主さんが取ります。控えから、いつでも元に戻せます'));
+        } else {
+          act.appendChild(btn);
+        }
         box.appendChild(act);
       } else {
         res.className = 'sh-fix-result ' + (p.status === 'applied' ? 'ok' : 'ng');
@@ -459,9 +495,11 @@
   function loadProposals() {
     return fetch(proposalsUrl, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(renderProposals).catch(function () { return []; });
   }
-  function approve(p, btn, res) {
+  function approve(p, btn, res, code) {
+    if (!/^[0-9]{4}$/.test(code || '')) { res.className = 'sh-fix-result ng'; res.textContent = '確認コード(4 けたの数字)を入力してください'; return; }
     btn.disabled = true; res.className = 'sh-fix-result'; res.textContent = '控えを取って直し、お店を開いて確かめています…';
-    var body = new URLSearchParams({ _token: token });
+    // 画面で見た中身(ハッシュ)と確認コードを一緒に送る。お店の側で、見せたものと同じかを確かめてから印を作る
+    var body = new URLSearchParams({ _token: token, sha256_new: p.sha256_new || '', sha256_before: p.sha256_before || '', confirm_code: code });
     fetch(approveBase + encodeURIComponent(p.proposal_id), { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: body })
       .then(function (r) { return r.json(); })
       .then(function (d) {

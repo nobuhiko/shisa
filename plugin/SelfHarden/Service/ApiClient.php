@@ -96,14 +96,14 @@ class ApiClient
     {
         $c = $this->config();
 
-        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals', '', $c);
+        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals', '', $c, 25, true);
     }
 
     public function getProposal($proposalId)
     {
         $c = $this->config();
 
-        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId), '', $c);
+        return $this->request('GET', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId), '', $c, 25, true);
     }
 
     /** 承認の印を API に渡す(API は窓口に取り次ぐだけ。印はお店の中の鍵で作ったもの) */
@@ -112,7 +112,7 @@ class ApiClient
         $c = $this->config();
         $body = json_encode(['approval' => $approval], JSON_UNESCAPED_SLASHES);
 
-        return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/approve', $body, $c, 60);
+        return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/approve', $body, $c, 60, true);
     }
 
     public function shopId()
@@ -127,9 +127,45 @@ class ApiClient
         return $this->root;
     }
 
-    private function request($method, $base, $path, $body, $signWith, $timeout = 25)
+    /**
+     * API の URL は https だけ。手元の検証環境だけ、サーバー側の SELF_HARDEN_ALLOW_HTTP_API=1 で http を許す。
+     * そのときも、行き先は手元の名前(点の無い名前・localhost・ループバック・プライベートの住所)に限る(外の http には送らない)
+     */
+    public static function apiBaseAllowed($base)
     {
+        if (!is_string($base)) {
+            return false;
+        }
+        if (strpos($base, 'https://') === 0) {
+            return true;
+        }
+        if (getenv('SELF_HARDEN_ALLOW_HTTP_API') !== '1' || strpos($base, 'http://') !== 0) {
+            return false;
+        }
+        $host = strtolower((string) parse_url($base, PHP_URL_HOST));
+        if ($host === '') {
+            return false;
+        }
+        if ($host === 'localhost' || strpos($host, '.') === false) {
+            return true;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+        }
+
+        return false;
+    }
+
+    /**
+     * $requireSig: 承認にかかわる返事は、API の署名(呼び出しの nonce に結びつく)を確かめ、合わなければ使わない
+     */
+    private function request($method, $base, $path, $body, $signWith, $timeout = 25, $requireSig = false)
+    {
+        if (!self::apiBaseAllowed($base)) {
+            return ['ok' => false, 'error' => 'api_base_not_https', 'detail' => 'API の URL は https にしてください'];
+        }
         $headers = ['Content-Type: application/json'];
+        $nonce = null;
         if ($signWith) {
             $ts = (string) time();
             $nonce = bin2hex(random_bytes(16));
@@ -139,10 +175,18 @@ class ApiClient
             $headers[] = 'X-SH-Nonce: '.$nonce;
             $headers[] = 'X-SH-Signature: '.hash_hmac('sha256', $s, $signWith['secret']);
         }
+        $resSig = null;
         $ch = curl_init($base.$path);
         curl_setopt_array($ch, [
             CURLOPT_CUSTOMREQUEST => $method, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_HTTPHEADER => $headers, CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$resSig) {
+                if (stripos($line, 'X-SH-Api-Signature:') === 0) {
+                    $resSig = trim(substr($line, strlen('X-SH-Api-Signature:')));
+                }
+
+                return strlen($line);
+            },
         ]);
         if ($method !== 'GET') {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
@@ -151,6 +195,13 @@ class ApiClient
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
         curl_close($ch);
+        if ($requireSig) {
+            $expect = ($signWith && $nonce !== null && is_string($out))
+                ? hash_hmac('sha256', "SH1-API-RES\n".$nonce."\n".hash('sha256', $out), $signWith['secret']) : null;
+            if ($expect === null || !is_string($resSig) || !hash_equals($expect, $resSig)) {
+                return ['ok' => false, 'error' => 'bad_api_signature', 'detail' => 'API からの返事の署名が合いません(途中で書き換えられたおそれ)'];
+            }
+        }
         $json = is_string($out) ? json_decode($out, true) : null;
         if (!is_array($json)) {
             return ['ok' => false, 'error' => 'api_unreachable', 'detail' => $err ?: 'HTTP '.$status];

@@ -52,9 +52,15 @@ class Installer
             return;
         }
         $tmp = $p.'.tmp-'.bin2hex(random_bytes(4));
-        file_put_contents($tmp, "<?php exit; ?>\n".json_encode(['key' => bin2hex(random_bytes(32)), 'created_at' => time()])."\n");
-        @chmod($tmp, 0600);
-        rename($tmp, $p);
+        // 作った瞬間から自分だけが読めるように(chmod までのすき間を作らない)
+        $old = umask(0077);
+        try {
+            file_put_contents($tmp, "<?php exit; ?>\n".json_encode(['key' => bin2hex(random_bytes(32)), 'created_at' => time()])."\n");
+            @chmod($tmp, 0600);
+            rename($tmp, $p);
+        } finally {
+            umask($old);
+        }
     }
 
     public static function approveKey($root)

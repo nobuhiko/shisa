@@ -3,6 +3,7 @@ name: self-harden-demo
 
 x-trusted: &trusted
   TRUSTED_HOSTS_VALUE: '^localhost$$,^127\.0\.0\.1$$,^server-a$$,^server-b$$,^server-c$$,^server-d$$,^server-e$$,^server-f$$'
+  SELF_HARDEN_ALLOW_HTTP_API: "1"   # 手元の検証だけ: プラグインから API(http://api:8787)へ http で送るのを許す(本番は https だけ)
   PLANT_DEMO: ${PLANT_DEMO:-1}   # 0 にすると、照らし合わせ用の仕込みを入れない(入られていない状態)
 
 services:

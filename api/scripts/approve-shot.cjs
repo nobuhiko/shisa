@@ -3,7 +3,7 @@
 // 使い方: PW=<playwright> node api/scripts/approve-shot.cjs <店の URL> <出力の頭(例 video/chk/approve)> [弱いページのパス 例 /order_check]
 //   1. 管理画面の Shisa の画面を開き、「店主の承認で直せること」が出るのを待って撮る(-proposal.png)
 //   2. 弱いページに、入れた文字がそのまま出るのを撮る(-before.png)
-//   3. 「承認して直す」を押し、結果が出るのを待って撮る(-approved.png)
+//   3. 画面に出た確認コード(4 けた)を入れて「承認して直す」を押し、結果が出るのを待って撮る(-approved.png)
 //   4. 弱いページで、入れた文字が escape されて出るのを撮る(-after.png)
 const { chromium } = require(process.env.PW || "playwright");
 
@@ -28,6 +28,10 @@ const { chromium } = require(process.env.PW || "playwright");
   const card = page.locator("#sh-fix-card");
   await card.scrollIntoViewIfNeeded();
   await card.screenshot({ path: `${out}-proposal.png` });
+  // 確認コードは画面に出ている数字を読んで入れる(店主が目で見て打つのと同じ)
+  const label = await page.locator(".sh-code-label").first().textContent();
+  const code = (/([0-9]{4})/.exec(label || "") || [])[1] || "";
+  await page.fill(".sh-confirm-code", code);
   await page.click(".sh-approve-btn");
   await page.waitForFunction(() => window.__shApproved, null, { timeout: 90000 });
   const status = await page.evaluate(() => window.__shApproved);
