@@ -321,7 +321,8 @@ for (const p of ["1-ki", "2-intro"]) if (!existsSync(join(prev, p + ".mp4"))) th
   const orec = sh("node", [join(ROOT, "api/scripts/record-opening.cjs"), odir, String(olen)]);
   const trim = Number((/TRIM ([0-9.]+)/.exec(orec) || [])[1] || 0.3);
   const owebm = join(odir, readdirSync(odir).find((f) => f.endsWith(".webm")));
-  ff("-ss", Math.max(0, trim - 0.1).toFixed(3), "-t", olen.toFixed(3), "-i", owebm, "-f", "lavfi", "-t", olen.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo",
+  // 録画の頭はページを開いた直後の白い画面が残るので、目印が出たあと少し進めてから切り出す(0 秒の白い点滅を出さない)
+  ff("-ss", (trim + 0.15).toFixed(3), "-t", olen.toFixed(3), "-i", owebm, "-f", "lavfi", "-t", olen.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo",
     "-map", "0:v", "-map", "1:a", "-t", olen.toFixed(3), ...enc, join(out, "0-open.mp4"));
 }
 writeFileSync(join(out, "all.list"), [join(out, "0-open.mp4"), join(prev, "1-ki.mp4"), join(prev, "2-intro.mp4"), join(out, "3c-film-approve.mp4"), join(out, "4-end.mp4")].map((f) => `file '${f}'`).join("\n"));
