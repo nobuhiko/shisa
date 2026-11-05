@@ -467,7 +467,7 @@
     // 版上げの途中で一時的に失敗の返事が来ても、画面は消さずに見に行き続ける
     if ((!d || !d.ok) && upRunning) { clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000); return []; }
     var list = (d && d.ok && d.proposals) || [];
-    var show = list.filter(function (p) { return p.status === 'pending' || p.status === 'running' || ((p.status === 'applied' || p.status === 'rolled_back' || (p.kind === 'upgrade' && p.status === 'failed')) && p.decided_at && Date.now() - p.decided_at < 86400000); });
+    var show = list.filter(function (p) { return p.status === 'pending' || p.status === 'running' || ((p.status === 'applied' || p.status === 'rolled_back' || (p.kind === 'upgrade' && (p.status === 'failed' || p.status === 'stale'))) && p.decided_at && Date.now() - p.decided_at < 86400000); });
     fixList.textContent = '';
     fixCard.hidden = !show.length;
     var running = false;
@@ -534,6 +534,9 @@
     box.appendChild(el('div', 'path', 'EC-CUBE ' + p.from_version + ' → ' + p.to_version + '(公式の修正版)'));
     box.appendChild(el('p', 'owner', p.owner_text));
     box.appendChild(el('div', 'sh-upgrade-sum', p.diff || ''));
+    if (p.keep && p.keep.length) {
+      box.appendChild(el('div', 'sh-upgrade-sum sh-upgrade-keep', '点検で当てた新しい修正版のまま残す部品: ' + p.keep.map(function (k) { return k.name + ' ' + k.version + '(配布物は ' + k.release_version + ')'; }).join('、')));
+    }
     var res = el('div', 'sh-fix-result'); res.id = 'sh-fix-result-' + p.proposal_id;
     var u = p.upgrade || {};
     if (p.status === 'pending') {
@@ -554,6 +557,7 @@
       box.appendChild(ul);
       if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '上げています: ' + (UP_STEPS[u.step] || u.step || '始めています') + ' …'; }
       else if (p.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = p.to_version + ' に上げました。お店を開いて確かめました'; }
+      else if (p.status === 'stale') { res.className = 'sh-fix-result ng'; res.textContent = '調べたときから、お店のファイルが変わっています。もう一度調べてから、提案し直します(何も書いていません)'; }
       else if (p.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = '途中で失敗したので、控えから ' + p.from_version + ' に戻しました。お店は開いています'; }
       else { res.className = 'sh-fix-result ng'; res.textContent = '上げられませんでした' + (u.error && u.error.detail ? ': ' + u.error.detail : ''); }
       window.__shUpgrade = p.status;

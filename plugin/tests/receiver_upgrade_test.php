@@ -16,12 +16,17 @@ $secret = bin2hex(random_bytes(32));
 $approveKey = bin2hex(random_bytes(32));
 $shopId = 'shp_testupgrade1';
 
-foreach (['/src/Eccube/Common', '/var/self-harden', '/app/Customize'] as $d) {
+foreach (['/src/Eccube/Common', '/var/self-harden', '/app/Customize', '/vendor/acme/pkg'] as $d) {
     @mkdir($shop . $d, 0777, true);
 }
 copy($receiver, $shop . '/self-harden.php');
 copy($runner, $shop . '/self-harden-upgrade.php');
 file_put_contents($shop . '/src/Eccube/Kernel.php', "<?php\nclass Kernel {}\n");
+file_put_contents($shop . '/vendor/acme/pkg/A.php', "<?php // a\n");
+// 指紋(API の upgradeplan.ts の fingerprint と同じ作り)。vendor/ の全部と、渡した本体のファイル
+const FP_PATHS = ['src/Eccube/Kernel.php'];
+// API 側のテスト(api/test/upgradeplan.test.ts)と同じ値になること(作りが食い違っていないかの確かめ)
+const FP_EXPECTED = '55210693e24fb4ef3a96a6b396c11aea8cfb33417ffb49aa1fb810d322c375e2';
 file_put_contents($shop . '/src/Eccube/Common/Constant.php', "<?php\nclass Constant { const VERSION = '4.2.0'; }\n");
 file_put_contents($shop . '/var/self-harden/config.php', "<?php exit; ?>\n" . json_encode(['shop_id' => $shopId, 'secret' => $secret, 'self_base' => $base, 'api_base' => 'http://api.invalid']));
 file_put_contents($shop . '/var/self-harden/approve-key.php', "<?php exit; ?>\n" . json_encode(['key' => $approveKey, 'created_at' => time()]));
@@ -74,12 +79,17 @@ function err($r)
 function approval(array $over = [])
 {
     global $approveKey, $shopId;
-    $a = ['proposal_id' => 'prp_' . bin2hex(random_bytes(8)), 'from' => '4.2.0', 'to' => '4.2.3-p2', 'expires_at' => time() + 1800, 'shop_id' => $shopId];
+    $a = ['proposal_id' => 'prp_' . bin2hex(random_bytes(8)), 'from' => '4.2.0', 'to' => '4.2.3-p2', 'expires_at' => time() + 1800, 'shop_id' => $shopId,
+        'fp' => FP_EXPECTED, 'keep' => ''];
     $key = isset($over['key']) ? $over['key'] : $approveKey;
     unset($over['key']);
     $a = array_merge($a, $over);
-    $a['sig'] = hash_hmac('sha256', implode("\n", ['SH-UPGRADE1', $a['shop_id'], $a['proposal_id'], $a['from'], $a['to'], (string) $a['expires_at']]), $key);
+    $a['sig'] = upsig($a, $key);
     return $a;
+}
+function upsig(array $a, $key)
+{
+    return hash_hmac('sha256', implode("\n", ['SH-UPGRADE2', $a['shop_id'], $a['proposal_id'], $a['from'], $a['to'], (string) $a['expires_at'], $a['fp'], $a['keep']]), $key);
 }
 function runner(array $body)
 {
@@ -99,30 +109,48 @@ echo "版上げの承認(断ること)\n";
 check('印が無ければ始めない', err(call('upgrade', [])) === 'not_approved' && $jobs() === 0);
 $a = approval();
 $a['sig'] = str_repeat('a', 64);
-check('偽の印では始めない', err(call('upgrade', ['approval' => $a])) === 'not_approved' && $jobs() === 0);
-check('API の鍵で作った印では始めない', err(call('upgrade', ['approval' => approval(['key' => $secret])])) === 'not_approved' && $jobs() === 0);
-check('期限切れの印では始めない', err(call('upgrade', ['approval' => approval(['expires_at' => time() - 5])])) === 'approval_expired' && $jobs() === 0);
-check('先すぎる期限の印では始めない', err(call('upgrade', ['approval' => approval(['expires_at' => time() + 7200])])) === 'approval_expired' && $jobs() === 0);
-check('別のお店の印では始めない', err(call('upgrade', ['approval' => approval(['shop_id' => 'shp_other0000001'])])) === 'not_approved' && $jobs() === 0);
-check('承認したときと今の版が違えば始めない', err(call('upgrade', ['approval' => approval(['from' => '4.2.1'])])) === 'conflict' && $jobs() === 0);
-check('系列の違う版には上げない', err(call('upgrade', ['approval' => approval(['to' => '4.3.0'])])) === 'bad_ref' && $jobs() === 0);
-check('同じか古い版には上げない', err(call('upgrade', ['approval' => approval(['to' => '4.2.0'])])) === 'bad_ref' && $jobs() === 0);
-check('版の形が正しくなければ始めない', err(call('upgrade', ['approval' => approval(['to' => '../../4.2.3'])])) === 'not_approved' && $jobs() === 0);
+check('偽の印では始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $a])) === 'not_approved' && $jobs() === 0);
+check('API の鍵で作った印では始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['key' => $secret])])) === 'not_approved' && $jobs() === 0);
+check('期限切れの印では始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['expires_at' => time() - 5])])) === 'approval_expired' && $jobs() === 0);
+check('先すぎる期限の印では始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['expires_at' => time() + 7200])])) === 'approval_expired' && $jobs() === 0);
+check('別のお店の印では始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['shop_id' => 'shp_other0000001'])])) === 'not_approved' && $jobs() === 0);
+check('承認したときと今の版が違えば始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['from' => '4.2.1'])])) === 'conflict' && $jobs() === 0);
+check('系列の違う版には上げない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['to' => '4.3.0'])])) === 'bad_ref' && $jobs() === 0);
+check('同じか古い版には上げない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['to' => '4.2.0'])])) === 'bad_ref' && $jobs() === 0);
+check('版の形が正しくなければ始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['to' => '../../4.2.3'])])) === 'not_approved' && $jobs() === 0);
 
 echo "版上げの承認(始めること)\n";
 $ok = approval();
-$r = call('upgrade', ['approval' => $ok]);
+$r = call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $ok]);
 $st = isset($r['json']['result']) ? $r['json']['result'] : [];
 check('正しい印なら作業を始める(この呼び出しでは段を進めない)', !empty($r['json']['ok']) && ($st['status'] ?? '') === 'running' && ($st['step'] ?? '') === 'fetch', $r['body']);
 check('始めただけでは、メンテナンスにもしない', !file_exists($shop . '/.maintenance'));
 check('返事に印を含めない', strpos($r['body'], $ok['sig']) === false);
 $bad = $ok;
 $bad['expires_at'] = $ok['expires_at'] + 1;
-$bad['sig'] = hash_hmac('sha256', implode("\n", ['SH-UPGRADE1', $bad['shop_id'], $bad['proposal_id'], $bad['from'], $bad['to'], (string) $bad['expires_at']]), $approveKey);
-check('同じ作業に、別の印では進めない', err(call('upgrade', ['approval' => $bad])) === 'not_approved');
+$bad['sig'] = upsig($bad, $approveKey);
+check('同じ作業に、別の印では進めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $bad])) === 'not_approved');
 // 作業の記録を消しても、同じ印はもう使えない
 exec('rm -rf ' . escapeshellarg($shop . '/var/self-harden/upgrade/' . $ok['proposal_id']));
-check('同じ印は 1 回きり', err(call('upgrade', ['approval' => $ok])) === 'approval_used');
+check('同じ印は 1 回きり', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $ok])) === 'approval_used');
+
+echo "調べたときからの変化(指紋)と、残す部品\n";
+check('残す部品の形が正しくなければ始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['keep' => 'acme/pkg@latest'])])) === 'not_approved' && $jobs() === 0);
+check('指紋の形が正しくなければ始めない', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['fp' => 'xyz'])])) === 'not_approved' && $jobs() === 0);
+check('残す部品を付けた正しい印も受け付ける(印に入る)', !empty(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval(['keep' => 'acme/pkg@v1.2.4'])])['json']['ok']));
+$pre = $jobs();
+file_put_contents($shop . '/vendor/acme/pkg/A.php', "<?php // changed\n");
+$st1 = approval();
+$r = call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $st1]);
+check('部品のファイルが調べたときから変わっていれば、何も書かずに止める(stale)', err($r) === 'stale' && $jobs() === $pre && !file_exists($shop . '/.maintenance'), $r['body']);
+check('止めた印は使い済みにしない(調べ直したあとの新しい提案で承認し直す)', !file_exists($shop . '/var/self-harden/approvals/' . $st1['sig']));
+file_put_contents($shop . '/vendor/acme/pkg/A.php', "<?php // a\n");
+file_put_contents($shop . '/src/Eccube/Kernel.php', "<?php\nclass Kernel { /* x */ }\n");
+check('置き換える本体のファイルが変わっていても止める', err(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval()])) === 'stale');
+file_put_contents($shop . '/src/Eccube/Kernel.php', "<?php\nclass Kernel {}\n");
+check('API が指紋の場所を減らして送っても止める(場所の一覧も指紋に入る)', err(call('upgrade', ['fp_paths' => [], 'approval' => approval()])) === 'stale');
+check('指紋の場所に .. があれば断る', err(call('upgrade', ['fp_paths' => ['../etc/passwd'], 'approval' => approval()])) === 'bad_args');
+check('元に戻れば、指紋が合って始められる', !empty(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval()])['json']['ok']));
 
 echo "データベースの入口(self-harden-upgrade.php)\n";
 [$c] = runner([]);

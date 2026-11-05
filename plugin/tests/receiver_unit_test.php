@@ -59,5 +59,12 @@ check('Composer.Lock も守る', (bool) sh_is_protected('Composer.Lock'));
 check('.ENV も守る', (bool) sh_is_protected('.ENV'));
 check('ふつうの本体のファイルは守らない', !sh_is_protected('src/Eccube/Kernel.php'));
 
+echo "版上げの残す部品の一覧\n";
+check('空なら何も残さない', sh_upgrade_keep_list('') === []);
+check('名前と版を読む', sh_upgrade_keep_list('symfony/http-foundation@v5.4.56,twig/twig@v2.16.1') === ['symfony/http-foundation' => 'v5.4.56', 'twig/twig' => 'v2.16.1']);
+$threw = false;
+try { sh_upgrade_keep_list('../x@v1.0.0'); } catch (ShError $e) { $threw = $e->code_str === 'not_approved'; }
+check('形の違うものは断る', $threw);
+
 echo "\n$pass ok, $fail fail\n";
 exit($fail ? 1 : 0);

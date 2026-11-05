@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+import { semverCmp } from "./upgradeplan.js";
 // 調べ方の道具: 部品の弱点の照らし合わせ(Packagist の公式 API)、調べた結果の使い回し、前回との違い
 import { callReceiver } from "./receiver.js";
 import { sha256Hex } from "./sign.js";
@@ -49,7 +50,9 @@ export async function checkPackages(shop: Shop, applied: { path: string; ref: st
     .map((p) => {
       // self-harden が部品を公式の修正版に差し替えたもの(全部のファイルをそろえて当てたもの)は、その版で照らし合わせる
       const fx = applied.filter((a) => a.package_complete && a.path.startsWith(`${vendorDir}/${p.name}/`) && /^v?[0-9]+\.[0-9]+\.[0-9]+$/.test(a.ref)).sort((a, b) => b.at - a.at)[0];
-      return { name: p.name, version: fx ? fx.ref : p.version, locked: p.version, replaced_by_self_harden: !!fx };
+      // 版上げで配布物の版のほうが新しくなった部品は、前に当てた修正の記録より composer.lock の版を使う(新しいほう)
+      const newer = fx && (semverCmp(fx.ref, p.version) ?? 1) > 0;
+      return { name: p.name, version: newer ? fx.ref : p.version, locked: p.version, replaced_by_self_harden: !!newer };
     });
   if (!pkgs.length) throw new Error("composer.lock に部品が見つかりませんでした");
   const body = new URLSearchParams();

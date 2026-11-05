@@ -1782,9 +1782,52 @@ const SH_UPGRADE_BATCH = 1500;
 const SH_UPGRADE_MAX_DB = 524288000;
 const SH_UPGRADE_RUNNER = 'self-harden-upgrade.php';
 
-function sh_upgrade_string($sid, $pid, $from, $to, $exp)
+// 印に入るもの: お店・提案・今の版・上げ先の版・期限・提案のときのファイルの指紋・残す部品(新しい修正版のため上書きしない部品)
+function sh_upgrade_string($sid, $pid, $from, $to, $exp, $fp, $keep)
 {
-    return implode("\n", ['SH-UPGRADE1', $sid, $pid, $from, $to, (string) $exp]);
+    return implode("\n", ['SH-UPGRADE2', $sid, $pid, $from, $to, (string) $exp, $fp, $keep]);
+}
+
+// 版上げが触る場所の指紋: vendor/ の全部のファイルと、置き換える本体のファイル(API が渡す一覧)の「場所<TAB>sha256」を場所の順に並べたもののハッシュ。
+// API が提案のときに hash_tree で取った一覧から同じ形で作る。調べたあとにファイルが変わっていれば合わなくなる
+function sh_upgrade_fingerprint(array $paths)
+{
+    $all = [];
+    $vd = sh_root() . '/vendor';
+    if (is_dir($vd) && !is_link($vd)) {
+        sh_collect($vd, 'vendor', true, $all);
+    }
+    foreach ($paths as $p) {
+        if (!is_string($p) || $p === '' || strlen($p) > 300 || $p[0] === '/' || strpos($p, '..') !== false || strpos($p, "\0") !== false || strpos($p, 'vendor/') === 0) {
+            throw new ShError('bad_args', '指紋の場所の形が正しくありません');
+        }
+        $all[] = $p;
+    }
+    $all = array_values(array_unique($all));
+    sort($all, SORT_STRING);
+    $ctx = hash_init('sha256');
+    foreach ($all as $p) {
+        $abs = sh_root() . '/' . $p;
+        $sha = is_link($abs) ? 'link' : (is_file($abs) ? (string) @hash_file('sha256', $abs) : '-');
+        hash_update($ctx, $p . "\t" . $sha . "\n");
+    }
+    return hash_final($ctx);
+}
+
+// 残す部品の一覧の形: "vendor/package@版" をカンマでつなぐ(名前の順)。空でもよい
+function sh_upgrade_keep_list($keep)
+{
+    if ($keep === '') {
+        return [];
+    }
+    $out = [];
+    foreach (explode(',', $keep) as $k) {
+        if (!preg_match('#^([a-z0-9][a-z0-9_.\-]*/[a-z0-9][a-z0-9_.\-]*)@(v?[0-9]+\.[0-9]+\.[0-9]+)$#', $k, $m) || strpos($m[1], '..') !== false) {
+            throw new ShError('not_approved', '承認の印の形が正しくありません');
+        }
+        $out[$m[1]] = $m[2];
+    }
+    return $out;
 }
 
 // テストのときだけ、決めた段でわざと失敗させる(本番の環境変数には無い)
@@ -2084,10 +2127,20 @@ function op_upgrade(array $cfg, array $args)
     if ($a === null) {
         throw new ShError('not_approved', '店主の承認の印がありません');
     }
-    foreach (['proposal_id', 'from', 'to', 'expires_at', 'shop_id', 'sig'] as $k) {
+    foreach (['proposal_id', 'from', 'to', 'expires_at', 'shop_id', 'sig', 'fp', 'keep'] as $k) {
         if (!isset($a[$k]) || !is_scalar($a[$k])) {
             throw new ShError('not_approved', '承認の印の形が正しくありません');
         }
+    }
+    $fp = (string) $a['fp'];
+    $keepStr = (string) $a['keep'];
+    if (!preg_match('/^[0-9a-f]{64}$/', $fp) || strlen($keepStr) > 4000) {
+        throw new ShError('not_approved', '承認の印の形が正しくありません');
+    }
+    $keep = sh_upgrade_keep_list($keepStr);
+    $fpPaths = isset($args['fp_paths']) && is_array($args['fp_paths']) ? array_values($args['fp_paths']) : [];
+    if (count($fpPaths) > 5000) {
+        throw new ShError('bad_args', '指紋の場所が多すぎます');
     }
     $pid = (string) $a['proposal_id'];
     $from = (string) $a['from'];
@@ -2102,7 +2155,7 @@ function op_upgrade(array $cfg, array $args)
     if (!hash_equals((string) $cfg['shop_id'], $sid)) {
         throw new ShError('not_approved', '別のお店の承認です');
     }
-    if (!hash_equals(hash_hmac('sha256', sh_upgrade_string($sid, $pid, $from, $to, $exp), $key), $sig)) {
+    if (!hash_equals(hash_hmac('sha256', sh_upgrade_string($sid, $pid, $from, $to, $exp, $fp, $keepStr), $key), $sig)) {
         throw new ShError('not_approved', '承認の印が合いません');
     }
     $lock = @fopen(sh_var('lock-upgrade'), 'c');
@@ -2131,12 +2184,16 @@ function op_upgrade(array $cfg, array $args)
         if (file_exists($used_dir . '/' . $sig)) {
             throw new ShError('approval_used', 'この承認はもう使われています');
         }
+        // 調べたとき(提案のとき)から、版上げが触る場所のファイルが変わっていれば、何も書かずに止める(調べ直して提案し直す)
+        if (!hash_equals($fp, sh_upgrade_fingerprint($fpPaths))) {
+            throw new ShError('stale', '調べたときから、お店のファイルが変わっています。もう一度調べてから、提案し直します');
+        }
         @file_put_contents($used_dir . '/' . $sig, json_encode(['proposal_id' => $pid, 'upgrade' => [$from, $to], 'at' => $now]));
         $dir = sh_upgrade_dir($pid);
         if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
             throw new ShError('io', '作業の置き場を作れませんでした');
         }
-        $st = ['pid' => $pid, 'sig' => $sig, 'from' => $from, 'to' => $to, 'status' => 'running', 'step' => 'fetch', 'i' => 0,
+        $st = ['pid' => $pid, 'sig' => $sig, 'from' => $from, 'to' => $to, 'fp' => $fp, 'fp_paths' => $fpPaths, 'keep' => $keep, 'status' => 'running', 'step' => 'fetch', 'i' => 0,
             'started_at' => $now, 'log' => [], 'maintenance_before' => file_exists(sh_root() . '/.maintenance'), 'db' => null, 'error' => null];
         sh_upgrade_log($st, sh_eccube_version() . ' から ' . $to . ' へ上げます(店主の承認あり)');
         sh_upgrade_save($st);
@@ -2180,7 +2237,7 @@ function op_upgrade(array $cfg, array $args)
 function sh_upgrade_out(array $st)
 {
     $o = $st;
-    unset($o['sig'], $o['db']);
+    unset($o['sig'], $o['db'], $o['fp_paths']);
     $o['plan'] = isset($st['plan_counts']) ? $st['plan_counts'] : null;
     return $o;
 }
@@ -2228,6 +2285,19 @@ function sh_upgrade_step(array $cfg, array &$st)
             return;
         case 'plan':
             sh_upgrade_test_fail('plan');
+            // メンテナンスに入る直前にもう一度: 配布物を取っているあいだに、別の作業がファイルを変えていないか
+            if (!hash_equals((string) $st['fp'], sh_upgrade_fingerprint(isset($st['fp_paths']) ? (array) $st['fp_paths'] : []))) {
+                throw new ShError('stale', '調べたときから、お店のファイルが変わっています。もう一度調べてから、提案し直します');
+            }
+            $keep = isset($st['keep']) && is_array($st['keep']) ? $st['keep'] : [];
+            $kept = function ($rel) use ($keep) {
+                foreach ($keep as $name => $v) {
+                    if (strpos($rel, 'vendor/' . $name . '/') === 0) {
+                        return true;
+                    }
+                }
+                return false;
+            };
             $from = [];
             sh_tar_each(sh_var('release/eccube-' . $st['from'] . '.tar.gz'), function ($rel, $data) use (&$from) {
                 $from[$rel] = hash('sha256', $data);
@@ -2252,12 +2322,15 @@ function sh_upgrade_step(array $cfg, array &$st)
                 if ($fsha === $tsha) {
                     continue; // 版のあいだで変わっていないファイルは、お店のものをそのまま
                 }
+                if ($kept($rel)) {
+                    continue; // 点検で当てた部品の修正版のほうが新しい部品は、上書きしない(新しいほうを残す)
+                }
                 $abs = sh_root() . '/' . $rel;
                 $cur = is_file($abs) && !is_link($abs) ? hash_file('sha256', $abs) : null;
                 if ($cur === $tsha) {
                     continue;
                 }
-                // 部品(vendor/)は、公式の手順どおり上げ先の版で上書きする(Shisa が部品ごとに当てた修正も含む。次の点検で当て直す)
+                // 部品(vendor/)は、公式の手順どおり上げ先の版で上書きする(当てた修正版のほうが新しい部品は、上で外している)
                 if ($cur === null || $cur === $fsha || strpos($rel, 'vendor/') === 0) {
                     $write[] = $rel;
                 } else {
@@ -2265,7 +2338,7 @@ function sh_upgrade_step(array $cfg, array &$st)
                 }
             }
             foreach ($from as $rel => $fsha) {
-                if (isset($to[$rel]) || sh_upgrade_skip($rel) || !sh_upgrade_replaced($rel)) {
+                if (isset($to[$rel]) || sh_upgrade_skip($rel) || !sh_upgrade_replaced($rel) || $kept($rel)) {
                     continue;
                 }
                 $abs = sh_root() . '/' . $rel;
@@ -2285,6 +2358,13 @@ function sh_upgrade_step(array $cfg, array &$st)
             $st['db_kind'] = $db['kind'];
             file_put_contents($dir . '/plan.json', json_encode(['write' => $write, 'delete' => $delete]));
             sh_upgrade_log($st, '置き換えるファイル ' . count($write) . ' 件、消す古いファイル ' . count($delete) . ' 件。カスタマイズの上書きはありません');
+            if ($keep) {
+                $names = [];
+                foreach ($keep as $name => $v) {
+                    $names[] = $name . ' ' . $v;
+                }
+                sh_upgrade_log($st, '点検で当てた新しい修正版のまま残す部品: ' . implode('、', $names));
+            }
             $st['step'] = 'maint_on';
             return;
         case 'maint_on':

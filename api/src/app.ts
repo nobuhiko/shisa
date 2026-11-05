@@ -105,7 +105,8 @@ export function createApp(store: Store, kick: (runId: string) => void) {
   // 店主の承認で直す提案。新しいものから。中身(書く中身の全部と差分)も渡す。管理画面はお店の中で今の中身と比べて見せる
   const proposalOut = (p: Proposal) => ({ proposal_id: p.proposal_id, run_id: p.run_id, path: p.path, title: p.title, owner_text: p.owner_text, developer_text: p.developer_text,
     sha256_before: p.sha256_before, sha256_new: p.sha256_new, new_content: p.new_content, diff: p.diff, status: p.status, created_at: p.created_at, decided_at: p.decided_at ?? null, result: p.result ?? null,
-    kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null });
+    kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null,
+    fingerprint: p.fingerprint ?? null, keep: p.keep ?? [] });
 
   app.get("/v1/shops/:id/proposals", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");
