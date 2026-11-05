@@ -15,6 +15,8 @@ const V3_ARCHIVE = "https://github.com/EC-CUBE/ec-cube3/archive/refs/tags/";
 // 2 系(2.x)は EC-CUBE/ec-cube2 のリリース。タグは eccube-<版>。配布物に data/vendor/ は入っていない
 const V2_RE = /^(eccube-)?2\.[0-9]+\.[0-9]+(-p[0-9]+)?$/;
 const V2_RELEASE = "https://github.com/EC-CUBE/ec-cube2/releases/download/";
+// 2 系の修正版(eccube-2.17.2-p2 など)には、リリースの配布物が無いことがある。そのときはタグのソース一式を使う(チェックサムは無い)
+const V2_ARCHIVE = "https://github.com/EC-CUBE/ec-cube2/archive/refs/tags/";
 export const v2tag = (v: string) => (v.startsWith("eccube-") ? v : `eccube-${v}`);
 export const plainVersion = (v: string) => v.replace(/^eccube-/, "");
 // 部品のフォルダ(配布物に入っていない系統では比べない)
@@ -43,16 +45,32 @@ async function tarball(version: string): Promise<{ buf: Buffer; sha: string; sou
     const tag = v2tag(version);
     await mkdir(dir(), { recursive: true });
     const path = join(dir(), `${tag}.tar.gz`);
-    const source = `${V2_RELEASE}${tag}/${tag}.tar.gz`;
+    const release = `${V2_RELEASE}${tag}/${tag}.tar.gz`;
+    const srcPath = join(dir(), `eccube-src-${tag}.tar.gz`);
+    const archive = `${V2_ARCHIVE}${tag}.tar.gz`;
     let buf: Buffer;
+    let source = release;
     try {
       buf = await readFile(path);
     } catch {
-      buf = await download(source);
-      const expect = (await download(`${source}.checksum.sha256`)).toString("utf8").trim().split(/\s+/)[0];
-      const got = createHash("sha256").update(buf).digest("hex");
-      if (expect !== got) throw new Error(`公式の配布物の SHA-256 が公式の値と合いません(${got} != ${expect})`);
-      await writeFile(path, buf);
+      try {
+        buf = await readFile(srcPath);
+        source = archive;
+      } catch {
+        try {
+          buf = await download(release);
+          const expect = (await download(`${release}.checksum.sha256`)).toString("utf8").trim().split(/\s+/)[0];
+          const got = createHash("sha256").update(buf).digest("hex");
+          if (expect !== got) throw new Error(`公式の配布物の SHA-256 が公式の値と合いません(${got} != ${expect})`);
+          await writeFile(path, buf);
+        } catch (e) {
+          if (!/HTTP 404/.test((e as Error).message)) throw e;
+          // リリースの配布物が無い版は、公式リポジトリのタグのソース一式(https の github.com だけ)
+          buf = await download(archive);
+          source = archive;
+          await writeFile(srcPath, buf);
+        }
+      }
     }
     return { buf, sha: createHash("sha256").update(buf).digest("hex"), source };
   }
