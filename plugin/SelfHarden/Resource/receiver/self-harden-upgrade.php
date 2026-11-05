@@ -41,11 +41,12 @@ if (is_link($dir) || !is_file($tokenFile) || is_link($tokenFile)) {
     shu_nothing();
 }
 $token = (string) file_get_contents($tokenFile);
-// 合図は 1 回きり。確かめる前に消す
-@unlink($tokenFile);
 if (!hash_equals($token, $req['token'])) {
+    // 違う合図では消さない(当てずっぽうで、本物の合図を消して版上げを止めることもできないように)。合図は 256 ビットの乱数
     shu_nothing();
 }
+// 合図は 1 回きり。一致したら、使う前に消す
+@unlink($tokenFile);
 $st = json_decode((string) @file_get_contents($dir.'/state.json'), true);
 if (!is_array($st) || ($st['status'] ?? '') !== 'running' || ($st['step'] ?? '') !== 'db') {
     shu_nothing();
@@ -59,6 +60,27 @@ if (!is_file($stage.'/vendor/autoload.php') || !is_file($stage.'/src/Eccube/Kern
 // 古い書き方の注意(Deprecated)などを返事に混ぜない(返事は JSON だけ)
 @ini_set('display_errors', '0');
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED & ~E_NOTICE & ~E_STRICT);
+// DATABASE_URL の SQLite の場所を、窓口(sh_sqlite_path)と同じ読み方で絶対の場所にする。
+// 上げ先の版は作業の置き場(stage)で動くので、%kernel.project_dir% や相対の場所をそのままにすると、置き場の中を指してしまう
+function shu_sqlite_path($url, $root)
+{
+    $url = str_replace('%kernel.project_dir%', $root, (string) $url);
+    if (strpos($url, 'sqlite:') !== 0) {
+        return null;
+    }
+    $rest = preg_replace('/\?.*$/', '', substr($url, strlen('sqlite:')));
+    if (strpos($rest, '////') === 0) {
+        return substr($rest, 3);
+    }
+    if (strpos($rest, '///') === 0) {
+        $rel = substr($rest, 3);
+
+        return $rel !== '' && $rel[0] === '/' ? $rel : $root.'/'.$rel;
+    }
+
+    return $rest !== '' && $rest[0] === '/' ? $rest : $root.'/'.ltrim($rest, '/');
+}
+
 ob_start();
 try {
     require $stage.'/vendor/autoload.php';
@@ -66,12 +88,35 @@ try {
     if (is_file($root.'/.env')) {
         (\Dotenv\Dotenv::createUnsafeMutable($root))->load();
     }
+    $dbUrl = (string) ($_SERVER['DATABASE_URL'] ?? $_ENV['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '');
+    $sqlitePath = shu_sqlite_path($dbUrl, $root);
+    if ($sqlitePath !== null) {
+        $dbUrl = 'sqlite:///'.$sqlitePath;
+    } else {
+        $dbUrl = str_replace('%kernel.project_dir%', $root, $dbUrl);
+    }
+    $_SERVER['DATABASE_URL'] = $_ENV['DATABASE_URL'] = $dbUrl;
+    putenv('DATABASE_URL='.$dbUrl);
     $_SERVER['APP_ENV'] = $_ENV['APP_ENV'] = 'prod';
     $_SERVER['APP_DEBUG'] = $_ENV['APP_DEBUG'] = '0';
     $kernel = new \Eccube\Kernel('prod', false);
     $app = new \Symfony\Bundle\FrameworkBundle\Console\Application($kernel);
     $app->setAutoExit(false);
     $app->setCatchExceptions(false);
+    // 窓口が控えを取ったのと同じデータベースにつないだか(違えば何もしない)
+    $want = isset($st['db_target']) && is_array($st['db_target']) ? $st['db_target'] : null;
+    $kernel->boot();
+    $params = $kernel->getContainer()->get('doctrine')->getConnection()->getParams();
+    $same = false;
+    if ($want && ($want['kind'] ?? '') === 'sqlite') {
+        $got = isset($params['path']) ? realpath((string) $params['path']) : false;
+        $same = $got !== false && $got === realpath((string) ($want['path'] ?? ''));
+    } elseif ($want && ($want['kind'] ?? '') === 'mysql') {
+        $same = (string) ($params['host'] ?? '') === (string) ($want['host'] ?? '') && (string) ($params['dbname'] ?? '') === (string) ($want['name'] ?? '');
+    }
+    if (!$same) {
+        shu_send(200, ['ok' => false, 'error' => 'wrong_database', 'detail' => '控えを取ったデータベースと、つないだ先が違うので、何もしません']);
+    }
     $run = function (array $input) use ($app) {
         $out = new \Symfony\Component\Console\Output\BufferedOutput();
         $in = new \Symfony\Component\Console\Input\ArrayInput($input);
@@ -90,10 +135,22 @@ try {
             $sql[] = trim($s);
         }
     }
+    // 版上げでお店のテーブル(dtb_・mtb_)を一から作る SQL が出るのは、別の(空の)データベースにつないだときだけ。
+    // SQLite が列を足すためにテーブルを作り直す形(同じ名前を DROP してから CREATE)は許す
+    $dropped = [];
+    foreach ($sql as $s) {
+        if (preg_match('/^DROP TABLE\s+[`"]?(\w+)/i', $s, $dm)) {
+            $dropped[strtolower($dm[1])] = true;
+        }
+        if (preg_match('/^CREATE TABLE\s+[`"]?((?:dtb|mtb)_\w+)/i', $s, $cm) && !isset($dropped[strtolower($cm[1])])) {
+            shu_send(200, ['ok' => false, 'error' => 'unexpected_create', 'detail' => 'お店のテーブルを一から作る変更が出たので、何もしません(つないだ先が違うおそれ)', 'schema_sql' => array_slice($sql, 0, 20)]);
+        }
+    }
     foreach ($sql as $s) {
         if (preg_match('/\bDROP\s+(TABLE|COLUMN|INDEX)\b/i', $s) && !preg_match('/^DROP\s+INDEX\b/i', $s) || preg_match('/\bRENAME\b/i', $s)) {
             // SQLite は列を足すときもテーブルを作り直す(一時テーブルに写して DROP)。その形は許す
-            if (preg_match('/^DROP TABLE\s+[`"]?__temp__/i', $s) || preg_match('/^ALTER TABLE\s+[`"]?__temp__\w+[`"]?\s+RENAME TO/i', $s)) {
+            if (preg_match('/^DROP TABLE\s+[`"]?__temp__/i', $s) || preg_match('/^ALTER TABLE\s+[`"]?__temp__\w+[`"]?\s+RENAME TO/i', $s)
+                || (preg_match('/^DROP TABLE\s+[`"]?((?:dtb|mtb)_\w+)/i', $s, $dm2) && preg_grep('/^CREATE TABLE\s+[`"]?'.preg_quote($dm2[1], '/').'\b/i', $sql))) {
                 continue;
             }
             shu_send(200, ['ok' => false, 'error' => 'schema_not_additive', 'detail' => 'データベースの作りから消す・名前を変える変更が入っているので、自動では上げません', 'schema_sql' => array_slice($sql, 0, 20)]);
@@ -113,5 +170,6 @@ try {
     $migrated = preg_match('/(\d+) migrations? executed/i', $mig, $mm) ? (int) $mm[1] : (preg_match('/No migrations to execute|Already at the latest/i', $mig) ? 0 : null);
     shu_send(200, ['ok' => true, 'schema_sql' => array_slice($sql, 0, 20), 'schema_dump' => $dumpHead, 'migrated' => $migrated, 'migrate_out' => mb_substr($mig, 0, 2000)]);
 } catch (\Throwable $e) {
-    shu_send(200, ['ok' => false, 'error' => 'runner_failed', 'detail' => 'データベースの作り変えの途中で失敗しました: '.mb_substr($e->getMessage(), 0, 300)]);
+    // 例外の文には、データベースの利用者名や接続先が入ることがあるので、返事には種類だけ出す
+    shu_send(200, ['ok' => false, 'error' => 'runner_failed', 'detail' => 'データベースの作り変えの途中で失敗しました('.get_class($e).')']);
 }

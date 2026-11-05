@@ -31,6 +31,15 @@ const { chromium } = require(process.env.PW || "playwright");
   await page.waitForFunction(() => window.__shApproved !== undefined, null, { timeout: 60000 });
   const started = await page.evaluate(() => window.__shApproved);
   console.log("approve:", started);
+  if (started === "failed") {
+    // 始められなかった(調べたときからファイルが変わっていた stale など)。様子を写して終わる
+    const msg = await card.locator(".sh-fix-result").innerText().catch(() => "");
+    console.log("final: not_started", msg);
+    await card.screenshot({ path: `${shot}-after.png` }).catch(() => {});
+    await ctx.close();
+    await browser.close();
+    return;
+  }
   let mid = false;
   // 終わるまで待つ(進み具合はカードが 3 秒ごとに読み直す)
   for (let i = 0; i < 150; i++) {

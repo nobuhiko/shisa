@@ -163,6 +163,24 @@ class ConfigController extends AbstractController
     }
 
     /**
+     * 止まった版上げを、控えから戻す(メンテナンス中のまま放っておかないため)
+     *
+     * @Route("/%eccube_admin_route%/store/plugin/SelfHarden/rollback/{proposal_id}", name="self_harden_admin_rollback", methods={"POST"}, requirements={"proposal_id"="prp_[0-9a-f]{16}"})
+     */
+    public function rollback(Request $request, $proposal_id)
+    {
+        $this->isTokenValid();
+        if (!$this->canApprove()) {
+            return new JsonResponse(['ok' => false, 'error' => '戻せるのは、システム管理者か店舗オーナーの権限の管理者だけです'], 403);
+        }
+        if ($this->api->config() === null) {
+            return new JsonResponse(['ok' => false, 'error' => '先に API とつないでください'], 400);
+        }
+
+        return new JsonResponse($this->api->rollbackUpgrade($proposal_id));
+    }
+
+    /**
      * 店主が「承認して直す」を押した。お店の中の承認の鍵で印を作り、API(→ 窓口)に渡す。
      * 印は、画面で見せた書く中身(ここでハッシュを取り直す)と、今のファイルの中身に結びつく。期限は 30 分
      *

@@ -8,6 +8,7 @@ import { FileStore } from "./store.js";
 import { step, newRun } from "./agent.js";
 import { randomHex } from "./sign.js";
 import { dailyQuotaExceeded, isFirstRun } from "./cost.js";
+import { resumeUpgrades } from "./tools.js";
 
 const store = new FileStore(process.env.SH_DATA_DIR ?? "./data");
 const client = new Anthropic(); // ANTHROPIC_API_KEY は env_file(.env)から入る
@@ -58,6 +59,8 @@ async function tick() {
 }
 // 起動したら、途中だった点検を続きから回す
 for (const r of await store.listRunning()) void drive(r.run_id);
+// 途中だった店主の承認での版上げも、続きから駆動する(メンテナンス中のまま放っておかない)
+void resumeUpgrades(store).catch((e) => console.error("[upgrade resume]", e));
 setInterval(() => void tick().catch((e) => console.error("[tick]", e)), 60_000);
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port }, () => {

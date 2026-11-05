@@ -115,6 +115,14 @@ class ApiClient
         return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/approve', $body, $c, 60, true);
     }
 
+    /** 止まった版上げを戻す(API は、承認のときに控えた印で窓口に戻しを指示するだけ) */
+    public function rollbackUpgrade($proposalId)
+    {
+        $c = $this->config();
+
+        return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/rollback', '{}', $c, 60, true);
+    }
+
     public function shopId()
     {
         $c = $this->config();

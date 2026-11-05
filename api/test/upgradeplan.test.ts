@@ -113,3 +113,63 @@ describe("承認のあと、調べたときから変わっていたら止まる"
     expect(kept[0].at).toBeGreaterThan(marker!.at);
   });
 });
+
+describe("版上げを放っておかない(API の側)", async () => {
+  const { driveUpgrade, rollbackUpgrade, resumeUpgrades, UPGRADE_RETRY } = await import("../src/tools.js");
+  let saved: Proposal[] = [];
+  const mk = (extra: Partial<Store> = {}) => ({
+    putProposal: async (x: Proposal) => { saved.push(x); }, getRun: async () => null, getShop: async () => shop, putShop: async () => {},
+    getApplied: async () => [], addApplied: async () => {}, listShops: async () => [shop], listProposals: async () => [], ...extra,
+  }) as unknown as Store;
+  const seq = (replies: any[]) => { let i = 0; reply.value = undefined; return () => replies[Math.min(i++, replies.length - 1)]; };
+  beforeEach(() => { saved = []; sent.length = 0; UPGRADE_RETRY.shortMs = 1; UPGRADE_RETRY.longMs = 5; });
+
+  it("動いているあいだは承認の印を控え、着地したら消す", async () => {
+    const next = seq([{ ok: true, result: { status: "running", step: "files" } }, { ok: true, result: { status: "done", step: "done" } }]);
+    vi.mocked; // noop
+    reply.value = null;
+    const store = mk();
+    const orig = reply;
+    let n = 0;
+    Object.defineProperty(orig, "value", { configurable: true, get: () => (n++ === 0 ? next() : next()) });
+    await driveUpgrade(shop, store, { ...p, status: "running" }, good, null);
+    Object.defineProperty(orig, "value", { configurable: true, writable: true, value: null });
+    expect(saved.some((x) => x.status === "running" && x.approval)).toBe(true);
+    expect(saved.at(-1)?.status).toBe("applied");
+    expect(saved.at(-1)?.approval).toBeUndefined();
+  });
+  it("自動で戻せず stuck になったら、印を残して stuck にする(店主の「止まった作業を戻す」に使う)", async () => {
+    reply.value = { ok: true, result: { status: "stuck", step: "rb_verify", owner_message: "今、お店はメンテナンス中のままです" } };
+    await driveUpgrade(shop, mk(), { ...p, status: "running" }, good, null);
+    expect(saved.at(-1)?.status).toBe("stuck");
+    expect(saved.at(-1)?.approval).toEqual(good);
+  });
+  it("窓口に届かない時間が続いたら、長めの間隔でもう一度試し、それでもだめなら印を控えたまま止まった様子にする", async () => {
+    reply.value = { ok: false, error: "network", detail: "down" };
+    await driveUpgrade(shop, mk(), { ...p, status: "running" }, good, null);
+    expect(sent.length).toBe(2 * (UPGRADE_RETRY.shortTries + 1));
+    expect(saved.at(-1)?.status).toBe("running");
+    expect((saved.at(-1)?.upgrade as any)?.status).toBe("unreachable");
+    expect(saved.at(-1)?.approval).toEqual(good);
+  });
+  it("「止まった作業を戻す」は、控えた印に rollback を付けて窓口に渡す", async () => {
+    reply.value = { ok: true, result: { status: "rolled_back", step: "rolled_back" } };
+    const r = await rollbackUpgrade(shop, mk(), { ...p, status: "stuck", approval: good });
+    expect(r.ok).toBe(true);
+    expect(sent[0].args.rollback).toBe(true);
+    expect(sent[0].args.approval).toEqual(good);
+  });
+  it("印を控えていない提案は戻せない(API が新しく印を作ることはない)", async () => {
+    const r = await rollbackUpgrade(shop, mk(), { ...p, status: "stuck" });
+    expect(r.ok).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+  it("API が起動したら、動いている途中の版上げを続きから駆動する", async () => {
+    reply.value = { ok: true, result: { status: "rolled_back", step: "rolled_back" } };
+    const store = mk({ listProposals: async () => [{ ...p, status: "running", approval: good, upgrade: { status: "running", step: "files" } }] } as any);
+    await resumeUpgrades(store);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent.some((s) => s.op === "upgrade")).toBe(true);
+    expect(saved.at(-1)?.status).toBe("rolled_back");
+  });
+});

@@ -467,7 +467,7 @@
     // 版上げの途中で一時的に失敗の返事が来ても、画面は消さずに見に行き続ける
     if ((!d || !d.ok) && upRunning) { clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000); return []; }
     var list = (d && d.ok && d.proposals) || [];
-    var show = list.filter(function (p) { return p.status === 'pending' || p.status === 'running' || ((p.status === 'applied' || p.status === 'rolled_back' || (p.kind === 'upgrade' && (p.status === 'failed' || p.status === 'stale'))) && p.decided_at && Date.now() - p.decided_at < 86400000); });
+    var show = list.filter(function (p) { return p.status === 'pending' || p.status === 'running' || p.status === 'stuck' || ((p.status === 'applied' || p.status === 'rolled_back' || (p.kind === 'upgrade' && (p.status === 'failed' || p.status === 'stale'))) && p.decided_at && Date.now() - p.decided_at < 86400000); });
     fixList.textContent = '';
     fixCard.hidden = !show.length;
     var running = false;
@@ -555,7 +555,18 @@
       var ul = el('ul', 'sh-upgrade-log');
       (u.log || []).forEach(function (l) { ul.appendChild(el('li', null, l.text)); });
       box.appendChild(ul);
-      if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '上げています: ' + (UP_STEPS[u.step] || u.step || '始めています') + ' …'; }
+      if (p.stalled || p.status === 'stuck') {
+        // 止まっている: メンテナンス中のまま黙って止めない。今の様子と、外し方・戻し方を出す
+        res.className = 'sh-fix-result ng'; res.id = 'sh-stalled-' + p.proposal_id;
+        res.textContent = u.owner_message || ('版上げが途中で止まっています(' + (UP_STEPS[u.step] || u.step || '') + ')。お店がメンテナンス中のままかもしれません。'
+          + '「止まった作業を戻す」を押すと、控えから元に戻してメンテナンスを外します。押さなくても、10 分ほど動きが無ければ Shisa が自分で戻します。'
+          + 'すぐにお店を開けたいときは、管理画面の「設定 > システム設定 > メンテナンス管理」でメンテナンスを外せます。');
+        var rb = el('button', 'btn btn-ec-delete sh-rollback-btn', '止まった作業を戻す'); rb.type = 'button'; rb.id = 'sh-rollback-' + p.proposal_id;
+        if (!d.can_approve) { rb.disabled = true; }
+        rb.addEventListener('click', function () { rollbackStalled(p, rb, res); });
+        box.appendChild(rb);
+      }
+      else if (p.status === 'running') { res.className = 'sh-fix-result'; res.textContent = '上げています: ' + (UP_STEPS[u.step] || u.step || '始めています') + ' …'; }
       else if (p.status === 'applied') { res.className = 'sh-fix-result ok'; res.textContent = p.to_version + ' に上げました。お店を開いて確かめました'; }
       else if (p.status === 'stale') { res.className = 'sh-fix-result ng'; res.textContent = '調べたときから、お店のファイルが変わっています。もう一度調べてから、提案し直します(何も書いていません)'; }
       else if (p.status === 'rolled_back') { res.className = 'sh-fix-result ng'; res.textContent = '途中で失敗したので、控えから ' + p.from_version + ' に戻しました。お店は開いています'; }
@@ -564,7 +575,7 @@
     }
     box.appendChild(res);
     fixList.appendChild(box);
-    return p.status === 'running';
+    return p.status === 'running' || p.status === 'stuck';
   }
   function loadProposals() {
     // 版上げの途中は、管理画面が一時的に答えないことがある。そのときも少し待って見に行き続ける
@@ -586,6 +597,17 @@
         } else if (upRunning) { clearTimeout(upTimer); upTimer = setTimeout(loadProposals, 4000); }
         return [];
       });
+  }
+  var rollbackBase = '{{ url('self_harden_admin_config') }}'.replace(/config$/, 'rollback/');
+  function rollbackStalled(p, btn, res) {
+    btn.disabled = true; res.className = 'sh-fix-result'; res.textContent = '控えから元に戻しています…';
+    fetch(rollbackBase + encodeURIComponent(p.proposal_id), { method: 'POST', credentials: 'same-origin', headers: { 'ECCUBE-CSRF-TOKEN': token }, body: new URLSearchParams({ _token: token }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) { res.textContent = '戻しを始めました。進み具合はこの下に出ます'; window.__shRollback = 'running'; upRunning = true; loadProposals(); }
+        else { res.className = 'sh-fix-result ng'; res.textContent = '戻せませんでした: ' + (d.detail || d.error || ''); btn.disabled = false; window.__shRollback = 'failed'; }
+      })
+      .catch(function () { res.className = 'sh-fix-result ng'; res.textContent = '戻せませんでした(つながりませんでした)'; btn.disabled = false; });
   }
   function approve(p, btn, res, code) {
     if (!/^[0-9]{4}$/.test(code || '')) { res.className = 'sh-fix-result ng'; res.textContent = '確認コード(4 けたの数字)を入力してください'; return; }

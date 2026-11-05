@@ -760,7 +760,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
         const writable = (p: string) =>
           p === "composer.json" || p === "composer.lock" ||
-          ((/^(src|app|html|vendor)\//.test(p) || !p.includes("/")) && !/(^|\/)\.env/.test(p) && p !== "self-harden.php");
+          ((/^(src|app|html|vendor)\//.test(p) || !p.includes("/")) && !/(^|\/)\.env/.test(p) && p !== "self-harden.php" && p !== "self-harden-upgrade.php");
         const changed = Object.keys(to.files).filter((p) => to.files[p] !== from.files[p]);
         const blockers = changed.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p));
         if (blockers.length) {
@@ -1013,10 +1013,29 @@ export async function applyUpgrade(shop: Shop, store: Store, p: Proposal, approv
     return { ok: false as const, status: "stale", error: r.error, detail: r.detail };
   }
   if (!r.ok && UPGRADE_REFUSALS.includes(String(r.error))) return { ok: false as const, status: p.status, error: r.error, detail: r.detail };
-  const first: Proposal = { ...p, status: "running", decided_at: Date.now(), upgrade: r.ok ? r.result : { error: r.error, detail: r.detail } };
+  const first: Proposal = { ...p, status: "running", decided_at: Date.now(), upgrade: r.ok ? r.result : { error: r.error, detail: r.detail }, approval };
   await store.putProposal(first);
   void driveUpgrade(shop, store, first, approval, r.ok ? r.result : null);
   return { ok: true as const, status: "running", upgrade: first.upgrade };
+}
+
+// API が起動したとき: 動いている途中だった版上げ(印を控えてあるもの)を、続きから駆動する
+export async function resumeUpgrades(store: Store) {
+  for (const shop of await store.listShops()) {
+    for (const p of await store.listProposals(shop.shop_id)) {
+      if (p.kind === "upgrade" && p.status === "running" && p.approval) void driveUpgrade(shop, store, p, p.approval, p.upgrade ?? null);
+    }
+  }
+}
+
+// 店主が管理画面で「止まった作業を戻す」を押した: 控えた印で、窓口に戻しを指示して着地まで駆動する
+export async function rollbackUpgrade(shop: Shop, store: Store, p: Proposal) {
+  if (p.kind !== "upgrade" || !p.approval || !["running", "stuck"].includes(p.status)) return { ok: false as const, error: "not_running", detail: "戻す作業がありません" };
+  const r = await callReceiver(shop, "upgrade", { approval: p.approval, fp_paths: p.fp_paths ?? [], rollback: true }, 60_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
+  if (!r.ok) return { ok: false as const, error: r.error, detail: r.detail };
+  await store.putProposal({ ...p, status: "running", upgrade: r.result });
+  void driveUpgrade(shop, store, { ...p, status: "running" }, p.approval, r.result);
+  return { ok: true as const, status: "running", upgrade: r.result };
 }
 
 // 版上げが終わったら記録する: 配布物ごと上げた印(照らし合わせの基準を上げ先の版にする)と、残した部品の修正(上げたあとも「当てた修正」として数える)
@@ -1031,27 +1050,45 @@ export async function recordUpgrade(shop: Shop, store: Store, p: Proposal) {
   await store.addApplied(shop.shop_id, [marker, ...kept]);
 }
 
-async function driveUpgrade(shop: Shop, store: Store, p: Proposal, approval: any, state: any) {
+// 版上げを、窓口が着地させる(終わる・戻す・断る・止まる)まで呼び続ける。API が再起動しても、控えた印で続きから駆動する(resumeUpgrades)。
+// 窓口につながらない時間が続いても、あきらめる前に長めの間隔でもう一度試す。それでもだめなら、窓口が自分で(点検の ping・inspect のたびに)10 分で戻す
+export const UPGRADE_RETRY = { shortMs: 3000, shortTries: 5, longMs: 60_000 };
+export async function driveUpgrade(shop: Shop, store: Store, p: Proposal, approval: any, state: any, extra: Record<string, unknown> = {}) {
   let st = state;
   let fails = 0;
-  for (let i = 0; i < 200; i++) {
+  let longTried = false;
+  let args: Record<string, unknown> = { approval, fp_paths: p.fp_paths ?? [], ...extra };
+  for (let i = 0; i < 400; i++) {
     if (st && ["done", "rolled_back", "stuck", "refused"].includes(st.status)) break;
-    const r = await callReceiver(shop, "upgrade", { approval, fp_paths: p.fp_paths ?? [] }, 180_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
+    const r = await callReceiver(shop, "upgrade", args, 180_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
     if (!r.ok) {
-      if (++fails > 5) { st = { ...(st ?? {}), status: "stuck", error: { code: r.error, detail: r.detail } }; break; }
-      await new Promise((res) => setTimeout(res, 3000));
+      if (++fails > UPGRADE_RETRY.shortTries) {
+        if (longTried) { st = { ...(st ?? {}), status: "unreachable", error: { code: r.error, detail: r.detail } }; break; }
+        longTried = true;
+        fails = 0;
+        await new Promise((res) => setTimeout(res, UPGRADE_RETRY.longMs));
+        continue;
+      }
+      await new Promise((res) => setTimeout(res, UPGRADE_RETRY.shortMs));
       continue;
     }
     fails = 0;
+    args = { approval, fp_paths: p.fp_paths ?? [] }; // 戻しの指示は最初の 1 回だけ
     st = r.result;
-    await store.putProposal({ ...p, status: "running", upgrade: st });
+    await store.putProposal({ ...p, status: "running", upgrade: st, approval });
+  }
+  if (st?.status === "unreachable") {
+    // 窓口に届かない。窓口は止まった作業を自分で戻すので、印は控えたまま「止まっている」として見せる(管理画面に戻すボタンが出る)
+    await store.putProposal({ ...p, status: "running", upgrade: st, approval });
+    return;
   }
   if (st?.status === "refused" && st?.error?.code === "stale") {
     await markStale(shop, store, { ...p, upgrade: st }, st.error.detail);
     return;
   }
-  const status: Proposal["status"] = st?.status === "done" ? "applied" : st?.status === "rolled_back" ? "rolled_back" : "failed";
-  await store.putProposal({ ...p, status, decided_at: Date.now(), upgrade: st, result: st });
+  const status: Proposal["status"] = st?.status === "done" ? "applied" : st?.status === "rolled_back" ? "rolled_back" : st?.status === "stuck" ? "stuck" : "failed";
+  // 印は、止まった作業を戻すためだけに控える。着地したら消す(stuck のときは「止まった作業を戻す」に使うので残す)
+  await store.putProposal({ ...p, status, decided_at: Date.now(), upgrade: st, result: st, approval: status === "stuck" ? approval : undefined });
   if (status === "applied") await recordUpgrade(shop, store, p);
   const run = await store.getRun(p.run_id);
   if (run) {

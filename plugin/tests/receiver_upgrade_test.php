@@ -125,6 +125,8 @@ $r = call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => $ok]);
 $st = isset($r['json']['result']) ? $r['json']['result'] : [];
 check('正しい印なら作業を始める(この呼び出しでは段を進めない)', !empty($r['json']['ok']) && ($st['status'] ?? '') === 'running' && ($st['step'] ?? '') === 'fetch', $r['body']);
 check('始めただけでは、メンテナンスにもしない', !file_exists($shop . '/.maintenance'));
+$jd = $shop . '/var/self-harden/upgrade/' . $ok['proposal_id'];
+check('作業の置き場は外から開けない(.htaccess と空の index.html)', is_file($jd . '/.htaccess') && strpos(file_get_contents($jd . '/.htaccess'), 'Require all denied') !== false && is_file($jd . '/index.html'));
 check('返事に印を含めない', strpos($r['body'], $ok['sig']) === false);
 $bad = $ok;
 $bad['expires_at'] = $ok['expires_at'] + 1;
@@ -152,6 +154,87 @@ check('API が指紋の場所を減らして送っても止める(場所の一�
 check('指紋の場所に .. があれば断る', err(call('upgrade', ['fp_paths' => ['../etc/passwd'], 'approval' => approval()])) === 'bad_args');
 check('元に戻れば、指紋が合って始められる', !empty(call('upgrade', ['fp_paths' => FP_PATHS, 'approval' => approval()])['json']['ok']));
 
+echo "途中で止まった版上げを、放っておかない(ping・inspect のたびに窓口が自分で着地させる)\n";
+// テスト専用の目印: 「止まった」とみなすまでを 2 秒にする(本番は 10 分)。目印が無いお店では効かない
+file_put_contents($shop . '/var/self-harden/.test-mode', json_encode(['stale_after' => 2]));
+$mkjob = function ($st, array $files = []) use ($shop) {
+    $pid = 'prp_' . bin2hex(random_bytes(8));
+    $d = $shop . '/var/self-harden/upgrade/' . $pid;
+    @mkdir($d, 0700, true);
+    foreach ($files as $rel => $data) {
+        @mkdir(dirname($d . '/' . $rel), 0700, true);
+        file_put_contents($d . '/' . $rel, $data);
+    }
+    $st = array_merge(['pid' => $pid, 'sig' => str_repeat('0', 64), 'from' => '4.2.0', 'to' => '4.2.3-p2', 'fp' => FP_EXPECTED, 'fp_paths' => [], 'keep' => [],
+        'i' => 0, 'log' => [], 'maintenance_before' => false, 'db' => null, 'error' => null, 'started_at' => time() - 100, 'updated_at' => time() - 100], $st);
+    file_put_contents($d . '/state.json', json_encode($st));
+    return $pid;
+};
+$state = function ($pid) use ($shop) {
+    return json_decode((string) @file_get_contents($shop . '/var/self-harden/upgrade/' . $pid . '/state.json'), true);
+};
+// 1 回の ping で使う時間には上限がある(8 秒)ので、着地まで何回か呼ぶことがある(点検のたびに呼ばれる)
+$land = function ($pid, $op = 'ping') use ($state) {
+    // (PHP 7.4 の php -S は、入れ子の呼び出しにまれに 30 秒答えないことがある。そのあいだ別の呼び出しは作業の鍵が空くのを待たずに返るので、時間で待つ)
+    $r = null;
+    $t0 = time();
+    do {
+        $r = call($op, $op === 'inspect' ? ['sections' => ['php']] : []);
+        if (!in_array($state($pid)['status'] ?? '', ['running', 'rolling_back'], true)) {
+            break;
+        }
+        sleep(1);
+    } while (time() - $t0 < 90);
+    return $r;
+};
+$constant = $shop . '/src/Eccube/Common/Constant.php';
+$orig = file_get_contents($constant);
+// 1) ファイルを置き換えている途中で殺された(メンテナンス中、半分置き換え): 控えから戻してメンテナンスを外す
+file_put_contents($constant, "<?php\nclass Constant { const VERSION = '4.2.3-p2'; }\n");
+file_put_contents($shop . '/src/NewInRelease.php', "<?php // new\n");
+file_put_contents($shop . '/.maintenance', '');
+$p1 = $mkjob(['status' => 'running', 'step' => 'files'], ['files/src/Eccube/Common/Constant.php' => $orig, 'created.txt' => "src/NewInRelease.php\n"]);
+$r = $land($p1);
+$s1 = $state($p1);
+check('ファイルの置き換え中に止まった作業は、次の ping で控えから戻る', ($s1['status'] ?? '') === 'rolled_back' && file_get_contents($constant) === $orig, json_encode($s1['log'] ?? null, JSON_UNESCAPED_UNICODE));
+check('戻したら、版上げで増えたファイルも消える', !file_exists($shop . '/src/NewInRelease.php'));
+check('戻したら、メンテナンスを外す', !file_exists($shop . '/.maintenance'));
+$jobs1 = $r['json']['result']['upgrade_jobs'] ?? [];
+check('ping の返事に、作業の様子が出る(点検の報告に使う)', (bool) array_filter($jobs1, function ($j) use ($p1) { return $j['proposal_id'] === $p1 && $j['status'] === 'rolled_back'; }));
+// 2) まだお店に書く前(配布物を広げる段)で止まった: 断って片付ける。メンテナンスにはしない
+$p2 = $mkjob(['status' => 'running', 'step' => 'stage'], ['stage/x.php' => 'x']);
+$land($p2, 'inspect');
+$s2 = $state($p2);
+check('書く前の段で止まった作業は、inspect で断って片付ける(メンテナンスにしない)', ($s2['status'] ?? '') === 'refused' && !is_dir($shop . '/var/self-harden/upgrade/' . $p2 . '/stage') && !file_exists($shop . '/.maintenance'));
+// 3) 動きが新しい作業(誰かが進めている最中)には手を出さない
+$p3 = $mkjob(['status' => 'running', 'step' => 'files', 'updated_at' => time() + 60]);
+call('ping');
+check('動いている最中の作業には手を出さない', ($state($p3)['status'] ?? '') === 'running');
+@unlink($shop . '/var/self-harden/upgrade/' . $p3 . '/state.json');
+// 4) 戻しの途中で止まっていた: 戻しを続ける
+file_put_contents($constant, "<?php\nclass Constant { const VERSION = '4.2.3-p2'; }\n");
+file_put_contents($shop . '/.maintenance', '');
+$p4 = $mkjob(['status' => 'rolling_back', 'step' => 'rb_files'], ['files/src/Eccube/Common/Constant.php' => $orig]);
+$land($p4);
+check('戻しの途中で止まった作業は、戻しを続けて着地する', ($state($p4)['status'] ?? '') === 'rolled_back' && file_get_contents($constant) === $orig && !file_exists($shop . '/.maintenance'));
+// 5) どうしても戻せない(戻したあとも版が合わない): メンテナンスのまま黙って止めず、店主への案内を出す
+$p5 = $mkjob(['status' => 'running', 'step' => 'verify', 'from' => '4.1.9']);
+$r = $land($p5);
+$s5 = $state($p5);
+$j5 = array_values(array_filter($r['json']['result']['upgrade_jobs'] ?? [], function ($j) use ($p5) { return $j['proposal_id'] === $p5; }));
+check('自動で戻せないときは stuck にして、メンテナンスのまま止める', ($s5['status'] ?? '') === 'stuck' && file_exists($shop . '/.maintenance'));
+check('stuck のときは、店主にわかる案内(メンテナンス中・戻すボタン・外し方)を出す', isset($j5[0]['owner_message']) && strpos($j5[0]['owner_message'], 'メンテナンス中') !== false
+    && strpos($j5[0]['owner_message'], '止まった作業を戻す') !== false && strpos($j5[0]['owner_message'], 'メンテナンス管理') !== false && $j5[0]['maintenance'] === true);
+@unlink($shop . '/.maintenance');
+@unlink($shop . '/var/self-harden/upgrade/' . $p5 . '/state.json');
+// 6) テスト用の目印が無いお店では、10 分たたないと手を出さない
+@unlink($shop . '/var/self-harden/.test-mode');
+$p6 = $mkjob(['status' => 'running', 'step' => 'files']);
+call('ping');
+check('目印が無ければ、止まったとみなすのは 10 分後(100 秒では手を出さない)', ($state($p6)['status'] ?? '') === 'running');
+@unlink($shop . '/var/self-harden/upgrade/' . $p6 . '/state.json');
+check('データベースの入口は、窓口の読む・隔離するの外(守る場所)', err(call('read_file', ['path' => 'self-harden-upgrade.php'])) === 'not_readable');
+
 echo "データベースの入口(self-harden-upgrade.php)\n";
 [$c] = runner([]);
 check('合図が無ければ何もしない(404)', $c === 404);
@@ -162,7 +245,7 @@ file_put_contents($dir . '/state.json', json_encode(['pid' => $pid, 'status' => 
 file_put_contents($dir . '/runner-token', str_repeat('b', 64));
 [$c] = runner(['job' => $pid, 'token' => str_repeat('c', 64)]);
 check('合図が違えば何もしない(404)', $c === 404);
-check('違う合図を送られたら、合図は消える(当てずっぽうを続けられない)', !file_exists($dir . '/runner-token'));
+check('違う合図では、本物の合図は消えない(当てずっぽうで版上げを止められない)', file_exists($dir . '/runner-token'));
 file_put_contents($dir . '/runner-token', str_repeat('d', 64));
 file_put_contents($dir . '/state.json', json_encode(['pid' => $pid, 'status' => 'running', 'step' => 'files']));
 [$c] = runner(['job' => $pid, 'token' => str_repeat('d', 64)]);
