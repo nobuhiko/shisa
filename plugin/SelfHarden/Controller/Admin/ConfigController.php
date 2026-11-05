@@ -140,7 +140,7 @@ class ConfigController extends AbstractController
                 $res['proposals'][$i]['installed'] = \Eccube\Common\Constant::VERSION;
                 $res['proposals'][$i]['changed'] = !hash_equals($from, \Eccube\Common\Constant::VERSION);
                 $res['proposals'][$i]['content_ok'] = hash_equals((string) ($p['sha256_before'] ?? ''), hash('sha256', 'SH-UPGRADE|'.$from))
-                    && hash_equals((string) ($p['sha256_new'] ?? ''), hash('sha256', 'SH-UPGRADE|'.$to));
+                    && hash_equals((string) ($p['sha256_new'] ?? ''), $this->upgradeNewHash($p));
             } else {
                 $cur = $this->localFile((string) ($p['path'] ?? ''));
                 $res['proposals'][$i]['current'] = $cur;
@@ -160,6 +160,24 @@ class ConfigController extends AbstractController
         $res['proposals'] = array_values($res['proposals']);
 
         return new JsonResponse($res);
+    }
+
+    /**
+     * 止まった版上げを、控えから戻す(メンテナンス中のまま放っておかないため)
+     *
+     * @Route("/%eccube_admin_route%/store/plugin/SelfHarden/rollback/{proposal_id}", name="self_harden_admin_rollback", methods={"POST"}, requirements={"proposal_id"="prp_[0-9a-f]{16}"})
+     */
+    public function rollback(Request $request, $proposal_id)
+    {
+        $this->isTokenValid();
+        if (!$this->canApprove()) {
+            return new JsonResponse(['ok' => false, 'error' => '戻せるのは、システム管理者か店舗オーナーの権限の管理者だけです'], 403);
+        }
+        if ($this->api->config() === null) {
+            return new JsonResponse(['ok' => false, 'error' => '先に API とつないでください'], 400);
+        }
+
+        return new JsonResponse($this->api->rollbackUpgrade($proposal_id));
     }
 
     /**
@@ -246,17 +264,54 @@ class ConfigController extends AbstractController
             return new JsonResponse(['ok' => false, 'error' => '提案のあとに EC-CUBE の版が変わっています。次の点検で提案し直します'], 409);
         }
         $before = hash('sha256', 'SH-UPGRADE|'.$from);
-        $new = hash('sha256', 'SH-UPGRADE|'.$to);
+        $new = $this->upgradeNewHash($p);
+        if ($new === '') {
+            return new JsonResponse(['ok' => false, 'error' => '提案の中身が合わないので、承認できません'], 409);
+        }
         if (!hash_equals((string) ($p['sha256_before'] ?? ''), $before) || !hash_equals((string) ($p['sha256_new'] ?? ''), $new)
             || !hash_equals((string) $mine['new'], $new) || !hash_equals((string) $mine['before'], $before)) {
             return new JsonResponse(['ok' => false, 'error' => '画面で見たあとに、提案の中身が変わっています。画面を開き直してください'], 409);
         }
         unset($seen[$proposal_id]);
         $request->getSession()->set(self::SEEN_KEY, $seen);
-        $a = ['proposal_id' => $proposal_id, 'from' => $from, 'to' => $to, 'expires_at' => time() + 1800, 'shop_id' => (string) $this->api->shopId()];
-        $a['sig'] = hash_hmac('sha256', implode("\n", ['SH-UPGRADE1', $a['shop_id'], $a['proposal_id'], $a['from'], $a['to'], (string) $a['expires_at']]), $key);
+        $a = ['proposal_id' => $proposal_id, 'from' => $from, 'to' => $to, 'expires_at' => time() + 1800, 'shop_id' => (string) $this->api->shopId(),
+            'fp' => (string) $p['fingerprint'], 'keep' => $this->keepString($p)];
+        $a['sig'] = hash_hmac('sha256', implode("\n", ['SH-UPGRADE2', $a['shop_id'], $a['proposal_id'], $a['from'], $a['to'], (string) $a['expires_at'], $a['fp'], $a['keep']]), $key);
 
         return new JsonResponse($this->api->approve($proposal_id, $a));
+    }
+
+    /**
+     * 残す部品(新しい修正版のため上書きしない部品)を、印に入れる形にする: "vendor/package@版" を名前の順にカンマでつなぐ
+     */
+    private function keepString(array $p)
+    {
+        $out = [];
+        foreach ((array) ($p['keep'] ?? []) as $k) {
+            $name = is_array($k) ? (string) ($k['name'] ?? '') : '';
+            $ver = is_array($k) ? (string) ($k['version'] ?? '') : '';
+            if (!preg_match('#^[a-z0-9][a-z0-9_.\-]*/[a-z0-9][a-z0-9_.\-]*$#', $name) || strpos($name, '..') !== false || !preg_match('/^v?[0-9]+\.[0-9]+\.[0-9]+$/', $ver)) {
+                return null;
+            }
+            $out[$name] = $name.'@'.$ver;
+        }
+        ksort($out, SORT_STRING);
+
+        return implode(',', $out);
+    }
+
+    /**
+     * 版上げの提案の「新しい中身」のハッシュ: 上げ先の版・調べたときのファイルの指紋・残す部品。画面で見たものと承認を結びつける
+     */
+    private function upgradeNewHash(array $p)
+    {
+        $fp = (string) ($p['fingerprint'] ?? '');
+        $keep = $this->keepString($p);
+        if (!preg_match('/^[0-9a-f]{64}$/', $fp) || $keep === null) {
+            return '';
+        }
+
+        return hash('sha256', 'SH-UPGRADE|'.(string) ($p['to_version'] ?? '').'|'.$fp.'|'.$keep);
     }
 
     private function canApprove()

@@ -11,6 +11,7 @@ export interface Shop {
   platform: string;
   status: "registered" | "connected" | "error";
   created_at: number;
+  recheck_after?: number; // この時刻を過ぎたら、決まった間隔を待たずに点検し直す(版上げの提案が古くなったときなど)
 }
 
 export interface Step {
@@ -67,12 +68,16 @@ export interface Proposal {
   new_content: string;
   diff: string;
   verify_paths: string[]; // 書いたあとに開いて確かめる、お店の中のページ
-  status: "pending" | "running" | "applied" | "rolled_back" | "failed" | "superseded";
+  status: "pending" | "running" | "applied" | "rolled_back" | "failed" | "superseded" | "stale" | "stuck"; // stuck: 自動では戻せず、メンテナンス中のまま。店主の「止まった作業を戻す」を待つ // stale: 調べたときからファイルが変わっていたので、何も書かずに止めた(次の点検で提案し直す)
   // kind が upgrade のときは、同じ系列の公式の修正版への版上げ(データベースの作り変えを含む)。path・new_content は使わない
   kind?: "fix" | "upgrade";
   from_version?: string;
   to_version?: string;
   upgrade?: unknown; // 窓口が返した作業の様子(段・記録)
+  fingerprint?: string; // 版上げ: 調べたときの、版上げが触る場所の指紋(承認の印に入る)
+  fp_paths?: string[]; // 版上げ: 指紋に入れる本体のファイル(vendor/ は全部入る)
+  keep?: { name: string; version: string; release_version: string }[]; // 版上げ: 新しい修正版のまま残す部品
+  approval?: unknown; // 版上げ: 動いているあいだだけ、承認の印を控える(API が止まっても続きを駆動し、止まった作業を戻すため)。終わったら消す
   created_at: number;
   decided_at?: number;
   result?: unknown;

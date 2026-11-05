@@ -115,6 +115,60 @@ class ApiClient
         return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/approve', $body, $c, 60, true);
     }
 
+    /** 止まった版上げを戻す(API は、承認のときに控えた印で窓口に戻しを指示するだけ) */
+    public function rollbackUpgrade($proposalId)
+    {
+        $c = $this->config();
+
+        return $this->request('POST', $c['api_base'], '/v1/shops/'.$c['shop_id'].'/proposals/'.rawurlencode($proposalId).'/rollback', '{}', $c, 60, true);
+    }
+
+    /**
+     * 止まったままの版上げがあれば、窓口に ping を送って着地させる(API が来なくても、店主が管理画面を開けば回復の機会になる)。
+     * 版上げの作業の記録(state.json)を見るだけで、止まっていなければ何もしない。窓口への呼び出しは、受け口と同じ鍵で署名する
+     */
+    public function pokeStalledUpgrade()
+    {
+        $dir = $this->root.'/'.Installer::VAR_DIR.'/upgrade';
+        if (!is_dir($dir)) {
+            return false;
+        }
+        $staleAfter = 600;
+        $tm = $this->root.'/'.Installer::VAR_DIR.'/.test-mode';
+        if (is_file($tm)) {
+            $t = json_decode((string) @file_get_contents($tm), true);
+            if (is_array($t) && isset($t['stale_after'])) {
+                $staleAfter = max(1, (int) $t['stale_after']);
+            }
+        }
+        $stalled = false;
+        foreach ((array) glob($dir.'/prp_*/state.json') as $f) {
+            $st = json_decode((string) @file_get_contents($f), true);
+            if (is_array($st) && in_array($st['status'] ?? '', ['running', 'rolling_back'], true) && time() - (int) ($st['updated_at'] ?? 0) >= $staleAfter) {
+                $stalled = true;
+                break;
+            }
+        }
+        $c = $this->config();
+        if (!$stalled || !$c || empty($c['self_base']) || empty($c['secret']) || empty($c['shop_id'])) {
+            return false;
+        }
+        $base = rtrim((string) $c['self_base'], '/');
+        $path = (string) (parse_url($base, PHP_URL_PATH) ?: '').'/self-harden.php';
+        $body = json_encode(['op' => 'ping', 'args' => new \stdClass()]);
+        $ts = (string) time();
+        $nonce = bin2hex(random_bytes(16));
+        $s = implode("\n", ['SH1', 'POST', $path, $c['shop_id'], $ts, $nonce, hash('sha256', $body)]);
+        $ch = curl_init($base.'/self-harden.php');
+        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 25, CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'X-SH-Shop: '.$c['shop_id'], 'X-SH-Timestamp: '.$ts, 'X-SH-Nonce: '.$nonce,
+                'X-SH-Signature: '.hash_hmac('sha256', $s, (string) $c['secret'])]]);
+        curl_exec($ch);
+        curl_close($ch);
+
+        return true;
+    }
+
     public function shopId()
     {
         $c = $this->config();

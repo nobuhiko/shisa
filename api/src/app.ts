@@ -5,7 +5,7 @@ import { verifyRequest, randomHex, NONCE_TTL_SEC, apiResponseSignature } from ".
 import { callReceiver } from "./receiver.js";
 import { newRun } from "./agent.js";
 import type { Shop, Store, Proposal } from "./store.js";
-import { applyApproved, applyUpgrade } from "./tools.js";
+import { applyApproved, applyUpgrade, rollbackUpgrade } from "./tools.js";
 import { dailyQuotaExceeded, isFirstRun, usd } from "./cost.js";
 
 export function createApp(store: Store, kick: (runId: string) => void) {
@@ -105,7 +105,10 @@ export function createApp(store: Store, kick: (runId: string) => void) {
   // 店主の承認で直す提案。新しいものから。中身(書く中身の全部と差分)も渡す。管理画面はお店の中で今の中身と比べて見せる
   const proposalOut = (p: Proposal) => ({ proposal_id: p.proposal_id, run_id: p.run_id, path: p.path, title: p.title, owner_text: p.owner_text, developer_text: p.developer_text,
     sha256_before: p.sha256_before, sha256_new: p.sha256_new, new_content: p.new_content, diff: p.diff, status: p.status, created_at: p.created_at, decided_at: p.decided_at ?? null, result: p.result ?? null,
-    kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null });
+    kind: p.kind ?? "fix", from_version: p.from_version ?? null, to_version: p.to_version ?? null, upgrade: p.upgrade ?? null,
+    fingerprint: p.fingerprint ?? null, keep: p.keep ?? [],
+    // 止まっているか(管理画面に「止まった作業を戻す」を出す): 自動で戻せなかった、窓口に届かない、10 分以上動きが無い
+    stalled: p.kind === "upgrade" && (p.status === "stuck" || (p.status === "running" && (((p.upgrade as any)?.status === "unreachable") || Date.now() - 1000 * Number((p.upgrade as any)?.updated_at ?? 0) > 600_000))) });
 
   app.get("/v1/shops/:id/proposals", async (c) => {
     const shop = await authShop(c, c.req.param("id"), "");
@@ -133,6 +136,16 @@ export function createApp(store: Store, kick: (runId: string) => void) {
     let req: any;
     try { req = JSON.parse(body); } catch { return signedJson(c, shop, { ok: false, error: "bad_request" }, 400); }
     return signedJson(c, shop, p.kind === "upgrade" ? await applyUpgrade(shop, store, p, req?.approval) : await applyApproved(shop, store, p, req?.approval));
+  });
+
+  // 止まった版上げを戻す(店主が管理画面で押す)。印は承認のときに控えたもの。API が新しく印を作ることはない
+  app.post("/v1/shops/:id/proposals/:pid/rollback", async (c) => {
+    const body = await c.req.text();
+    const shop = await authShop(c, c.req.param("id"), body);
+    if (!shop) return unauthorized(c);
+    const p = await store.getProposal(c.req.param("pid"));
+    if (!p || p.shop_id !== shop.shop_id) return signedJson(c, shop, { ok: false, error: "not_found" }, 404);
+    return signedJson(c, shop, await rollbackUpgrade(shop, store, p));
   });
 
   return app;

@@ -8,6 +8,7 @@ import { vendorFixScope, manifest, officialContent, officialFixScope } from "./o
 import type { Shop, Store, Proposal } from "./store.js";
 import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
 import { fixAlreadyIn } from "./manualfix.js";
+import { keepList, keepString, lockPackages, fingerprint, upgradeNewHash } from "./upgradeplan.js";
 import { sha256Hex, randomHex } from "./sign.js";
 
 type Tool = Anthropic.Beta.BetaToolUnion;
@@ -759,7 +760,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
         const writable = (p: string) =>
           p === "composer.json" || p === "composer.lock" ||
-          ((/^(src|app|html|vendor)\//.test(p) || !p.includes("/")) && !/(^|\/)\.env/.test(p) && p !== "self-harden.php");
+          ((/^(src|app|html|vendor)\//.test(p) || !p.includes("/")) && !/(^|\/)\.env/.test(p) && p !== "self-harden.php" && p !== "self-harden-upgrade.php");
         const changed = Object.keys(to.files).filter((p) => to.files[p] !== from.files[p]);
         const blockers = changed.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p));
         if (blockers.length) {
@@ -950,12 +951,18 @@ export async function proposeUpgrade(shop: Shop, ctx: ToolContext, input: any): 
   const mine = await shopHashes(shop);
   const skip = (p: string) => UPGRADE_SKIP.some((d) => p.startsWith(d)) || p === ".env";
   const changed = Object.keys(mt.files).filter((p) => !skip(p) && mt.files[p] !== mf.files[p]);
-  // 部品(vendor/)は公式の手順どおり上書きする(Shisa が部品ごとに当てた修正は、次の点検で当て直す)
+  // 部品(vendor/)は公式の手順どおり上書きする。ただし点検で当てた修正版のほうが新しい部品は残す(新しいほうを残す)
+  const lockBuf = await officialContent(to, "composer.lock");
+  const keep = lockBuf ? keepList(await ctx.store.getApplied(shop.shop_id), lockPackages(lockBuf.toString("utf8"))) : [];
+  const keepStr = keepString(keep);
+  // 調べたときの指紋: vendor/ の全部と、置き換える本体のファイル。承認のあと、窓口が取り直して違えば止まる
+  const fpPaths = changed.filter((p) => !p.startsWith("vendor/")).sort();
+  const fp = fingerprint(mine, fpPaths);
   const blocked = changed.filter((p) => !p.startsWith("vendor/") && p in mine && mine[p] !== mf.files[p] && mine[p] !== mt.files[p]);
   if (blocked.length) throw new Error(`版上げで置き換えるファイルのうち ${blocked.length} 件がカスタマイズされているので、承認での版上げは提案しません(例: ${blocked.slice(0, 5).join("、")})。制作会社の作業か店主の判断として報告してください`);
   const migrations = Object.keys(mt.files).filter((p) => p.startsWith(MIGRATION_DIR) && !(p in mf.files)).map((p) => p.slice(MIGRATION_DIR.length).replace(/\.php$/, ""));
   const entities = changed.filter((p) => p.startsWith("src/Eccube/Entity/")).map((p) => p.replace("src/Eccube/Entity/", "").replace(/\.php$/, ""));
-  const summary = `${from} → ${to}: 置き換えるファイル ${changed.length} 件(うち部品 ${changed.filter((p) => p.startsWith("vendor/")).length} 件)、公式のマイグレーション ${migrations.length} 件(${migrations.join("・") || "なし"})、データベースの作りが変わるもの ${entities.join("・") || "なし"}`;
+  const summary = `${from} → ${to}: 置き換えるファイル ${changed.length} 件(うち部品 ${changed.filter((p) => p.startsWith("vendor/")).length} 件)、公式のマイグレーション ${migrations.length} 件(${migrations.join("・") || "なし"})、データベースの作りが変わるもの ${entities.join("・") || "なし"}${keep.length ? `、新しい修正版のまま残す部品 ${keep.map((k) => `${k.name} ${k.version}`).join("・")}` : ""}`;
   const p: Proposal = {
     proposal_id: `prp_${randomHex(8)}`,
     shop_id: shop.shop_id,
@@ -968,7 +975,10 @@ export async function proposeUpgrade(shop: Shop, ctx: ToolContext, input: any): 
     owner_text: String(input.owner_text ?? "").slice(0, 2000),
     developer_text: `公式の手順(doc4.ec-cube.net/update42x)に沿って、メンテナンス中に ${summary}。ファイルとデータベースの控えを取り、失敗したら戻します。`,
     sha256_before: await sha256Hex(`SH-UPGRADE|${from}`),
-    sha256_new: await sha256Hex(`SH-UPGRADE|${to}`),
+    sha256_new: upgradeNewHash(to, fp, keepStr),
+    fingerprint: fp,
+    fp_paths: fpPaths,
+    keep,
     new_content: "",
     diff: summary,
     verify_paths: [],
@@ -984,36 +994,102 @@ export async function proposeUpgrade(shop: Shop, ctx: ToolContext, input: any): 
 
 const UPGRADE_REFUSALS = ["not_approved", "approval_expired", "approval_used", "conflict", "no_approval_key", "bad_ref", "not_supported"];
 
+// 調べたときからファイルが変わっていた: 何も書いていない。提案を「古くなった」にして、すぐに点検し直す(提案し直すため)
+async function markStale(shop: Shop, store: Store, p: Proposal, detail: unknown) {
+  await store.putProposal({ ...p, status: "stale", decided_at: Date.now(), result: { error: "stale", detail } });
+  const s = await store.getShop(shop.shop_id);
+  if (s) await store.putShop({ ...s, recheck_after: Date.now() + 60_000 });
+}
+
 // 承認された版上げを始める。窓口が段ごとに進めるので、終わるまで裏で呼び続ける(管理画面は提案の様子を見て進み具合を出す)
 export async function applyUpgrade(shop: Shop, store: Store, p: Proposal, approval: any) {
   const ok = approval && typeof approval === "object" && approval.proposal_id === p.proposal_id && approval.from === p.from_version
-    && approval.to === p.to_version && approval.shop_id === shop.shop_id && typeof approval.sig === "string" && Number.isInteger(approval.expires_at);
+    && approval.to === p.to_version && approval.shop_id === shop.shop_id && typeof approval.sig === "string" && Number.isInteger(approval.expires_at)
+    && approval.fp === p.fingerprint && approval.keep === keepString(p.keep ?? []);
   if (!ok) return { ok: false as const, error: "approval_mismatch", detail: "承認の印が提案と合いません" };
-  const r = await callReceiver(shop, "upgrade", { approval }, 30_000);
+  const r = await callReceiver(shop, "upgrade", { approval, fp_paths: p.fp_paths ?? [] }, 30_000);
+  if (!r.ok && r.error === "stale") {
+    await markStale(shop, store, p, r.detail);
+    return { ok: false as const, status: "stale", error: r.error, detail: r.detail };
+  }
   if (!r.ok && UPGRADE_REFUSALS.includes(String(r.error))) return { ok: false as const, status: p.status, error: r.error, detail: r.detail };
-  const first: Proposal = { ...p, status: "running", decided_at: Date.now(), upgrade: r.ok ? r.result : { error: r.error, detail: r.detail } };
+  const first: Proposal = { ...p, status: "running", decided_at: Date.now(), upgrade: r.ok ? r.result : { error: r.error, detail: r.detail }, approval };
   await store.putProposal(first);
   void driveUpgrade(shop, store, first, approval, r.ok ? r.result : null);
   return { ok: true as const, status: "running", upgrade: first.upgrade };
 }
 
-async function driveUpgrade(shop: Shop, store: Store, p: Proposal, approval: any, state: any) {
+// API が起動したとき: 動いている途中だった版上げ(印を控えてあるもの)を、続きから駆動する
+export async function resumeUpgrades(store: Store) {
+  for (const shop of await store.listShops()) {
+    for (const p of await store.listProposals(shop.shop_id)) {
+      if (p.kind === "upgrade" && p.status === "running" && p.approval) void driveUpgrade(shop, store, p, p.approval, p.upgrade ?? null);
+    }
+  }
+}
+
+// 店主が管理画面で「止まった作業を戻す」を押した: 控えた印で、窓口に戻しを指示して着地まで駆動する
+export async function rollbackUpgrade(shop: Shop, store: Store, p: Proposal) {
+  if (p.kind !== "upgrade" || !p.approval || !["running", "stuck"].includes(p.status)) return { ok: false as const, error: "not_running", detail: "戻す作業がありません" };
+  const r = await callReceiver(shop, "upgrade", { approval: p.approval, fp_paths: p.fp_paths ?? [], rollback: true }, 60_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
+  if (!r.ok) return { ok: false as const, error: r.error, detail: r.detail };
+  await store.putProposal({ ...p, status: "running", upgrade: r.result });
+  void driveUpgrade(shop, store, { ...p, status: "running" }, p.approval, r.result);
+  return { ok: true as const, status: "running", upgrade: r.result };
+}
+
+// 版上げが終わったら記録する: 配布物ごと上げた印(照らし合わせの基準を上げ先の版にする)と、残した部品の修正(上げたあとも「当てた修正」として数える)
+export async function recordUpgrade(shop: Shop, store: Store, p: Proposal) {
+  const now = Date.now();
+  const to = String(p.to_version);
+  const marker = { path: "composer.lock", sha256: "", ref: to, source: "official-release", reason: "店主の承認で版上げ", run_id: p.run_id, at: now, from_version: p.from_version, via: "release" as const };
+  const keepNames = new Set((p.keep ?? []).map((k) => k.name));
+  const applied = await store.getApplied(shop.shop_id);
+  const kept = applied.filter((a) => a.via === "fix" && a.package_complete && [...keepNames].some((n) => a.path.startsWith(`vendor/${n}/`)) && (p.keep ?? []).some((k) => a.path.startsWith(`vendor/${k.name}/`) && a.ref === k.version))
+    .map((a) => ({ ...a, at: now + 1, from_version: to }));
+  await store.addApplied(shop.shop_id, [marker, ...kept]);
+}
+
+// 版上げを、窓口が着地させる(終わる・戻す・断る・止まる)まで呼び続ける。API が再起動しても、控えた印で続きから駆動する(resumeUpgrades)。
+// 窓口につながらない時間が続いても、あきらめる前に長めの間隔でもう一度試す。それでもだめなら、窓口が自分で(点検の ping・inspect のたびに)10 分で戻す
+export const UPGRADE_RETRY = { shortMs: 3000, shortTries: 5, longMs: 60_000 };
+export async function driveUpgrade(shop: Shop, store: Store, p: Proposal, approval: any, state: any, extra: Record<string, unknown> = {}) {
   let st = state;
   let fails = 0;
-  for (let i = 0; i < 200; i++) {
+  let longTried = false;
+  let args: Record<string, unknown> = { approval, fp_paths: p.fp_paths ?? [], ...extra };
+  for (let i = 0; i < 400; i++) {
     if (st && ["done", "rolled_back", "stuck", "refused"].includes(st.status)) break;
-    const r = await callReceiver(shop, "upgrade", { approval }, 180_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
+    const r = await callReceiver(shop, "upgrade", args, 180_000).catch((e) => ({ ok: false, error: "network", detail: String(e) }) as any);
     if (!r.ok) {
-      if (++fails > 5) { st = { ...(st ?? {}), status: "stuck", error: { code: r.error, detail: r.detail } }; break; }
-      await new Promise((res) => setTimeout(res, 3000));
+      if (++fails > UPGRADE_RETRY.shortTries) {
+        if (longTried) { st = { ...(st ?? {}), status: "unreachable", error: { code: r.error, detail: r.detail } }; break; }
+        longTried = true;
+        fails = 0;
+        await new Promise((res) => setTimeout(res, UPGRADE_RETRY.longMs));
+        continue;
+      }
+      await new Promise((res) => setTimeout(res, UPGRADE_RETRY.shortMs));
       continue;
     }
     fails = 0;
+    args = { approval, fp_paths: p.fp_paths ?? [] }; // 戻しの指示は最初の 1 回だけ
     st = r.result;
-    await store.putProposal({ ...p, status: "running", upgrade: st });
+    await store.putProposal({ ...p, status: "running", upgrade: st, approval });
   }
-  const status: Proposal["status"] = st?.status === "done" ? "applied" : st?.status === "rolled_back" ? "rolled_back" : "failed";
-  await store.putProposal({ ...p, status, decided_at: Date.now(), upgrade: st, result: st });
+  if (st?.status === "unreachable") {
+    // 窓口に届かない。窓口は止まった作業を自分で戻すので、印は控えたまま「止まっている」として見せる(管理画面に戻すボタンが出る)
+    await store.putProposal({ ...p, status: "running", upgrade: st, approval });
+    return;
+  }
+  if (st?.status === "refused" && st?.error?.code === "stale") {
+    await markStale(shop, store, { ...p, upgrade: st }, st.error.detail);
+    return;
+  }
+  const status: Proposal["status"] = st?.status === "done" ? "applied" : st?.status === "rolled_back" ? "rolled_back" : st?.status === "stuck" ? "stuck" : "failed";
+  // 印は、止まった作業を戻すためだけに控える。着地したら消す(stuck のときは「止まった作業を戻す」に使うので残す)
+  await store.putProposal({ ...p, status, decided_at: Date.now(), upgrade: st, result: st, approval: status === "stuck" ? approval : undefined });
+  if (status === "applied") await recordUpgrade(shop, store, p);
   const run = await store.getRun(p.run_id);
   if (run) {
     const title = status === "applied" ? `店主の承認で ${p.to_version} に上げた(データベースの作り変えを含む)` : status === "rolled_back" ? `店主の承認で上げようとしたが、途中で失敗したので ${p.from_version} に戻した` : `店主の承認で上げようとしたが、できなかった`;

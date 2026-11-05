@@ -8,6 +8,7 @@ import { FileStore } from "./store.js";
 import { step, newRun } from "./agent.js";
 import { randomHex } from "./sign.js";
 import { dailyQuotaExceeded, isFirstRun } from "./cost.js";
+import { resumeUpgrades } from "./tools.js";
 
 const store = new FileStore(process.env.SH_DATA_DIR ?? "./data");
 const client = new Anthropic(); // ANTHROPIC_API_KEY は env_file(.env)から入る
@@ -46,8 +47,11 @@ async function tick() {
     if (runs.some((r) => r.status === "running")) continue;
     // まだ点検していない店は、つないだ時刻から数える(最初の点検は「つないだら始める」か、店の人が始める)
     const last = runs[0]?.created_at ?? shop.created_at;
-    if (Date.now() - last < INTERVAL_MS) continue;
+    // 版上げの提案が古くなった(調べたときからファイルが変わっていた)店は、間隔を待たずに調べ直す
+    const recheck = !!shop.recheck_after && Date.now() >= shop.recheck_after;
+    if (!recheck && Date.now() - last < INTERVAL_MS) continue;
     if (dailyQuotaExceeded(runs)) continue;
+    if (recheck) await store.putShop({ ...shop, recheck_after: undefined });
     const run = newRun(`run_${randomHex(8)}`, shop, null, "schedule", isFirstRun(runs));
     await store.putRun(run);
     void drive(run.run_id);
@@ -55,6 +59,8 @@ async function tick() {
 }
 // 起動したら、途中だった点検を続きから回す
 for (const r of await store.listRunning()) void drive(r.run_id);
+// 途中だった店主の承認での版上げも、続きから駆動する(メンテナンス中のまま放っておかない)
+void resumeUpgrades(store).catch((e) => console.error("[upgrade resume]", e));
 setInterval(() => void tick().catch((e) => console.error("[tick]", e)), 60_000);
 const port = Number(process.env.PORT ?? 8787);
 serve({ fetch: app.fetch, port }, () => {
