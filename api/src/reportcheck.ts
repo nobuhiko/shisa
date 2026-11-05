@@ -12,5 +12,11 @@ export function reportGaps(report: any): string[] {
       `The runtime finding(s) ${runtimeMitigated.map((f) => JSON.stringify(String(f.title ?? "")).slice(0, 80)).join(", ")} are only mitigated by interim settings, and the runtime itself can only be replaced on the hosting side. Add a separate finding (category php, status needs_human, to server_company) that asks for the same runtime version line with the official fixes, with a ready-to-send request in "requests", and say how the shop is protected meanwhile. Mentioning it only in the summary is not enough.`,
     );
   }
+  // アプリ本体(EC-CUBE)の判断が報告に無い = 同じ系列の公式の修正版を調べていない。調べてから書いてもらう(何も無ければ not_affected で一行)
+  if (!findings.some((f) => f?.category === "eccube")) {
+    gaps.push(
+      `The report has no finding about the application itself (category eccube). Check the official release list for the installed version's line now (newer patch releases on the same line, and whether they need database changes), act on it as the system prompt says (apply, or propose_upgrade when it needs database changes), and add an eccube finding with the result, even if it is not_affected.`,
+    );
+  }
   return gaps;
 }
