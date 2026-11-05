@@ -133,10 +133,20 @@ class ConfigController extends AbstractController
                 unset($res['proposals'][$i]['new_content']);
                 continue;
             }
-            $cur = $this->localFile((string) ($p['path'] ?? ''));
-            $res['proposals'][$i]['current'] = $cur;
-            $res['proposals'][$i]['changed'] = $cur === null || !hash_equals((string) ($p['sha256_before'] ?? ''), hash('sha256', $cur));
-            $res['proposals'][$i]['content_ok'] = isset($p['new_content'], $p['sha256_new']) && is_string($p['new_content']) && hash_equals((string) $p['sha256_new'], hash('sha256', $p['new_content']));
+            if (($p['kind'] ?? 'fix') === 'upgrade') {
+                // 版上げ: 今の版が提案の「今の版」と同じか。中身は公式の配布物なので、版の組み合わせに結びつける
+                $from = (string) ($p['from_version'] ?? '');
+                $to = (string) ($p['to_version'] ?? '');
+                $res['proposals'][$i]['installed'] = \Eccube\Common\Constant::VERSION;
+                $res['proposals'][$i]['changed'] = !hash_equals($from, \Eccube\Common\Constant::VERSION);
+                $res['proposals'][$i]['content_ok'] = hash_equals((string) ($p['sha256_before'] ?? ''), hash('sha256', 'SH-UPGRADE|'.$from))
+                    && hash_equals((string) ($p['sha256_new'] ?? ''), hash('sha256', 'SH-UPGRADE|'.$to));
+            } else {
+                $cur = $this->localFile((string) ($p['path'] ?? ''));
+                $res['proposals'][$i]['current'] = $cur;
+                $res['proposals'][$i]['changed'] = $cur === null || !hash_equals((string) ($p['sha256_before'] ?? ''), hash('sha256', $cur));
+                $res['proposals'][$i]['content_ok'] = isset($p['new_content'], $p['sha256_new']) && is_string($p['new_content']) && hash_equals((string) $p['sha256_new'], hash('sha256', $p['new_content']));
+            }
             $pid = (string) ($p['proposal_id'] ?? '');
             if (preg_match('/^prp_[0-9a-f]{16}$/', $pid) && $res['proposals'][$i]['content_ok']) {
                 $prev = $seen[$pid] ?? null;
@@ -190,6 +200,9 @@ class ConfigController extends AbstractController
         }
         $res = $this->api->getProposal($proposal_id);
         $p = isset($res['proposal']) && is_array($res['proposal']) ? $res['proposal'] : null;
+        if ($p && ($p['kind'] ?? 'fix') === 'upgrade') {
+            return $this->approveUpgrade($request, $proposal_id, $p, $mine, $seen, $key);
+        }
         if (!$p || ($p['status'] ?? '') !== 'pending' || !isset($p['new_content']) || !is_string($p['new_content'])) {
             return new JsonResponse(['ok' => false, 'error' => 'この提案はもう承認できません'], 409);
         }
@@ -215,6 +228,33 @@ class ConfigController extends AbstractController
         $a = ['proposal_id' => $proposal_id, 'path' => $path, 'sha256_new' => $new, 'sha256_before' => $before,
             'expires_at' => time() + 1800, 'shop_id' => (string) $this->api->shopId()];
         $a['sig'] = hash_hmac('sha256', implode("\n", ['SH-APPROVE1', $a['shop_id'], $a['proposal_id'], $a['path'], $a['sha256_new'], $a['sha256_before'], (string) $a['expires_at']]), $key);
+
+        return new JsonResponse($this->api->approve($proposal_id, $a));
+    }
+
+    /**
+     * 版上げの承認。印は「今の版 → 上げ先の版」に結びつく。中身(公式の配布物)は窓口がチェックサムで確かめて取る
+     */
+    private function approveUpgrade(Request $request, $proposal_id, array $p, array $mine, array $seen, $key)
+    {
+        $from = (string) ($p['from_version'] ?? '');
+        $to = (string) ($p['to_version'] ?? '');
+        if (($p['status'] ?? '') !== 'pending' || !preg_match('/^4\.\d+\.\d+(-p\d+)?$/', $from) || !preg_match('/^4\.\d+\.\d+(-p\d+)?$/', $to)) {
+            return new JsonResponse(['ok' => false, 'error' => 'この提案はもう承認できません'], 409);
+        }
+        if (!hash_equals($from, \Eccube\Common\Constant::VERSION)) {
+            return new JsonResponse(['ok' => false, 'error' => '提案のあとに EC-CUBE の版が変わっています。次の点検で提案し直します'], 409);
+        }
+        $before = hash('sha256', 'SH-UPGRADE|'.$from);
+        $new = hash('sha256', 'SH-UPGRADE|'.$to);
+        if (!hash_equals((string) ($p['sha256_before'] ?? ''), $before) || !hash_equals((string) ($p['sha256_new'] ?? ''), $new)
+            || !hash_equals((string) $mine['new'], $new) || !hash_equals((string) $mine['before'], $before)) {
+            return new JsonResponse(['ok' => false, 'error' => '画面で見たあとに、提案の中身が変わっています。画面を開き直してください'], 409);
+        }
+        unset($seen[$proposal_id]);
+        $request->getSession()->set(self::SEEN_KEY, $seen);
+        $a = ['proposal_id' => $proposal_id, 'from' => $from, 'to' => $to, 'expires_at' => time() + 1800, 'shop_id' => (string) $this->api->shopId()];
+        $a['sig'] = hash_hmac('sha256', implode("\n", ['SH-UPGRADE1', $a['shop_id'], $a['proposal_id'], $a['from'], $a['to'], (string) $a['expires_at']]), $key);
 
         return new JsonResponse($this->api->approve($proposal_id, $a));
     }
