@@ -39,6 +39,9 @@ const { mkdirSync, writeFileSync } = require("node:fs");
   });
   await page.goto(`${base}/admin/store/plugin/SelfHarden/config?big=1`);
   await page.waitForSelector("#sh-fix-card:not([hidden]) .sh-approve-btn", { timeout: 60000 });
+  // 版上げの提案があれば、そのカード(.sh-upgrade)を承認する。無ければカスタマイズの直し
+  const upgrade = (await page.locator(".sh-upgrade .sh-approve-btn").count()) > 0;
+  const scope = upgrade ? ".sh-upgrade " : "";
   // 早送りの最後と同じ見た目: 健康診断に寄せる(点検と経過のカードを隠す)。遅れて読み込まれるものはこれで画面の位置を動かさない
   await page.evaluate(() => document.body.classList.add("sh-health-focus"));
   await hideAdv();
@@ -55,7 +58,7 @@ const { mkdirSync, writeFileSync } = require("node:fs");
   marks.health = at();
   await page.waitForTimeout(Number(healthMs));
   // ゆっくりスクロール(2.6 秒、なめらかに)してカードへ
-  const cy = await page.evaluate(() => Math.round(document.querySelector("#sh-fix-card").getBoundingClientRect().top + window.scrollY - 16));
+  const cy = await page.evaluate((up) => Math.round(document.querySelector(up ? ".sh-upgrade" : "#sh-fix-card").getBoundingClientRect().top + window.scrollY - 16), upgrade);
   marks.scroll = at();
   await page.evaluate(([from, to]) => new Promise((res) => {
     const t0 = performance.now(), d = 2600;
@@ -67,30 +70,64 @@ const { mkdirSync, writeFileSync } = require("node:fs");
   await page.waitForTimeout(Number(cardMs));
 
   marks.code = at();
-  const label = await page.locator(".sh-code-label").first().textContent();
+  const label = await page.locator(scope + ".sh-code-label").first().textContent();
   const code = (/([0-9]{4})/.exec(label || "") || [])[1] || "";
-  await page.click(".sh-confirm-code");
-  await page.type(".sh-confirm-code", code, { delay: 180 });
+  await page.click(scope + ".sh-confirm-code");
+  await page.type(scope + ".sh-confirm-code", code, { delay: 180 });
   const rest = Math.max(300, Number(codeMs) - code.length * 180 - 200);
   await page.waitForTimeout(rest);
-  await page.click(".sh-approve-btn");
+  await page.click(scope + ".sh-approve-btn");
   await page.waitForFunction(() => window.__shApproved, null, { timeout: 90000 });
   marks.approved = at();
-  const status = await page.evaluate(() => window.__shApproved);
-  await page.locator(".sh-fix-result").first().scrollIntoViewIfNeeded();
+  let status = await page.evaluate(() => window.__shApproved);
+  if (upgrade && status !== "failed") {
+    // 版上げ: 進み具合(カードが読み直す)を、終わるまで映す。版が変わってログインが切れたら入り直す
+    for (let i = 0; i < 200; i++) {
+      const st = await page.evaluate(() => window.__shUpgrade || null).catch(() => null);
+      if (st === "running" && !marks.progress) marks.progress = at();
+      if (st && st !== "running") break;
+      await page.waitForTimeout(500);
+    }
+    let fin = await page.evaluate(() => window.__shUpgrade || null).catch(() => null);
+    if (fin === "relogin" || fin === "running") {
+      await page.goto(`${base}/admin/store/plugin/SelfHarden/config?big=1`);
+      if (/\/login/.test(page.url())) {
+        await page.fill('input[name="login_id"]', "admin");
+        await page.fill('input[name="password"]', "password");
+        await Promise.all([page.waitForNavigation(), page.press('input[name="password"]', "Enter")]);
+        await page.goto(`${base}/admin/store/plugin/SelfHarden/config?big=1`);
+      }
+      await page.evaluate(() => document.body.classList.add("sh-health-focus")).catch(() => {});
+      await hideAdv();
+      await page.waitForFunction(() => window.__shUpgrade && window.__shUpgrade !== "running", null, { timeout: 180000 }).catch(() => {});
+      fin = await page.evaluate(() => window.__shUpgrade || null).catch(() => null);
+    }
+    status = fin;
+    await page.locator(".sh-upgrade").first().scrollIntoViewIfNeeded().catch(() => {});
+    marks.done = at();
+  } else {
+    await page.locator(".sh-fix-result").first().scrollIntoViewIfNeeded();
+  }
   await page.waitForTimeout(Number(resultMs));
 
-  await page.goto(base + probe);
-  marks.after = at();
-  await page.waitForTimeout(Number(afterMs));
-  const raw = await page.content();
-  await page.goto(base + "/");
-  marks.top = at();
-  await page.waitForTimeout(Number(topMs));
+  let raw = "";
+  if (Number(afterMs) > 0) {
+    await page.goto(base + probe);
+    marks.after = at();
+    await page.waitForTimeout(Number(afterMs));
+    raw = await page.content();
+  }
+  if (Number(topMs) > 0) {
+    await page.goto(base + "/");
+    marks.top = at();
+    await page.waitForTimeout(Number(topMs));
+  }
   marks.wall_total = at();
   await ctx.close();
   await browser.close();
   marks.status = status;
+  marks.wall_start = t0;
+  marks.upgrade = upgrade;
   marks.after_escaped = raw.includes("&lt;b style=") && !raw.includes('<b style="color:red">A-1024</b>');
   writeFileSync(`${out}/marks.json`, JSON.stringify(marks));
   console.log(JSON.stringify(marks));

@@ -121,7 +121,10 @@ let sa = 0, sb = slen / endT; // 試作: 承・転の長さに合わせて伸び
 if (process.env.SHOP_SYNC) {
   // 本番: 早送りの t 秒目 = 点検の時刻 t0 + (t - 始め) × K。その時刻の買い物の録画を出す
   const t0 = steps[0].at, start = cueAt.start - S;
-  sb = (K * slen) / sspan;
+  // 録画も時計より遅れて進むので、倍率は名目の K ではなく、録画の中の始めと終わりの目印のあいだの実際の倍率を使う
+  const Keff = fok ? realSec / (cueAt.end - cueAt.start) : K;
+  console.log("早送りの実際の倍率", Keff.toFixed(2), "(名目", K, ")");
+  sb = (Keff * slen) / sspan;
   sa = ((t0 - smarks.wall_start) / 1000) * (slen / sspan) - start * sb;
 }
 const sShift = sa < 0 ? -sa / sb : 0, sTrim = Math.max(0, sa);
@@ -154,11 +157,43 @@ let pt = 0;
 for (const l of V4.approve) { const a = Math.max(at(pm[l.at]), pt + 0.3); pplace.push({ at: a, k: l.key }); pt = a + clip[l.key].d; }
 // 結の 1 行目は、結の頭(版の違うお店の健康診断が並ぶところ)で読む。承認の場面は 3 行目を読み終えたら終える
 const plen = Math.max(P1 - P0, pt + 0.4);
+if (pm.upgrade && pm.done) {
+  // 版上げ: 承認を押してから終わるまで(数十秒)は早送りにし、右下に同じ時刻の買い物の画面を重ねる(メンテナンス中もそのまま)
+  // 区間は壁時計(録画の頭からの秒)で決め、録画の秒(× pr)に直して切る
+  const w0 = P0 / pr, wA = pm.approved + 1.2, wB = Math.max(wA + 1, pm.done - 0.3), w1 = pm.wall_total - 0.3;
+  const FAST = Math.min(1, 6 / (wB - wA)); // 承認から終わりまでを約 6 秒に
+  const segs = [[w0, wA, 1], [wA, wB, FAST], [wB, w1, 1]];
+  const sm = smarks, sl = slen, ss = sspan;
+  const shopT = (w) => ((pm.wall_start + w * 1000 - sm.wall_start) / 1000) * (sl / ss); // 壁時計 → 買い物の録画の秒
+  const parts = [];
+  segs.forEach(([a, b, f], i) => {
+    const outLen = (b - a) * f, o = join(out, `3b-ap${i}.mp4`);
+    const sa2 = Math.max(0, shopT(a)), sb2 = Math.max(sa2 + 0.1, shopT(b));
+    ff("-ss", (a * pr).toFixed(3), "-t", ((b - a) * pr).toFixed(3), "-i", pwebm, "-ss", sa2.toFixed(3), "-t", (sb2 - sa2).toFixed(3), "-i", swebm, "-filter_complex",
+      `[0:v]fps=30,setpts=(PTS-STARTPTS)*${(outLen / ((b - a) * pr)).toFixed(5)}[m];` +
+      `[1:v]fps=30,setpts=(PTS-STARTPTS)*${(outLen / (sb2 - sa2)).toFixed(5)},scale=${PW}:-2,pad=iw+8:ih+8:4:4:color=white[pp];` +
+      `[m][pp]overlay=${PX}:${PY}:eof_action=repeat,trim=duration=${outLen.toFixed(3)}[v]`,
+      "-map", "[v]", "-an", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", o);
+    parts.push({ o, a, b, f, outLen });
+  });
+  writeFileSync(join(out, "ap.list"), parts.map((x) => `file '${x.o}'`).join("\n"));
+  const apv = join(out, "3b-ap-v.mp4"); ff("-f", "concat", "-safe", "0", "-i", join(out, "ap.list"), "-c", "copy", apv);
+  // 壁時計 → 出力の秒
+  const outT = (w) => { let t = 0; for (const x of parts) { if (w <= x.b) return t + Math.max(0, w - x.a) * x.f; t += x.outLen; } return t; };
+  const up = []; let ut = 0;
+  for (const l of V4.approve) { const a2 = Math.max(outT(pm[l.at]) + 0.2, ut + 0.3); up.push({ at: a2, k: l.key }); ut = a2 + clip[l.key].d; }
+  const total = parts.reduce((x, y) => x + y.outLen, 0), ulen = Math.max(total, ut + 0.4);
+  ff("-i", apv, ...up.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
+    `[0:v]tpad=stop_mode=clone:stop_duration=${Math.max(0, ulen - total).toFixed(2)}[v];` +
+    up.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + up.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${up.length}:normalize=0,apad[pa]`,
+    "-map", "[v]", "-map", "[pa]", "-t", ulen.toFixed(3), ...enc, join(out, "3b-approve.mp4"));
+  console.log("承認(版上げ)", JSON.stringify({ len: ulen.toFixed(1), fast: FAST.toFixed(3), upgradeWall: (pm.done - pm.approved).toFixed(1), place: up.map((p) => `${p.k}@${p.at.toFixed(1)}`) }));
+} else
 ff("-ss", P0.toFixed(3), "-t", (P1 - P0).toFixed(3), "-i", pwebm, ...pplace.flatMap((p) => ["-i", clip[p.k].file]), "-filter_complex",
   `[0:v]fps=30,tpad=stop_mode=clone:stop_duration=${Math.max(0, plen - (P1 - P0)).toFixed(2)}[v];` +
   pplace.map((p, i) => `[${i + 1}:a]adelay=${Math.round(p.at * 1000)}|${Math.round(p.at * 1000)},aresample=48000[pa${i}]`).join(";") + ";" + pplace.map((_, i) => `[pa${i}]`).join("") + `amix=inputs=${pplace.length}:normalize=0,apad[pa]`,
   "-map", "[v]", "-map", "[pa]", "-t", plen.toFixed(3), ...enc, join(out, "3b-approve.mp4"));
-console.log("承認", JSON.stringify({ len: plen.toFixed(1), place: pplace.map((p) => `${p.k}@${p.at.toFixed(1)}`) }));
+if (!(pm.upgrade && pm.done)) console.log("承認", JSON.stringify({ len: plen.toFixed(1), place: pplace.map((p) => `${p.k}@${p.at.toFixed(1)}`) }));
 
 // 4. つなぐ: 早送りの最後(健康診断の表)と承認の場面の頭(同じ表)は 0.4 秒のクロスフェード
 { const fl = dur(join(out, "3-film.mp4")), X = 0.4;
