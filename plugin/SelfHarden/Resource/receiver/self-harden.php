@@ -1359,7 +1359,7 @@ function sh_release_get($url, $dest)
 }
 
 // 公式の配布物を取って、同じリリースのチェックサムで確かめる。確かめた配布物は var/self-harden/release/ に残して使い回す
-function sh_release_tarball($ref)
+function sh_release_tarball($ref, array $keep = [])
 {
     $dir = sh_var('release');
     if (!is_dir($dir) && !@mkdir($dir, 0700)) {
@@ -1381,7 +1381,7 @@ function sh_release_tarball($ref)
     }
     // 古い版の配布物は 1 つだけ残す
     foreach ((array) glob($dir . '/eccube-*.tar.gz') as $old) {
-        if ($old !== $path) {
+        if ($old !== $path && !in_array(basename($old), array_map(function ($k) { return 'eccube-' . $k . '.tar.gz'; }, $keep), true)) {
             @unlink($old);
         }
     }
@@ -1769,6 +1769,732 @@ function op_apply_approved_fix(array $cfg, array $args)
         }
     }
     return $res;
+}
+
+// ---- 店主の承認で、同じ系列の公式の修正版へ上げる(データベースの作り変えを含む) ----
+// 印は「承認して直す」と同じ鍵で、店主がお店の管理画面で作る。中身は公式の配布物(窓口がチェックサムで確かめたもの)だけ。
+// 段ごとに呼ばれ、どこまで進んだかを var の中に残す。失敗したら、控えからファイルとデータベースを戻す。
+// データベースの作り変え(スキーマの差とマイグレーション)だけは EC-CUBE 自身を読み込む必要があるので、窓口は include せず、
+// プラグインが置く別の入口(self-harden-upgrade.php)に 1 回きりの合図を渡して頼む。
+const SH_UPGRADE_REPLACED = ['app/config/eccube/', 'app/DoctrineMigrations/', 'bin/', 'src/', 'html/'];
+const SH_UPGRADE_SKIP = ['var/', 'app/Plugin/', 'app/Customize/', 'app/proxy/', 'app/template/', 'html/upload/', 'html/user_data/', 'html/plugin/'];
+const SH_UPGRADE_BATCH = 1500;
+const SH_UPGRADE_MAX_DB = 524288000;
+const SH_UPGRADE_RUNNER = 'self-harden-upgrade.php';
+
+function sh_upgrade_string($sid, $pid, $from, $to, $exp)
+{
+    return implode("\n", ['SH-UPGRADE1', $sid, $pid, $from, $to, (string) $exp]);
+}
+
+// テストのときだけ、決めた段でわざと失敗させる(本番の環境変数には無い)
+function sh_upgrade_test_fail($step)
+{
+    $f = getenv('SELF_HARDEN_TEST_FAIL_AT');
+    if (is_string($f) && $f !== '' && $f === $step) {
+        throw new ShError('test_fail', 'テストのために、この段(' . $step . ')でわざと失敗させました');
+    }
+}
+
+function sh_upgrade_dir($pid)
+{
+    return sh_var('upgrade/' . $pid);
+}
+
+function sh_upgrade_state($pid)
+{
+    $raw = @file_get_contents(sh_upgrade_dir($pid) . '/state.json');
+    $s = is_string($raw) ? json_decode($raw, true) : null;
+    return is_array($s) ? $s : null;
+}
+
+function sh_upgrade_save(array $st)
+{
+    $st['updated_at'] = time();
+    sh_atomic_write(sh_upgrade_dir($st['pid']) . '/state.json', json_encode($st, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+}
+
+function sh_upgrade_log(array &$st, $text)
+{
+    $st['log'][] = ['at' => time(), 'step' => $st['step'], 'text' => $text];
+    $st['log'] = array_slice($st['log'], -60);
+}
+
+// tar.gz を先頭から読み、ふつうのファイルごとに $fn(相対の名前, 中身) を呼ぶ。先頭のフォルダ名は外す。リンクや .. は無視する
+function sh_tar_each($gz, callable $fn, $max_file = 33554432)
+{
+    $fp = @gzopen($gz, 'rb');
+    if (!$fp) {
+        throw new ShError('io', '配布物を開けませんでした');
+    }
+    $read = function ($n) use ($fp) {
+        $b = '';
+        while (strlen($b) < $n) {
+            $c = gzread($fp, min(1048576, $n - strlen($b)));
+            if ($c === false || $c === '') {
+                break;
+            }
+            $b .= $c;
+        }
+        return $b;
+    };
+    $long = null;
+    while (true) {
+        $h = $read(512);
+        if (strlen($h) < 512 || trim($h, "\0") === '') {
+            break;
+        }
+        $name = rtrim(substr($h, 0, 100), "\0");
+        $prefix = rtrim(substr($h, 345, 155), "\0");
+        $size = octdec(trim(substr($h, 124, 12), " \0"));
+        $type = $h[156];
+        $pad = (512 - $size % 512) % 512;
+        if ($type === 'x' || $type === 'L') {
+            $data = $read($size);
+            $read($pad);
+            if ($type === 'L') {
+                $long = rtrim($data, "\0");
+            } elseif (preg_match('/\d+ path=([^\n]*)\n/', $data, $m)) {
+                $long = $m[1];
+            }
+            continue;
+        }
+        $full = $long !== null ? $long : ($prefix !== '' ? $prefix . '/' . $name : $name);
+        $long = null;
+        $rel = preg_replace('#^[^/]+/#', '', $full);
+        $ok = ($type === '0' || $type === "\0") && $rel !== '' && strpos($rel, '\\') === false && strpos($rel, "\0") === false
+            && !in_array('..', explode('/', $rel), true) && $rel[0] !== '/';
+        if ($ok && $size <= $max_file) {
+            $fn($rel, $read($size));
+            $read($pad);
+        } else {
+            $n = $size + $pad;
+            while ($n > 0) {
+                $c = gzread($fp, min(1048576, $n));
+                if ($c === false || $c === '') {
+                    break;
+                }
+                $n -= strlen($c);
+            }
+        }
+    }
+    gzclose($fp);
+}
+
+function sh_upgrade_skip($rel)
+{
+    foreach (SH_UPGRADE_SKIP as $d) {
+        if (strpos($rel, $d) === 0) {
+            return true;
+        }
+    }
+    return $rel === '.env' || $rel === SH_UPGRADE_RUNNER || $rel === 'self-harden.php' || strpos($rel, '.git/') === 0 || strpos($rel, 'self-harden-lab/') === 0;
+}
+
+function sh_upgrade_replaced($rel)
+{
+    foreach (SH_UPGRADE_REPLACED as $d) {
+        if (strpos($rel, $d) === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// .env の値(窓口の中だけで使う。API には返さない)
+function sh_env_value($key)
+{
+    $v = getenv($key);
+    if (is_string($v) && $v !== '') {
+        return $v;
+    }
+    foreach (preg_split("/\r\n|\n/", (string) @file_get_contents(sh_root() . '/.env')) as $line) {
+        if (preg_match('/^\s*(?:export\s+)?' . preg_quote($key, '/') . '\s*=\s*(.*)$/', $line, $m)) {
+            return trim(trim($m[1]), "\"'");
+        }
+    }
+    return null;
+}
+
+// データベースの種類と場所。対応は SQLite と MySQL(MariaDB)。ほかは断る
+function sh_upgrade_db()
+{
+    $url = sh_env_value('DATABASE_URL');
+    if (!is_string($url) || $url === '') {
+        throw new ShError('db_unknown', 'データベースの設定が読めません');
+    }
+    $url = str_replace('%kernel.project_dir%', sh_root(), $url);
+    if (strpos($url, 'sqlite:') === 0) {
+        $path = '/' . ltrim((string) preg_replace('#^sqlite:#', '', $url), '/');
+        if ($path === '' || $path[0] !== '/' || !is_file($path)) {
+            throw new ShError('db_unknown', 'SQLite のファイルが見つかりません');
+        }
+        return ['kind' => 'sqlite', 'path' => $path];
+    }
+    $u = parse_url($url);
+    if (is_array($u) && isset($u['scheme']) && in_array($u['scheme'], ['mysql', 'mysql2', 'pdo-mysql', 'mariadb'], true)) {
+        return ['kind' => 'mysql', 'host' => isset($u['host']) ? $u['host'] : 'localhost', 'port' => isset($u['port']) ? (int) $u['port'] : 3306,
+            'user' => isset($u['user']) ? urldecode($u['user']) : '', 'pass' => isset($u['pass']) ? urldecode($u['pass']) : '',
+            'name' => isset($u['path']) ? ltrim(urldecode($u['path']), '/') : ''];
+    }
+    throw new ShError('db_unsupported', 'このデータベースの種類(' . (is_array($u) && isset($u['scheme']) ? $u['scheme'] : '?') . ')は、まだ Shisa が控えを取れないので、版上げはしません');
+}
+
+function sh_upgrade_pdo(array $db)
+{
+    $pdo = new PDO('mysql:host=' . $db['host'] . ';port=' . $db['port'] . ';dbname=' . $db['name'] . ';charset=utf8mb4', $db['user'], $db['pass'],
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    return $pdo;
+}
+
+function sh_rmtree($dir)
+{
+    if (!is_dir($dir) || is_link($dir)) {
+        return;
+    }
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+    foreach ($it as $f) {
+        if ($f->isLink() || $f->isFile()) {
+            @unlink($f->getPathname());
+        } elseif ($f->isDir()) {
+            @rmdir($f->getPathname());
+        }
+    }
+    @rmdir($dir);
+}
+
+function sh_upgrade_copy($src, $dst)
+{
+    $d = dirname($dst);
+    if (!is_dir($d) && !@mkdir($d, 0755, true)) {
+        throw new ShError('io', 'フォルダを作れませんでした: ' . sh_rel($d));
+    }
+    if (is_link($dst)) {
+        throw new ShError('io', 'シンボリックリンクには書きません: ' . sh_rel($dst));
+    }
+    $tmp = $d . '/.sh-tmp-' . bin2hex(random_bytes(6));
+    if (!@copy($src, $tmp)) {
+        @unlink($tmp);
+        throw new ShError('io', '書けませんでした: ' . sh_rel($dst));
+    }
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $dst)) {
+        @unlink($tmp);
+        throw new ShError('io', '置き換えられませんでした: ' . sh_rel($dst));
+    }
+}
+
+function sh_upgrade_cache_clear()
+{
+    $c = sh_root() . '/var/cache/prod';
+    if (is_dir($c) && !is_link($c)) {
+        $old = sh_root() . '/var/cache/.sh-old-' . bin2hex(random_bytes(4));
+        if (@rename($c, $old)) {
+            sh_rmtree($old);
+        }
+    }
+    if (function_exists('opcache_reset')) {
+        @opcache_reset();
+    }
+}
+
+function sh_upgrade_maintenance($on)
+{
+    $f = sh_root() . '/.maintenance';
+    if ($on) {
+        if (!file_exists($f)) {
+            @file_put_contents($f, '');
+        }
+    } else {
+        @unlink($f);
+    }
+}
+
+// お店を開いて確かめる。キャッシュを消した直後は最初の 1 回が遅いので、先に 1 回開いて温める
+function sh_upgrade_verify(array $cfg)
+{
+    $base = isset($cfg['self_base']) ? (string) $cfg['self_base'] : '';
+    if (!preg_match('#^https?://[A-Za-z0-9.\-]+(:[0-9]+)?(/[A-Za-z0-9._~\-/]*)?$#', $base)) {
+        throw new ShError('bad_config', 'self_base が正しくありません');
+    }
+    // キャッシュを消した直後は、最初の何回かが 500 になることがある(組み立て中)。開くまで最大 90 秒待ってから確かめる
+    $t0 = microtime(true);
+    do {
+        $w = sh_fetch_status($base, '/', 60);
+        if ($w['status'] > 0 && $w['status'] < 500) {
+            break;
+        }
+        sleep(2);
+    } while (microtime(true) - $t0 < 90);
+    $out = [];
+    foreach (array_merge(sh_map()['verify_paths'], ['/self-harden.php']) as $p) {
+        for ($k = 0; $k < 3; $k++) {
+            $r = sh_fetch_status($base, $p, 30);
+            if ($r['status'] > 0 && $r['status'] < 500) {
+                break;
+            }
+            sleep(2);
+        }
+        $out[] = $r;
+    }
+    return $out;
+}
+
+// 窓口から、プラグインが置いた入口(self-harden-upgrade.php)に、データベースの作り変えを頼む。合図は 1 回きり
+function sh_upgrade_call_runner(array $cfg, array $st)
+{
+    $dir = sh_upgrade_dir($st['pid']);
+    $token = bin2hex(random_bytes(32));
+    if (@file_put_contents($dir . '/runner-token', $token) === false) {
+        throw new ShError('io', '合図を書けませんでした');
+    }
+    @chmod($dir . '/runner-token', 0600);
+    $base = rtrim((string) $cfg['self_base'], '/');
+    $url = $base . '/' . sh_pub(SH_UPGRADE_RUNNER);
+    $body = json_encode(['job' => $st['pid'], 'token' => $token]);
+    $res = null;
+    $status = 0;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_TIMEOUT => 170,
+            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_HTTPHEADER => ['Content-Type: application/json'], CURLOPT_FOLLOWLOCATION => false]);
+        $res = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+    }
+    @unlink($dir . '/runner-token');
+    $j = is_string($res) ? json_decode($res, true) : null;
+    if (!is_array($j)) {
+        throw new ShError('runner_failed', 'データベースの作り変えの入口から返事がありません(HTTP ' . $status . ')');
+    }
+    return $j;
+}
+
+function op_upgrade(array $cfg, array $args)
+{
+    @set_time_limit(170);
+    if (sh_map()['name'] !== 'eccube4') {
+        throw new ShError('not_supported', '承認での版上げは、今は EC-CUBE 4 系だけです');
+    }
+    $key = sh_approve_key();
+    if ($key === null) {
+        throw new ShError('no_approval_key', 'このお店には承認の鍵がありません(プラグインを有効にし直してください)');
+    }
+    $a = isset($args['approval']) && is_array($args['approval']) ? $args['approval'] : null;
+    if ($a === null) {
+        throw new ShError('not_approved', '店主の承認の印がありません');
+    }
+    foreach (['proposal_id', 'from', 'to', 'expires_at', 'shop_id', 'sig'] as $k) {
+        if (!isset($a[$k]) || !is_scalar($a[$k])) {
+            throw new ShError('not_approved', '承認の印の形が正しくありません');
+        }
+    }
+    $pid = (string) $a['proposal_id'];
+    $from = (string) $a['from'];
+    $to = (string) $a['to'];
+    $exp = (int) $a['expires_at'];
+    $sid = (string) $a['shop_id'];
+    $sig = (string) $a['sig'];
+    if (!preg_match('/^prp_[0-9a-f]{16}$/', $pid) || !preg_match('/^[0-9a-f]{64}$/', $sig) || !preg_match('/^[0-9][0-9A-Za-z.\-]{0,30}$/', $from)
+        || !preg_match(sh_map()['tag_re'], $to)) {
+        throw new ShError('not_approved', '承認の印の形が正しくありません');
+    }
+    if (!hash_equals((string) $cfg['shop_id'], $sid)) {
+        throw new ShError('not_approved', '別のお店の承認です');
+    }
+    if (!hash_equals(hash_hmac('sha256', sh_upgrade_string($sid, $pid, $from, $to, $exp), $key), $sig)) {
+        throw new ShError('not_approved', '承認の印が合いません');
+    }
+    $lock = @fopen(sh_var('lock-upgrade'), 'c');
+    if ($lock) {
+        flock($lock, LOCK_EX);
+    }
+    $st = sh_upgrade_state($pid);
+    if ($st === null) {
+        // 始める: 期限・1 回きり・今の版・上げ先を確かめる
+        $now = time();
+        if ($exp < $now || $exp > $now + SH_APPROVE_MAX_TTL) {
+            throw new ShError('approval_expired', '承認の期限が切れています。管理画面でもう一度承認してください');
+        }
+        $installed = sh_eccube_version();
+        if ($installed === null || $installed !== $from) {
+            throw new ShError('conflict', '承認したときの版(' . $from . ')と、今の版(' . $installed . ')が違います');
+        }
+        if (!preg_match(sh_map()['line_re'], sh_tagver($to), $rm) || !preg_match(sh_map()['line_re'], $installed, $im) || $rm[1] !== $im[1]
+            || version_compare(sh_tagver($to), $installed, '<=')) {
+            throw new ShError('bad_ref', '上げ先は、今の版と同じ系列の新しい公式の版だけです');
+        }
+        $used_dir = sh_var('approvals');
+        if (!is_dir($used_dir)) {
+            @mkdir($used_dir, 0700, true);
+        }
+        if (file_exists($used_dir . '/' . $sig)) {
+            throw new ShError('approval_used', 'この承認はもう使われています');
+        }
+        @file_put_contents($used_dir . '/' . $sig, json_encode(['proposal_id' => $pid, 'upgrade' => [$from, $to], 'at' => $now]));
+        $dir = sh_upgrade_dir($pid);
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+            throw new ShError('io', '作業の置き場を作れませんでした');
+        }
+        $st = ['pid' => $pid, 'sig' => $sig, 'from' => $from, 'to' => $to, 'status' => 'running', 'step' => 'fetch', 'i' => 0,
+            'started_at' => $now, 'log' => [], 'maintenance_before' => file_exists(sh_root() . '/.maintenance'), 'db' => null, 'error' => null];
+        sh_upgrade_log($st, sh_eccube_version() . ' から ' . $to . ' へ上げます(店主の承認あり)');
+        sh_upgrade_save($st);
+        // 始めたことだけを、すぐ返す(管理画面を待たせない)。段は次の呼び出しから進める
+        return sh_upgrade_out($st);
+    } elseif (!hash_equals((string) $st['sig'], $sig)) {
+        throw new ShError('not_approved', 'この作業の承認と、印が違います');
+    }
+    if (in_array($st['status'], ['done', 'rolled_back', 'stuck', 'refused'], true)) {
+        return sh_upgrade_out($st);
+    }
+    $t0 = microtime(true);
+    try {
+        // 1 回の呼び出しで、時間の許す範囲だけ段を進める
+        do {
+            sh_upgrade_step($cfg, $st);
+            sh_upgrade_save($st);
+        } while ($st['status'] === 'running' && microtime(true) - $t0 < 15 && !in_array($st['step'], ['db', 'verify'], true));
+    } catch (Throwable $e) {
+        $msg = $e instanceof ShError ? $e->getMessage() : '窓口の中で失敗しました';
+        $st['error'] = ['step' => $st['step'], 'code' => $e instanceof ShError ? $e->code_str : 'internal', 'detail' => $msg];
+        sh_upgrade_log($st, '失敗: ' . $msg);
+        if ($st['status'] === 'running' && in_array($st['step'], ['fetch', 'stage', 'fetch_from', 'plan'], true)) {
+            // まだお店に何も書いていない段なら、断って終わる
+            $st['status'] = 'refused';
+            sh_upgrade_log($st, 'お店には何も書いていないので、このまま止めます');
+        } elseif ($st['status'] === 'running') {
+            $st['status'] = 'rolling_back';
+            $st['step'] = 'rb_maint_on';
+            $st['i'] = 0;
+            sh_upgrade_log($st, '控えから元に戻します');
+        } else {
+            $st['status'] = 'stuck';
+            sh_upgrade_log($st, '元に戻す途中で失敗しました。メンテナンスのまま止めています');
+        }
+        sh_upgrade_save($st);
+    }
+    return sh_upgrade_out($st);
+}
+
+function sh_upgrade_out(array $st)
+{
+    $o = $st;
+    unset($o['sig'], $o['db']);
+    $o['plan'] = isset($st['plan_counts']) ? $st['plan_counts'] : null;
+    return $o;
+}
+
+function sh_upgrade_step(array $cfg, array &$st)
+{
+    $dir = sh_upgrade_dir($st['pid']);
+    $stage = $dir . '/stage';
+    switch ($st['step']) {
+        case 'fetch':
+            sh_upgrade_test_fail('fetch');
+            sh_release_tarball($st['to'], [$st['from']]);
+            sh_upgrade_log($st, '公式の配布物(' . $st['to'] . ')を取り、チェックサムで確かめました');
+            $st['step'] = 'stage';
+            return;
+        case 'stage':
+            // 上げ先の配布物を、作業の置き場に広げる(お店にはまだ書かない)
+            sh_rmtree($stage);
+            @mkdir($stage, 0700, true);
+            $gz = sh_var('release/eccube-' . $st['to'] . '.tar.gz');
+            $n = 0;
+            sh_tar_each($gz, function ($rel, $data) use ($stage, &$n) {
+                $d = dirname($stage . '/' . $rel);
+                if (!is_dir($d)) {
+                    @mkdir($d, 0700, true);
+                }
+                file_put_contents($stage . '/' . $rel, $data);
+                $n++;
+            });
+            // データベースの作り変えで、お店のプラグインとカスタマイズも見えるように、お店のものを指す
+            foreach (['app/Plugin', 'app/Customize', 'app/proxy'] as $d) {
+                if (is_dir(sh_root() . '/' . $d)) {
+                    sh_rmtree($stage . '/' . $d);
+                    @symlink(sh_root() . '/' . $d, $stage . '/' . $d);
+                }
+            }
+            $st['stage_files'] = $n;
+            sh_upgrade_log($st, '上げ先の版を作業の置き場に広げました(' . $n . ' ファイル)');
+            $st['step'] = 'fetch_from';
+            return;
+        case 'fetch_from':
+            sh_release_tarball($st['from'], [$st['to']]);
+            sh_upgrade_log($st, '今の版(' . $st['from'] . ')の公式の配布物も取りました(カスタマイズを見分けるため)');
+            $st['step'] = 'plan';
+            return;
+        case 'plan':
+            sh_upgrade_test_fail('plan');
+            $from = [];
+            sh_tar_each(sh_var('release/eccube-' . $st['from'] . '.tar.gz'), function ($rel, $data) use (&$from) {
+                $from[$rel] = hash('sha256', $data);
+            });
+            $write = [];
+            $delete = [];
+            $blocked = [];
+            $to = [];
+            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($stage, FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $f) {
+                if ($f->isLink() || !$f->isFile()) {
+                    continue;
+                }
+                $rel = substr($f->getPathname(), strlen($stage) + 1);
+                if (sh_upgrade_skip($rel)) {
+                    continue;
+                }
+                $to[$rel] = hash_file('sha256', $f->getPathname());
+            }
+            foreach ($to as $rel => $tsha) {
+                $fsha = isset($from[$rel]) ? $from[$rel] : null;
+                if ($fsha === $tsha) {
+                    continue; // 版のあいだで変わっていないファイルは、お店のものをそのまま
+                }
+                $abs = sh_root() . '/' . $rel;
+                $cur = is_file($abs) && !is_link($abs) ? hash_file('sha256', $abs) : null;
+                if ($cur === $tsha) {
+                    continue;
+                }
+                // 部品(vendor/)は、公式の手順どおり上げ先の版で上書きする(Shisa が部品ごとに当てた修正も含む。次の点検で当て直す)
+                if ($cur === null || $cur === $fsha || strpos($rel, 'vendor/') === 0) {
+                    $write[] = $rel;
+                } else {
+                    $blocked[] = $rel;
+                }
+            }
+            foreach ($from as $rel => $fsha) {
+                if (isset($to[$rel]) || sh_upgrade_skip($rel) || !sh_upgrade_replaced($rel)) {
+                    continue;
+                }
+                $abs = sh_root() . '/' . $rel;
+                if (is_file($abs) && !is_link($abs) && hash_file('sha256', $abs) === $fsha) {
+                    $delete[] = $rel;
+                }
+            }
+            $st['plan_counts'] = ['write' => count($write), 'delete' => count($delete), 'blocked' => count($blocked)];
+            if ($blocked) {
+                $st['blocked'] = array_slice($blocked, 0, 50);
+                throw new ShError('customized_files', 'カスタマイズされたファイルを上書きしてしまうので、版上げはしません(' . count($blocked) . ' 件。例: ' . implode('、', array_slice($blocked, 0, 5)) . ')');
+            }
+            if (is_dir(sh_root() . '/app/proxy/entity') && count((array) glob(sh_root() . '/app/proxy/entity/*.php')) > 0) {
+                throw new ShError('needs_proxies', 'カスタマイズでデータベースの作りを足している(プロキシがある)お店は、まだ承認での版上げをしません');
+            }
+            $db = sh_upgrade_db();
+            $st['db_kind'] = $db['kind'];
+            file_put_contents($dir . '/plan.json', json_encode(['write' => $write, 'delete' => $delete]));
+            sh_upgrade_log($st, '置き換えるファイル ' . count($write) . ' 件、消す古いファイル ' . count($delete) . ' 件。カスタマイズの上書きはありません');
+            $st['step'] = 'maint_on';
+            return;
+        case 'maint_on':
+            sh_upgrade_maintenance(true);
+            sh_upgrade_log($st, 'メンテナンスに入れました(管理画面は使えます)');
+            $st['step'] = 'db_backup';
+            return;
+        case 'db_backup':
+            sh_upgrade_test_fail('db_backup');
+            $db = sh_upgrade_db();
+            if ($db['kind'] === 'sqlite') {
+                if (filesize($db['path']) > SH_UPGRADE_MAX_DB) {
+                    throw new ShError('db_too_large', 'データベースが大きすぎるので、控えを取れません');
+                }
+                if (!@copy($db['path'], $dir . '/db.sqlite')) {
+                    throw new ShError('io', 'データベースの控えを取れませんでした');
+                }
+                $st['db_backup'] = ['kind' => 'sqlite', 'bytes' => filesize($dir . '/db.sqlite')];
+            } else {
+                $pdo = sh_upgrade_pdo($db);
+                $size = (int) $pdo->query('SELECT COALESCE(SUM(data_length),0) FROM information_schema.tables WHERE table_schema = DATABASE()')->fetchColumn();
+                if ($size > SH_UPGRADE_MAX_DB) {
+                    throw new ShError('db_too_large', 'データベースが大きすぎるので、控えを取れません');
+                }
+                @mkdir($dir . '/db', 0700, true);
+                $tables = [];
+                foreach ($pdo->query('SHOW FULL TABLES WHERE Table_type = \'BASE TABLE\'')->fetchAll(PDO::FETCH_NUM) as $row) {
+                    $t = $row[0];
+                    $ddl = $pdo->query('SHOW CREATE TABLE `' . str_replace('`', '``', $t) . '`')->fetch(PDO::FETCH_NUM)[1];
+                    $fp = fopen($dir . '/db/' . md5($t) . '.jsonl', 'w');
+                    $q = $pdo->query('SELECT * FROM `' . str_replace('`', '``', $t) . '`');
+                    $rows = 0;
+                    while ($r = $q->fetch(PDO::FETCH_ASSOC)) {
+                        fwrite($fp, json_encode($r, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n");
+                        $rows++;
+                    }
+                    fclose($fp);
+                    $tables[$t] = ['ddl' => $ddl, 'rows' => $rows];
+                }
+                file_put_contents($dir . '/db/tables.json', json_encode($tables));
+                $st['db_backup'] = ['kind' => 'mysql', 'tables' => count($tables)];
+            }
+            sh_upgrade_log($st, 'データベースの控えを取りました');
+            $st['step'] = 'db';
+            return;
+        case 'db':
+            sh_upgrade_test_fail('db');
+            $r = sh_upgrade_call_runner($cfg, $st);
+            if (empty($r['ok'])) {
+                throw new ShError(isset($r['error']) ? (string) $r['error'] : 'runner_failed', 'データベースの作り変え: ' . (isset($r['detail']) ? (string) $r['detail'] : '失敗しました'));
+            }
+            $st['db_result'] = ['schema_sql' => isset($r['schema_sql']) ? array_slice((array) $r['schema_sql'], 0, 20) : [], 'migrated' => isset($r['migrated']) ? $r['migrated'] : null];
+            sh_upgrade_log($st, 'データベースを作り変えました(作りの差 ' . count((array) ($r['schema_sql'] ?? [])) . ' 件、マイグレーション ' . (int) ($r['migrated'] ?? 0) . ' 件)');
+            $st['step'] = 'files';
+            $st['i'] = 0;
+            return;
+        case 'files':
+            sh_upgrade_test_fail('files');
+            $plan = json_decode((string) file_get_contents($dir . '/plan.json'), true);
+            $slice = array_slice($plan['write'], $st['i'], SH_UPGRADE_BATCH);
+            foreach ($slice as $rel) {
+                $abs = sh_root() . '/' . $rel;
+                if (is_file($abs)) {
+                    $b = $dir . '/files/' . $rel;
+                    if (!is_dir(dirname($b))) {
+                        @mkdir(dirname($b), 0700, true);
+                    }
+                    if (!@copy($abs, $b)) {
+                        throw new ShError('io', '控えを取れませんでした: ' . $rel);
+                    }
+                } else {
+                    file_put_contents($dir . '/created.txt', $rel . "\n", FILE_APPEND);
+                }
+                sh_upgrade_copy($stage . '/' . $rel, $abs);
+            }
+            $st['i'] += count($slice);
+            sh_upgrade_log($st, 'ファイルを置き換えています(' . $st['i'] . ' / ' . count($plan['write']) . ')');
+            if ($st['i'] >= count($plan['write'])) {
+                foreach ($plan['delete'] as $rel) {
+                    $abs = sh_root() . '/' . $rel;
+                    $b = $dir . '/deleted/' . $rel;
+                    if (!is_dir(dirname($b))) {
+                        @mkdir(dirname($b), 0700, true);
+                    }
+                    if (is_file($abs) && @rename($abs, $b)) {
+                        file_put_contents($dir . '/deleted.txt', $rel . "\n", FILE_APPEND);
+                    }
+                }
+                sh_upgrade_log($st, '新しい版に無い古いファイル ' . count($plan['delete']) . ' 件を片付けました');
+                $st['step'] = 'cache';
+            }
+            return;
+        case 'cache':
+            sh_upgrade_cache_clear();
+            sh_upgrade_log($st, 'キャッシュを消しました');
+            $st['step'] = 'maint_off';
+            return;
+        case 'maint_off':
+            if (!$st['maintenance_before']) {
+                sh_upgrade_maintenance(false);
+            }
+            sh_upgrade_log($st, 'メンテナンスを外しました');
+            $st['step'] = 'verify';
+            return;
+        case 'verify':
+            sh_upgrade_test_fail('verify');
+            $v = sh_upgrade_verify($cfg);
+            $st['verify'] = $v;
+            $ver = sh_eccube_version();
+            if (sh_verify_failed($v) || $ver !== sh_tagver($st['to'])) {
+                throw new ShError('verify_failed', '上げたあと、お店が開けないか版が合いません(' . $ver . ')');
+            }
+            sh_upgrade_log($st, 'お店を開いて確かめました。' . $ver . ' になりました');
+            $st['status'] = 'done';
+            $st['step'] = 'done';
+            $st['finished_at'] = time();
+            sh_rmtree($stage);
+            return;
+        // ---- 戻す ----
+        case 'rb_maint_on':
+            sh_upgrade_maintenance(true);
+            $st['step'] = 'rb_files';
+            return;
+        case 'rb_files':
+            if (is_dir($dir . '/files')) {
+                $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir . '/files', FilesystemIterator::SKIP_DOTS));
+                foreach ($it as $f) {
+                    if ($f->isFile()) {
+                        sh_upgrade_copy($f->getPathname(), sh_root() . '/' . substr($f->getPathname(), strlen($dir . '/files') + 1));
+                    }
+                }
+            }
+            foreach (is_file($dir . '/created.txt') ? file($dir . '/created.txt', FILE_IGNORE_NEW_LINES) : [] as $rel) {
+                if ($rel !== '' && !sh_upgrade_skip($rel)) {
+                    @unlink(sh_root() . '/' . $rel);
+                }
+            }
+            foreach (is_file($dir . '/deleted.txt') ? file($dir . '/deleted.txt', FILE_IGNORE_NEW_LINES) : [] as $rel) {
+                if ($rel !== '' && is_file($dir . '/deleted/' . $rel)) {
+                    @rename($dir . '/deleted/' . $rel, sh_root() . '/' . $rel);
+                }
+            }
+            sh_upgrade_log($st, 'ファイルを控えから戻しました');
+            $st['step'] = 'rb_db';
+            return;
+        case 'rb_db':
+            if (isset($st['db_backup']['kind']) && $st['db_backup']['kind'] === 'sqlite') {
+                $db = sh_upgrade_db();
+                sh_upgrade_copy($dir . '/db.sqlite', $db['path']);
+                sh_upgrade_log($st, 'データベースを控えから戻しました');
+            } elseif (isset($st['db_backup']['kind']) && $st['db_backup']['kind'] === 'mysql') {
+                $db = sh_upgrade_db();
+                $pdo = sh_upgrade_pdo($db);
+                $tables = json_decode((string) file_get_contents($dir . '/db/tables.json'), true);
+                $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
+                foreach ($pdo->query('SHOW FULL TABLES WHERE Table_type = \'BASE TABLE\'')->fetchAll(PDO::FETCH_NUM) as $row) {
+                    if (!isset($tables[$row[0]])) {
+                        $pdo->exec('DROP TABLE `' . str_replace('`', '``', $row[0]) . '`');
+                    }
+                }
+                foreach ($tables as $t => $info) {
+                    $qt = '`' . str_replace('`', '``', $t) . '`';
+                    $pdo->exec('DROP TABLE IF EXISTS ' . $qt);
+                    $pdo->exec($info['ddl']);
+                    $fp = fopen($dir . '/db/' . md5($t) . '.jsonl', 'r');
+                    while (($line = fgets($fp)) !== false) {
+                        $r = json_decode($line, true);
+                        if (!is_array($r)) {
+                            continue;
+                        }
+                        $cols = array_map(function ($c) { return '`' . str_replace('`', '``', $c) . '`'; }, array_keys($r));
+                        $stmt = $pdo->prepare('INSERT INTO ' . $qt . ' (' . implode(',', $cols) . ') VALUES (' . implode(',', array_fill(0, count($r), '?')) . ')');
+                        $stmt->execute(array_values($r));
+                    }
+                    fclose($fp);
+                }
+                $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
+                sh_upgrade_log($st, 'データベースを控えから戻しました');
+            } else {
+                sh_upgrade_log($st, 'データベースはまだ作り変えていませんでした');
+            }
+            $st['step'] = 'rb_cache';
+            return;
+        case 'rb_cache':
+            sh_upgrade_cache_clear();
+            $st['step'] = 'rb_maint_off';
+            return;
+        case 'rb_maint_off':
+            if (!$st['maintenance_before']) {
+                sh_upgrade_maintenance(false);
+            }
+            $st['step'] = 'rb_verify';
+            return;
+        case 'rb_verify':
+            $v = sh_upgrade_verify($cfg);
+            $st['verify'] = $v;
+            if (sh_verify_failed($v) || sh_eccube_version() !== $st['from']) {
+                sh_upgrade_maintenance(true);
+                $st['status'] = 'stuck';
+                sh_upgrade_log($st, '元に戻したあとも、お店が開けません。メンテナンスのまま止めています。'
+                    . '控えは ' . SH_VAR_DIR . '/upgrade/' . $st['pid'] . '/ にあります(files・db)。制作会社かサーバー会社に、この控えから戻すよう頼んでください');
+                return;
+            }
+            sh_upgrade_log($st, '元の ' . $st['from'] . ' に戻し、お店が開くことを確かめました');
+            $st['status'] = 'rolled_back';
+            $st['step'] = 'rolled_back';
+            $st['finished_at'] = time();
+            return;
+    }
+    throw new ShError('bad_state', '作業の段がわかりません: ' . $st['step']);
 }
 
 // 2 つの中身で、先頭と末尾の同じ行を除いた「変わる範囲」の行数(多い方)。差分の大きさの上限を、軽く・確実に測る
@@ -2357,6 +3083,7 @@ function sh_main()
             case 'apply_official_release': $r = op_apply_official_release($cfg, $args); break;
             case 'quarantine': $r = op_quarantine($cfg, $args); break;
             case 'apply_approved_fix': $r = op_apply_approved_fix($cfg, $args); break;
+            case 'upgrade': $r = op_upgrade($cfg, $args); break;
             case 'clear_cache': $r = op_clear_cache($cfg, $args); break;
             case 'release_quarantine': $r = sh_release(isset($args['quarantine_id']) ? $args['quarantine_id'] : null); break;
             case 'list_quarantine': $r = op_list_quarantine(); break;
