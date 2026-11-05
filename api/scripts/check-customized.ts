@@ -1,4 +1,4 @@
-// 開発用: 公式の修正を当てる道具が、お店の改造を上書きせずに断るかを確かめる(Claude は呼ばない)
+// 開発用: 公式の修正を当てる道具が、お店のカスタマイズを上書きせずに断るかを確かめる(Claude は呼ばない)
 import { FileStore } from "../src/store.js";
 import { runTool } from "../src/tools.js";
 const store = new FileStore(process.env.SH_DATA_DIR ?? "./data");

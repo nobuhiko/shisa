@@ -162,7 +162,7 @@
   var HEALTH_ITEMS = [['php', 'PHP(お店を動かす土台)'], ['eccube', 'EC-CUBE(お店のソフト)'], ['packages', '中の部品(ほかの開発元のプログラム)'],
     ['tamper', '書き換えられた跡'], ['exposure', '外から見えていた情報'], ['config', '設定の甘さ']];
   var JUDGE = { needs_human: [6, 'サーバー会社の作業', 'j-human'], needs_approval: [5, '店主の判断を待つ', 'j-approve'], scheduled: [4, '次の点検で Shisa が対応', 'j-next'], mitigated: [3, '守りを入れた(応急処置)', 'j-mit'], fixed: [2, '処置済み ✓', 'j-fixed'], not_affected: [1, '問題なし', 'j-ok'] };
-  // 人に渡す作業のうち、改造したコードの直しは制作会社の作業として出す(報告の項目の to: developer)
+  // 人に渡す作業のうち、カスタマイズしたコードの直しは制作会社の作業として出す(報告の項目の to: developer)
   var JUDGE_DEV = [6, '制作会社の作業', 'j-human'];
   function judgeOf(x) { return x.status === 'needs_human' && x.to === 'developer' ? JUDGE_DEV : (JUDGE[x.status] || JUDGE.not_affected); }
   function stLabelOf(x) { return x.status === 'needs_human' && x.to === 'developer' ? '制作会社の作業が必要' : (stLabels[x.status] || x.status); }
@@ -172,8 +172,8 @@
     var card = document.getElementById('sh-health-card'), body = document.getElementById('sh-health');
     body.textContent = ''; card.hidden = false;
     var items = HEALTH_ITEMS.slice();
-    // 改造したコードの行は、改造の点検をした報告にだけ出す
-    if (f.some(function (x) { return x.category === 'custom'; })) items.splice(4, 0, ['custom', '改造したコード(お店独自のプログラム)']);
+    // カスタマイズしたコードの行は、カスタマイズの点検をした報告にだけ出す
+    if (f.some(function (x) { return x.category === 'custom'; })) items.splice(4, 0, ['custom', 'カスタマイズしたコード(お店独自のプログラム)']);
     if (f.some(function (x) { return x.category === 'other'; })) items.push(['other', 'その他']);
     var trs = items.map(function (it) {
       var xs = f.filter(function (x) { return x.category === it[0]; });

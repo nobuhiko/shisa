@@ -560,7 +560,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       const paths = await Promise.all(raw.filter((p): p is string => typeof p === "string").map((p) => shopPathOf(shop, p)));
       const r = await callReceiver(shop, "scan_custom", paths.length ? { paths } : {}, 60_000);
       const n = r.ok ? (r.result.hits as unknown[]).length : 0;
-      return { content: j(r), isError: !r.ok, title: `改造したコードの点検: ${r.ok ? `${r.result.scanned} 件を調べ、気になる行 ${n} 件` : "できなかった"}` };
+      return { content: j(r), isError: !r.ok, title: `カスタマイズしたコードの点検: ${r.ok ? `${r.result.scanned} 件を調べ、気になる行 ${n} 件` : "できなかった"}` };
     }
     case "diff_with_official": {
       try {
@@ -628,7 +628,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         }
       }
       // EC-CUBE 本体の修正は、公式のデータで「全部のファイル」がそろっているかを確かめてから当てる(半端に置かない)
-      // 改造されたファイルのうち、公式の直しがすでに手で入っているものは「手で当て済み」として触らずに数え、残りだけ当てる
+      // カスタマイズされたファイルのうち、公式の直しがすでに手で入っているものは「手で当て済み」として触らずに数え、残りだけ当てる
       const manual: { path: string; sha: string; check: ReturnType<typeof fixAlreadyIn> }[] = [];
       let fixScopeFiles: string[] = [];
       if (!vpkg) {
@@ -639,7 +639,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           if (scope.blockers.length) {
             return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages. If it is an official release of the same line, use apply_official_release (it handles Composer packages; it refuses database changes). Otherwise apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           }
-          // お店の改造を上書きしない: 当てる先が、今の版の公式の中身と違えば(self-harden が当てたものを除く)断る
+          // お店のカスタマイズを上書きしない: 当てる先が、今の版の公式の中身と違えば(self-harden が当てたものを除く)断る
           const version = await installedVersion(shop);
           const m = await manifest(version);
           const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
@@ -667,7 +667,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       try { fromVersion = await installedVersion(shop); } catch { /* 分からなければ記録しない */ }
       const manualPaths = new Set(manual.map((x) => x.path));
       const toWrite = paths.filter((p) => !manualPaths.has(p));
-      // 手で当て済みの記録: Shisa は書いていない。今の中身(ハッシュ)を「直しが入った形」として覚え、照らし合わせで改造と見ないようにする
+      // 手で当て済みの記録: Shisa は書いていない。今の中身(ハッシュ)を「直しが入った形」として覚え、照らし合わせでカスタマイズと見ないようにする
       const recordManual = async () => {
         if (!ctx || !manual.length) return;
         await ctx.store.addApplied(shop.shop_id, manual.map((x) => ({ path: x.path, sha256: x.sha, ref: String(input.ref), source: "already in the shop (applied by hand)", reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "manual" as const })));
@@ -721,7 +721,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         const skippedRemoved = changed.filter((p) => p in from.files && !(p in mine));
         const notWritable = changed.filter((p) => !writable(p));
         const paths = changed.filter((p) => writable(p) && !skippedRemoved.includes(p));
-        // お店の改造を上書きしない
+        // お店のカスタマイズを上書きしない
         const customized = paths.filter((p) => p in mine && p in from.files && mine[p] !== from.files[p] && mine[p] !== to.files[p] && !applied.some((a) => a.path === p && a.sha256 === mine[p]));
         if (customized.length) {
           return { content: j({ ok: false, error: "customized_files", detail: "Nothing was written. These files differ from the official release of the installed version (likely the shop's own customization); applying the release would erase it. Report it to a person instead.", customized: customized.slice(0, 50), count: customized.length }), isError: true, title };

@@ -830,7 +830,7 @@ function op_read_file(array $args)
         throw new ShError('too_large', '256KB までのふつうのファイルだけ読めます');
     }
     $c = (string) file_get_contents($abs);
-    // 行の範囲を渡されたら、その行だけ返す(改造の点検で、怪しい所の前後だけ読む)。1 回に 80 行まで
+    // 行の範囲を渡されたら、その行だけ返す(カスタマイズの点検で、怪しい所の前後だけ読む)。1 回に 80 行まで
     if (isset($args['from']) || isset($args['to'])) {
         $lines = preg_split("/\r\n|\n|\r/", $c);
         $from = isset($args['from']) ? max(1, (int) $args['from']) : 1;
@@ -1535,7 +1535,7 @@ function op_list_quarantine()
     return ['quarantine' => $out];
 }
 
-// 改造の点検: 改造したコード(公式に無い・公式と違うファイル)を窓口の手元で調べ、一般的な危ない形がある行だけを返す。読むだけ。
+// カスタマイズの点検: カスタマイズしたコード(公式に無い・公式と違うファイル)を窓口の手元で調べ、一般的な危ない形がある行だけを返す。読むだけ。
 // 返すのは「ファイル、行、理由の種類、その 1 行(長い文字列は伏せる)」まで。ファイルの中身を丸ごとは返さない
 const SH_SCAN_MAX_FILES = 400;
 const SH_SCAN_MAX_HITS = 300;

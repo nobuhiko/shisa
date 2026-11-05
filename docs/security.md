@@ -5,7 +5,7 @@
 ## 形
 
 - 素の PHP 1 枚。EC-CUBE も Composer も読み込まない。ほかのファイルを `include` しない
-- 操作は決まった種類だけ(`ping` `inspect` `list_dir` `read_file` `write_file` `restore` `list_backups` `lab_arm` `hash_tree` `restore_official` `quarantine` `release_quarantine` `list_quarantine` `audit_tail` `apply_official_fix` `apply_official_release` `clear_cache` `scan_custom`)。コードを渡して動かす操作は無い。`scan_custom`(改造の点検)は読むだけで、中身は窓口の手元で調べ、怪しい行(長い文字列は伏せる)だけを返す
+- 操作は決まった種類だけ(`ping` `inspect` `list_dir` `read_file` `write_file` `restore` `list_backups` `lab_arm` `hash_tree` `restore_official` `quarantine` `release_quarantine` `list_quarantine` `audit_tail` `apply_official_fix` `apply_official_release` `clear_cache` `scan_custom`)。コードを渡して動かす操作は無い。`scan_custom`(カスタマイズの点検)は読むだけで、中身は窓口の手元で調べ、怪しい行(長い文字列は伏せる)だけを返す
 - **本体の PHP のファイルを書くときは、中身を受け口が自分で決まった公式の場所から取ってくる**(`restore_official`)。API が渡せるのは「どのファイルを、公式のどの版にするか」だけで、中身も URL も渡せない。鍵が漏れても、書けるのは公式の中身だけ
 - 鍵は `var/self-harden/config.php`。1 行目が PHP の `exit` なので、Web から開かれても中身は出ない。受け口は `include` せずに文字として読む
 - `var/self-harden/` には `Require all denied` の `.htaccess` も置く
@@ -48,7 +48,7 @@
 | 名前の許可(`.htaccess`、`composer.json` など)を使って、触ってはいけない場所の中のファイルを読む | 名前の許可は、触ってはいけない場所(`var/` など)の中では効かせない(退避ファイルと小部屋は別に許す) | 名前が許可の一覧にあっても読めない(3 件) |
 | キャッシュを消す操作で、決まった場所の外を消す | 消すのは `var/cache/prod` だけ。いったん `var/cache/.sh-old-…` に付け替えてから消す。シンボリックリンクなら触らない。消したあと店を開いて確かめる | キャッシュの場所がシンボリックリンクなら触らない |
 | 公式の修正の一部だけを当てて、半端な状態にする | 受け口は「全部取れなければ何も置かない」。加えて API が、公式のリポジトリ(コミットの変わったファイル、または今の版から指定の版までの差分)で全部のファイルがそろっているかを確かめ、足りなければ何も呼ばない。DB の作り変えや部品の入れ替えを含む版は断る | api/test/fixscope.test.ts |
-| (守りの道具そのものが)公式の修正を当てて、お店の改造を消してしまう | API が当てる前に、当てる先が今の版の公式の中身と違わないかを公式の一覧で確かめ、違えば何も置かない(self-harden が当てたものは除く) | api/scripts/check-customized.ts(サーバー C で確かめた) |
+| (守りの道具そのものが)公式の修正を当てて、お店のカスタマイズを消してしまう | API が当てる前に、当てる先が今の版の公式の中身と違わないかを公式の一覧で確かめ、違えば何も置かない(self-harden が当てたものは除く) | api/scripts/check-customized.ts(サーバー C で確かめた) |
 | 何をされたか分からない | 署名が通った操作を `var/self-harden/audit.log` に 1 行ずつ(時刻・操作・パス・結果・退避の番号)。中身と鍵は書かない。1MB で古い半分を切る | 記録が残る / 鍵や中身は書かない / 署名が通らなかった呼び出しは記録しない |
 
 ## 残る危うさ

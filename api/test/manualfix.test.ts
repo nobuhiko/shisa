@@ -16,10 +16,10 @@ const patch = [
 const official = ["<?php", "class SampleController", "{", "    public function index(Request $request)", "    {", "        $name = $request->get('name');", "        return $this->render($name);", "    }", "}"].join("\n");
 
 describe("公式の直しが手で入っているか", () => {
-  it("改造があっても、足した行がそろい消した行が無ければ入っている", () => {
+  it("カスタマイズがあっても、足した行がそろい消した行が無ければ入っている", () => {
     const shop = official
       .replace("        $name = $request->get('name');", "        $name = (string) $request->get('name');\n        $name = mb_substr($name, 0, 100);")
-      .replace("}\n", "}\n// 店の改造: 独自の処理\nfunction shop_custom_helper() { return 1; }\n");
+      .replace("}\n", "}\n// 店のカスタマイズ: 独自の処理\nfunction shop_custom_helper() { return 1; }\n");
     const r = fixAlreadyIn(patch, shop);
     expect(r.applied).toBe(true);
     expect(r.added_lines).toBe(2);
@@ -28,8 +28,8 @@ describe("公式の直しが手で入っているか", () => {
     const shop = official.replace("        $name = $request->get('name');", "\t$name = (string)  $request->get('name');\n\t$name = mb_substr($name, 0, 100);");
     expect(fixAlreadyIn(patch, shop).applied).toBe(true);
   });
-  it("直していない改造ファイルは入っていない", () => {
-    const shop = official + "\n// 店の改造\n";
+  it("直していないカスタマイズファイルは入っていない", () => {
+    const shop = official + "\n// 店のカスタマイズ\n";
     const r = fixAlreadyIn(patch, shop);
     expect(r.applied).toBe(false);
     expect(r.missing_added).toBe(2);

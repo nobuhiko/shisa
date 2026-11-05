@@ -1,6 +1,6 @@
 <?php
 // SPDX-License-Identifier: GPL-2.0-or-later
-// 改造の点検(scan_custom)と、行の範囲で読む read_file のテスト(tests/run.sh から docker の中で動かす)。
+// カスタマイズの点検(scan_custom)と、行の範囲で読む read_file のテスト(tests/run.sh から docker の中で動かす)。
 // 取りこぼしより、秘密を返さないこと・上限を守ることを優先して確かめる。お店は data/ を公開の場所の中に置いた 2 系
 
 $here = dirname(__DIR__);
@@ -85,7 +85,7 @@ function err($r)
 }
 
 
-// 改造したファイル(どれも動かさない。中身を文字として調べるだけ)
+// カスタマイズしたファイル(どれも動かさない。中身を文字として調べるだけ)
 @mkdir($shop . '/custom', 0777, true);
 @mkdir($shop . '/upload/save_image', 0777, true);
 @mkdir($shop . '/many', 0777, true);
@@ -107,7 +107,7 @@ for ($i = 0; $i < 20; $i++) {
 @mkdir($shop . '/.git', 0777, true);
 file_put_contents($shop . '/.git/hook.php', "<?php eval(\$_GET['x']);\n");
 
-echo "改造の点検(渡したファイル)\n";
+echo "カスタマイズの点検(渡したファイル)\n";
 $paths = ['custom/sqli.php', 'custom/xss.php', 'custom/dyn.php', 'custom/obf.php', 'custom/secret.php', 'custom/clean.php', 'custom/view.tpl',
     'custom/notes.txt', 'upload/save_image/a.php', 'data/config/config.php', 'data/self-harden/config.php', 'self-harden.php', 'docker/prod/local.env',
     '../outside.php', '/etc/passwd', '.git/hook.php', 'custom/nothing.php'];
@@ -139,7 +139,7 @@ check('秘密らしい名前のそばの文字列は伏せる', strpos($all, 'hu
 check('ファイルの中身を丸ごとは返さない(1 行だけ・短い)', max(array_map(function ($h) { return strlen($h[3]); }, $res['hits'] ?: [[0, 0, 0, '']])) <= 170);
 check('無い・外のファイルは数えて飛ばす', $res['skipped']['not_allowed'] >= 5 && $res['skipped']['missing'] >= 1, json_encode($res['skipped']));
 
-echo "改造の点検(上限)\n";
+echo "カスタマイズの点検(上限)\n";
 $r = call('shop', 'scan_custom', ['paths' => ['many/lines.php']]);
 $n = !empty($r['json']['ok']) ? count($r['json']['result']['hits']) : -1;
 check('1 ファイルから返すのは 20 件まで', $n === 20, (string) $n);
@@ -153,7 +153,7 @@ check('1 回に返すのは 300 件まで、打ち切ったことを知らせる
 $r = call('shop', 'scan_custom', ['paths' => $many, 'max_files' => 2]);
 check('調べるファイルの数の上限', !empty($r['json']['ok']) && $r['json']['result']['scanned'] === 2, $r['body']);
 
-echo "改造の点検(渡さないときは本体の場所を歩く)\n";
+echo "カスタマイズの点検(渡さないときは本体の場所を歩く)\n";
 $r = call('shop', 'scan_custom', []);
 $names = !empty($r['json']['ok']) ? array_values(array_unique(array_column($r['json']['result']['hits'], 0))) : [];
 check('歩いて見つける', in_array('custom/sqli.php', $names, true), json_encode($names));

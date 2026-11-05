@@ -130,7 +130,7 @@ export function summarize(name: string, content: string, isError?: boolean): str
     case "clear_cache":
       return errOf(d) ?? `キャッシュを消した。店を開いて確かめた(${((d.result?.verify ?? []) as any[]).map((x) => `${x.path} ${x.status}`).join("、")})`;
     case "apply_official_release": {
-      if (d.error === "customized_files") return `お店の改造があるファイル(${d.count} 件)を上書きしてしまうので、何も置いていない`;
+      if (d.error === "customized_files") return `お店のカスタマイズがあるファイル(${d.count} 件)を上書きしてしまうので、何も置いていない`;
       if (d.error === "needs_db_change") return "データベースの作り変えが要る版なので、何も置いていない";
       if (errOf(d)) return `${errOf(d)}(何も置いていない)`;
       const r = d.result;
@@ -139,7 +139,7 @@ export function summarize(name: string, content: string, isError?: boolean): str
       return r.rolled_back ? `店が開けなくなったので、全部戻した(${v})` : `${r.from} → ${r.ref}: ${r.written} ファイルを公式の配布物どおりに置いた(部品 ${r.by_top?.vendor ?? 0}${r.composer_lock ? "、composer.lock も" : ""})。店を開いて確かめた(${v})`;
     }
     case "apply_official_fix": {
-      if (d.error === "customized_files") return `お店の改造があるファイル(${d.customized.length} 件)を上書きしてしまうので、何も置いていない`;
+      if (d.error === "customized_files") return `お店のカスタマイズがあるファイル(${d.customized.length} 件)を上書きしてしまうので、何も置いていない`;
       if (d.error === "incomplete_fix") return `公式の修正のファイルがそろっていないので、何も置いていない(足りない ${d.missing.length} 件)`;
       if (d.error === "needs_db_or_vendor_change") return "DB や部品の変更が要る版なので、何も置いていない";
       if (errOf(d)) return `${errOf(d)}(何も置いていない)`;
