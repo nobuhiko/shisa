@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Agent の 1 歩。モデルを 1 回呼び、出てきた道具を実行して、結果を保存する。
 // 1 歩ずつ保存するので、途中で止まっても次の 1 歩から続けられる(Workers では alarm から呼ぶ)
+import { reportGaps } from "./reportcheck.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT, firstUserMessage, advisoryNote } from "./prompt.js";
 import { CLIENT_TOOLS, SERVER_TOOLS, runTool } from "./tools.js";
@@ -292,6 +293,15 @@ export async function step(client: Anthropic, store: Store, run: Run, shop: Shop
     const note = typeof (u.input as any)?.note === "string" && (u.input as any).note.trim() ? await toJapanese(client, (u.input as any).note.trim(), run) : out.title;
     push(run, out.isError ? "error" : out.decision ? "decision" : "tool", note, short(out.content, 3000), out.decision ? undefined : summarize(u.name, out.content, out.isError), out.title);
     if (out.waitSec) waitSec = Math.max(waitSec, out.waitSec);
+    // 報告の前に一度だけ見直す(費用の上限に達したあとは見直さない)
+    if (out.report && !(run as any).report_reviewed && !run.budget_hit) {
+      const gaps = reportGaps(out.report);
+      if (gaps.length) {
+        (run as any).report_reviewed = true;
+        push(run, "info", "報告の書き方を一度だけ見直してもらう(サーバー会社への依頼を別の項目にする)");
+        out = { content: JSON.stringify({ ok: false, error: "report_needs_revision", detail: gaps.join(" ") + " Then call report again with the whole report." }), isError: true, title: "報告を見直す" };
+      }
+    }
     if (out.report) {
       // 次の点検で「前回から変わったか」を見られるように、終わったときの指紋を残す
       try { (run as any).fingerprint = await fingerprint(shop); } catch { /* 無くても報告は出す */ }

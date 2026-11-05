@@ -7,6 +7,7 @@ import { callReceiver } from "./receiver.js";
 import { vendorFixScope, manifest, officialContent, officialFixScope } from "./official.js";
 import type { Shop, Store } from "./store.js";
 import { checkPackages, loadResearch, saveResearch, compareWithPrevious } from "./research.js";
+import { fixAlreadyIn } from "./manualfix.js";
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 
@@ -103,6 +104,12 @@ export const CLIENT_TOOLS: Tool[] = [
     input_schema: obj({
       paths: { type: "array", items: { type: "string" }, maxItems: 400, description: "Custom files to check (shop paths or official names)" },
     }),
+  },
+  {
+    name: "find_misplaced_php",
+    description:
+      "Walk, to the end, the folders where PHP should never be (image and upload folders, user files, logs; generated caches are excluded) and list every PHP-like file there: PHP extensions in any case (.php, .phtml, .phar, .php5, .php7, .pht, .phps, .inc) and files with another extension whose first bytes are PHP code. Unlike file listings, it is not cut off by the listing limit. Returns path, reason, size and mtime only (never contents); complete=false means it stopped at its own walk/time limit and the rest was not checked. Each file found is a possible trace of intrusion: read it (read_file) to judge, and quarantine it under the usual tamper rules.",
+    input_schema: obj({}),
   },
   {
     name: "diff_with_official",
@@ -516,7 +523,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           if (m.source_only && p.startsWith(m.vendor_dir ?? "vendor/")) { vendorNotCompared++; continue; }
           const fx = intendedBy.get(p);
           if (fx && fx.sha256 === sha) {
-            intended.push({ path: p, ref: fx.ref, reason: fx.reason, applied_at: new Date(fx.at).toISOString() });
+            intended.push({ path: p, ref: fx.ref, reason: fx.reason, via: fx.via ?? "fix", applied_at: new Date(fx.at).toISOString() });
             continue;
           }
           if (p in m.files) {
@@ -533,7 +540,7 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
             vendor_not_compared: m.source_only ? { count: vendorNotCompared, note: "the official source for this version has no vendor/; check Composer packages with check_packages" } : undefined,
             left_from_previous_release: leftover.length ? { count: leftover.length, from: lastRelease?.from_version, note: "unchanged files of the previous official release that the update did not remove; not traces of intrusion", by_top: byTop(leftover) } : undefined,
             shop_files: Object.keys(mine).length,
-            intended: { count: intended.length, note: "official fixes applied by self-harden, still as written", items: intended },
+            intended: { count: intended.length, note: "official fixes applied by self-harden (via fix/release), or official fixes found already applied by hand in a customized file (via manual), still as recorded", items: intended },
             modified: { count: modified.length, by_top: byTop(modified), paths: modified.sort().slice(0, 300) },
             added: { count: added.length, by_top: byTop(added), paths: added.sort().slice(0, 300), other_files_not_listed: addedOther },
             missing: { count: missing.length, by_top: byTop(missing), sample: missing.sort().slice(0, 30) },
@@ -543,6 +550,10 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       } catch (e) {
         return { content: j({ error: (e as Error).message }), isError: true, title: "公式の配布物と照らし合わせる" };
       }
+    }
+    case "find_misplaced_php": {
+      const r = await callReceiver(shop, "find_misplaced_php", {}, 30_000);
+      return { content: j(r), isError: !r.ok, title: `置き場所違いの PHP を探す: ${r.ok ? `${r.result.walked} 件を歩いて ${(r.result.found as unknown[]).length} 件${r.result.complete ? "" : "(最後までは調べられなかった)"}` : "できなかった"}` };
     }
     case "scan_custom": {
       const raw: unknown[] = Array.isArray(input.paths) ? input.paths.slice(0, 400) : [];
@@ -617,9 +628,13 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
         }
       }
       // EC-CUBE 本体の修正は、公式のデータで「全部のファイル」がそろっているかを確かめてから当てる(半端に置かない)
+      // 改造されたファイルのうち、公式の直しがすでに手で入っているものは「手で当て済み」として触らずに数え、残りだけ当てる
+      const manual: { path: string; sha: string; check: ReturnType<typeof fixAlreadyIn> }[] = [];
+      let fixScopeFiles: string[] = [];
       if (!vpkg) {
         try {
           const scope = await officialFixScope(await installedVersion(shop), String(input.ref));
+          fixScopeFiles = scope.files;
           const missing = scope.files.filter((f) => !paths.includes(f));
           if (scope.blockers.length) {
             return { content: j({ ok: false, error: "needs_db_or_vendor_change", detail: "This official change also alters the database schema/migrations or Composer packages. If it is an official release of the same line, use apply_official_release (it handles Composer packages; it refuses database changes). Otherwise apply nothing and report it.", blockers: scope.blockers, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
@@ -628,14 +643,18 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           const version = await installedVersion(shop);
           const m = await manifest(version);
           const applied = ctx ? await ctx.store.getApplied(shop.shop_id) : [];
-          const customized: string[] = [];
+          const customized: { path: string; added_lines: number; missing_added: number; remaining_removed: number }[] = [];
           for (const p of paths) {
             if (!m.files[p]) continue; // 公式に無い新しいファイル
             const cur = await currentFile(shop, p);
-            if (cur.sha && cur.sha !== m.files[p] && !applied.some((a) => a.path === p && a.sha256 === cur.sha)) customized.push(p);
+            if (cur.sha && cur.sha !== m.files[p] && !applied.some((a) => a.path === p && a.sha256 === cur.sha)) {
+              const check = fixAlreadyIn(scope.patches?.[p], cur.content);
+              if (check.applied) manual.push({ path: p, sha: cur.sha, check });
+              else customized.push({ path: p, added_lines: check.added_lines, missing_added: check.missing_added, remaining_removed: check.remaining_removed });
+            }
           }
           if (customized.length) {
-            return { content: j({ ok: false, error: "customized_files", detail: "Nothing was written. These files differ from the official release of the installed version (likely the shop's own customization); applying official files would erase it. Report it to a person instead.", customized, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
+            return { content: j({ ok: false, error: "customized_files", detail: "Nothing was written. These files differ from the official release of the installed version (likely the shop's own customization), and the official change is not (fully) in them; applying official files would erase the customization. Report it to a person instead.", customized, already_applied_by_hand: manual.map((x) => x.path), source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
           }
           if (missing.length) {
             return { content: j({ ok: false, error: "incomplete_fix", detail: "Nothing was written. The official change includes more files; list all of them together.", required_files: scope.files, missing, source: scope.source }), isError: true, title: `公式の修正を当てる: ${input.ref}` };
@@ -646,8 +665,22 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
       }
       let fromVersion: string | undefined;
       try { fromVersion = await installedVersion(shop); } catch { /* 分からなければ記録しない */ }
+      const manualPaths = new Set(manual.map((x) => x.path));
+      const toWrite = paths.filter((p) => !manualPaths.has(p));
+      // 手で当て済みの記録: Shisa は書いていない。今の中身(ハッシュ)を「直しが入った形」として覚え、照らし合わせで改造と見ないようにする
+      const recordManual = async () => {
+        if (!ctx || !manual.length) return;
+        await ctx.store.addApplied(shop.shop_id, manual.map((x) => ({ path: x.path, sha256: x.sha, ref: String(input.ref), source: "already in the shop (applied by hand)", reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "manual" as const })));
+      };
+      const manualOut = manual.map((x) => ({ path: x.path, added_lines: x.check.added_lines }));
+      // 全部の対象ファイルが、今回当てたもの・手で当て済みのものでそろったか(そろわなければ、版が上がったとはみなさない)
+      const complete = !vpkg && fixScopeFiles.length > 0 && fixScopeFiles.every((f) => paths.includes(f));
+      if (!toWrite.length) {
+        await recordManual();
+        return { content: j({ ok: true, result: { applied: [], already_applied_by_hand: manualOut, not_applied_customized: [], complete, note: "Every target file already contains the official change (applied by hand). Nothing was written." } }), title: `公式の修正を当てる: 手で当て済み ${manual.length} ファイル @ ${input.ref}` };
+      }
       const shopPaths: string[] = [];
-      for (const p of paths) shopPaths.push(await shopPathOf(shop, p));
+      for (const p of toWrite) shopPaths.push(await shopPathOf(shop, p));
       const r = await callReceiver(shop, "apply_official_fix", {
         ref: input.ref,
         paths: shopPaths,
@@ -658,8 +691,10 @@ export async function runTool(shop: Shop, name: string, input: any, ctx?: ToolCo
           shop.shop_id,
           await Promise.all((r.result.applied as any[]).map(async (a) => ({ path: await officialPathOf(shop, a.path), sha256: a.sha256_after, ref: String(input.ref), source: a.source, reason: String(input.reason ?? ""), run_id: ctx.runId, at: Date.now(), from_version: fromVersion, via: "fix" as const, package_complete: vpkg ? true : undefined }))),
         );
+        await recordManual();
       }
-      return { content: j(r), isError: !r.ok, title: `公式の修正を当てる: ${(input.paths ?? []).length} ファイル @ ${input.ref}` };
+      const out = r.ok && manual.length ? { ...r, result: { ...r.result, already_applied_by_hand: manualOut, not_applied_customized: [], complete } } : r;
+      return { content: j(out), isError: !r.ok, title: `公式の修正を当てる: ${toWrite.length} ファイル${manual.length ? `(手で当て済み ${manual.length})` : ""} @ ${input.ref}` };
     }
     case "apply_official_release": {
       const ref = String(input.ref ?? "");

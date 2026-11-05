@@ -167,6 +167,7 @@ export interface FixScope {
   files: string[]; // 店に置く対象(src/ app/ html/ と root 直下のファイル)
   blockers: string[]; // この手ではやりきれない変更(DB の作り変え、部品の入れ替え)
   source: string;
+  patches?: Record<string, string>; // ファイルごとの公式の差分(手で当て済みかを見分けるのに使う。大きいファイルは GitHub が省くので無いこともある)
 }
 
 function inShopCode(p: string) {
@@ -185,12 +186,14 @@ export async function officialFixScope(installed: string, ref: string): Promise<
   else throw new Error(`公式の修正の範囲を出せない版の指定です: ${ref}`);
   const res = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "self-harden" }, signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`公式の修正の範囲を取れませんでした: HTTP ${res.status}`);
-  const data = (await res.json()) as { files?: { filename: string; status: string }[] };
+  const data = (await res.json()) as { files?: { filename: string; status: string; patch?: string }[] };
   const all = (data.files ?? []).map((f) => f.filename);
   const blockers = all.filter((p) => /^app\/DoctrineMigrations\//.test(p) || /^src\/Eccube\/Entity\//.test(p) || p === "composer.lock" || p === "composer.json" || (v2 && /^html\/install\/sql\//.test(p)));
   const inCode = v3 ? (p: string) => /^(src|app|html)\//.test(p) && !/^app\/config\//.test(p) : v2 ? (p: string) => /^(data|html)\//.test(p) && !/^data\/vendor\//.test(p) && !/^html\/install\//.test(p) : inShopCode;
   const files = all.filter((p) => inCode(p) && !blockers.includes(p) && (data.files ?? []).find((f) => f.filename === p)?.status !== "removed");
-  return { files, blockers, source: url.replace("https://api.github.com/repos/", "https://github.com/") };
+  const patches: Record<string, string> = {};
+  for (const f of data.files ?? []) if (files.includes(f.filename) && typeof f.patch === "string") patches[f.filename] = f.patch;
+  return { files, blockers, source: url.replace("https://api.github.com/repos/", "https://github.com/"), patches };
 }
 
 // ---- 部品(vendor/)の修正の「全部のファイル」を、その部品の公式リポジトリ(composer.lock の置き場)の差分から出す ----

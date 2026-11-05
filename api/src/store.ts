@@ -49,7 +49,7 @@ export interface AppliedFix {
   run_id: string;
   at: number;
   from_version?: string; // 当てる前の版(修正で版が変わったときの照らし合わせの基準)
-  via?: "fix" | "release";
+  via?: "fix" | "release" | "manual"; // manual: 公式の直しが手で入っていたのを見つけて数えたもの(Shisa は書いていない)
   package_complete?: boolean; // 部品の修正を、公式の差分で全部のファイルをそろえて当てたもの
 }
 
