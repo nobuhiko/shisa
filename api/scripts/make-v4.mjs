@@ -386,16 +386,8 @@ if (!(pm.upgrade && pm.done)) console.log("承認", JSON.stringify({ len: plen.t
   // 右下の札(点検中も営業中・ご注文の件数)は、買い物の録画が終わると最後の約 1 秒で消える。止めるあいだは、まだ札がはっきり出ているコマ(終わりの 1.6 秒前)から切り出して重ねる(終わりの 1 秒ほどは札が消えかけて薄い)
   const sd = dur(src), badge = join(out, "k0-badge.png");
   ff("-ss", (sd - 1.6).toFixed(3), "-i", src, "-frames:v", "1", "-vf", "crop=370:110:1515:930", badge);
-  // 結果の画面は約 2 秒止めて見せ、そのあと管理画面の「システム情報」(EC-CUBE 4.2.3-p2 の行)に 0.4 秒で切り替え、その行へゆっくり寄る(最大 1.3 倍)(2026-11-06: 10 秒ほど画面が動かないのが気になる、と本人)
-  const HOLD = Math.min(2.2, clip.k0.d), X = 0.4, sysLen = clip.k0.d - HOLD + X;
-  const sdir = join(out, "sysinfo"); execFileSync("rm", ["-rf", sdir]);
-  const srec = sh("node", [join(ROOT, "api/scripts/record-sysinfo.cjs"), SHOP, sdir, String(sysLen + 1)]);
-  const ready = Number((/READY ([0-9.]+)/.exec(srec) || [])[1] || 1);
-  const swebm = join(sdir, readdirSync(sdir).find((f) => f.endsWith(".webm")));
-  ff("-i", src, "-i", clip.k0.file, "-i", badge, "-ss", (ready + 0.3).toFixed(3), "-t", sysLen.toFixed(3), "-i", swebm, "-filter_complex",
-    `[0:v]tpad=stop_mode=clone:stop_duration=${HOLD.toFixed(3)}[t];[t][2:v]overlay=1515:930:enable='gte(t,${(sd - 1.2).toFixed(3)})',fps=30,settb=1/30[a0];` +
-    `[3:v]fps=30,scale=1920:1080,tpad=stop_mode=clone:stop_duration=1,zoompan=z='min(1+0.0011*on,1.3)':x='560-560/zoom':y='300-300/zoom':d=1:s=1920x1080:fps=30,settb=1/30[s];[a0][s]xfade=transition=fade:duration=${X}:offset=${(sd + HOLD - X).toFixed(3)},trim=duration=${(sd + clip.k0.d).toFixed(3)}[v];` +
-    `[1:a]aresample=48000,aformat=channel_layouts=stereo[k];[0:a][k]concat=n=2:v=0:a=1[a]`,
+  // 結果の画面を止めたまま読む(2026-11-06: システム情報に切り替えるのは時間つぶしに見えるのでやめ、台詞を短くした)
+  ff("-i", src, "-i", clip.k0.file, "-i", badge, "-filter_complex", `[0:v]tpad=stop_mode=clone:stop_duration=${clip.k0.d.toFixed(3)}[t];[t][2:v]overlay=1515:930:enable='gte(t,${(sd - 1.2).toFixed(3)})'[v];[1:a]aresample=48000,aformat=channel_layouts=stereo[k];[0:a][k]concat=n=2:v=0:a=1[a]`,
     "-map", "[v]", "-map", "[a]", ...enc, tmp);
   execFileSync("mv", [tmp, src]); }
 for (const k of ["ketsu1", "ketsu2", "ketsu3"]) clip[k] = { file: join(prev, k + ".wav"), d: dur(join(prev, k + ".wav")) };
