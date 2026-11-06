@@ -327,7 +327,8 @@ if (pm.upgrade && pm.done) {
   if (dim.length) dim.at(-1).b = 9999;
   // 健康診断の表を見せているあいだ(カードへスクロールする前)は暗くしない(早送りの最後の表とのつなぎ目を変えないため)
   const dimFrom = (() => { let t = 0; for (const x of parts) { if (pm.scroll <= x.b) return t + Math.max(0, pm.scroll - x.a) * x.f; t += x.outLen; } return 0; })();
-  const dimF = dim.filter((d) => d.y !== null && d.b > dimFrom).map((d) => ({ ...d, a: Math.max(d.a, dimFrom) })).map((d) => `drawbox=x=0:y=${d.y}:w=1920:h=${1080 - d.y}:color=0x0d172a@0.82:t=fill:enable='between(t,${d.a.toFixed(2)},${d.b.toFixed(2)})'`).join(",");
+  // 2026-11-06: 半透明の紺が白い画面の上で灰色に見えるので、暗くするのはやめた(DIM=1 のときだけ重ねる)
+  const dimF = process.env.DIM !== "1" ? "" : dim.filter((d) => d.y !== null && d.b > dimFrom).map((d) => ({ ...d, a: Math.max(d.a, dimFrom) })).map((d) => `drawbox=x=0:y=${d.y}:w=1920:h=${1080 - d.y}:color=0x0d172a@0.82:t=fill:enable='between(t,${d.a.toFixed(2)},${d.b.toFixed(2)})'`).join(",");
   const belowAt = (t) => below[Math.max(0, Math.min(below.length - 1, Math.round(t * 10)))];
   // 壁時計 → 出力の秒
   const outT = (w) => { let t = 0; for (const x of parts) { if (w <= x.b) return t + Math.max(0, w - x.a) * x.f; t += x.outLen; } return t; };
@@ -379,11 +380,27 @@ if (!(pm.upgrade && pm.done)) console.log("承認", JSON.stringify({ len: plen.t
   ff("-i", join(out, "3-film.mp4"), "-i", join(out, "3b-approve.mp4"), "-filter_complex",
     `[0:v][1:v]xfade=transition=fade:duration=${X}:offset=${(fl - X).toFixed(3)}[v];[0:a][1:a]acrossfade=d=${X}[a]`,
     "-map", "[v]", "-map", "[a]", ...enc, join(out, "3c-film-approve.mp4")); }
-// 3c. 結: 場面 KE を録り直し、1 行目(k0)と 2 行目(ketsu1)を、健康診断が並ぶ最初の画面で続けて読む。
-// 場面 KE は 3 つの区切り(並び → 志 → 名前)なので、最初の区切りの長さを k0 + ketsu1 にする。最初の区切りの字幕は ketsu1 の文なので、k0 を読むあいだは字幕を隠す
+// 3c. 結の 1 行目(k0「店主さんがしたのは…」)は、承認の場面の最後(上げて確かめた結果の画面)を止めたまま読む。
+// 結の場面 KE(並び → 志 → 名前)は 2 行目(ketsu1「2系から、4系まで」)から始める(2026-11-06: 並びの絵の上で k0 を読むと、話と画面が 1 行ずれていた)
+{ const src = join(out, "3c-film-approve.mp4"), tmp = join(out, "3c-film-approve-k0.mp4");
+  // 右下の札(点検中も営業中・ご注文の件数)は、買い物の録画が終わると最後の約 1 秒で消える。止めるあいだは、まだ札がはっきり出ているコマ(終わりの 1.6 秒前)から切り出して重ねる(終わりの 1 秒ほどは札が消えかけて薄い)
+  const sd = dur(src), badge = join(out, "k0-badge.png");
+  ff("-ss", (sd - 1.6).toFixed(3), "-i", src, "-frames:v", "1", "-vf", "crop=370:110:1515:930", badge);
+  // 結果の画面は約 2 秒止めて見せ、そのあと管理画面の「システム情報」(EC-CUBE 4.2.3-p2 の行)に 0.4 秒で切り替え、その行へゆっくり寄る(最大 1.3 倍)(2026-11-06: 10 秒ほど画面が動かないのが気になる、と本人)
+  const HOLD = Math.min(2.2, clip.k0.d), X = 0.4, sysLen = clip.k0.d - HOLD + X;
+  const sdir = join(out, "sysinfo"); execFileSync("rm", ["-rf", sdir]);
+  const srec = sh("node", [join(ROOT, "api/scripts/record-sysinfo.cjs"), SHOP, sdir, String(sysLen + 1)]);
+  const ready = Number((/READY ([0-9.]+)/.exec(srec) || [])[1] || 1);
+  const swebm = join(sdir, readdirSync(sdir).find((f) => f.endsWith(".webm")));
+  ff("-i", src, "-i", clip.k0.file, "-i", badge, "-ss", (ready + 0.3).toFixed(3), "-t", sysLen.toFixed(3), "-i", swebm, "-filter_complex",
+    `[0:v]tpad=stop_mode=clone:stop_duration=${HOLD.toFixed(3)}[t];[t][2:v]overlay=1515:930:enable='gte(t,${(sd - 1.2).toFixed(3)})',fps=30,settb=1/30[a0];` +
+    `[3:v]fps=30,scale=1920:1080,tpad=stop_mode=clone:stop_duration=1,zoompan=z='min(1+0.0011*on,1.3)':x='560-560/zoom':y='300-300/zoom':d=1:s=1920x1080:fps=30,settb=1/30[s];[a0][s]xfade=transition=fade:duration=${X}:offset=${(sd + HOLD - X).toFixed(3)},trim=duration=${(sd + clip.k0.d).toFixed(3)}[v];` +
+    `[1:a]aresample=48000,aformat=channel_layouts=stereo[k];[0:a][k]concat=n=2:v=0:a=1[a]`,
+    "-map", "[v]", "-map", "[a]", ...enc, tmp);
+  execFileSync("mv", [tmp, src]); }
 for (const k of ["ketsu1", "ketsu2", "ketsu3"]) clip[k] = { file: join(prev, k + ".wav"), d: dur(join(prev, k + ".wav")) };
 {
-  const segs = [clip.k0.d + clip.ketsu1.d, clip.ketsu2.d, clip.ketsu3.d];
+  const segs = [clip.ketsu1.d, clip.ketsu2.d, clip.ketsu3.d];
   const kdir = join(out, "ke"); execFileSync("rm", ["-rf", kdir]);
   sh("node", [join(ROOT, "api/scripts/record-scene.cjs"), `KE&d=${segs.map((x) => x.toFixed(2)).join(",")}&mark=1`, kdir, ".kv-layer.in", "結"]);
   const kwebm = join(kdir, readdirSync(kdir).find((f) => f.endsWith(".webm")));
@@ -391,17 +408,18 @@ for (const k of ["ketsu1", "ketsu2", "ketsu3"]) clip[k] = { file: join(prev, k +
   if (flips.length !== 3) throw new Error(`結の目印が ${flips.length} 個(3 個のはず)`);
   const ratio = (flips[2] - flips[0]) / (segs[0] + segs[1]);
   const seg = flips.map((a, i) => [a, i + 1 < 3 ? flips[i + 1] : Math.min(end, a + segs[2] * ratio)]);
-  writeFileSync(join(out, "end.list"), ["k0", "ketsu1", "ketsu2", "ketsu3"].map((k) => `file '${clip[k].file}'`).join("\n"));
+  writeFileSync(join(out, "end.list"), ["ketsu1", "ketsu2", "ketsu3"].map((k) => `file '${clip[k].file}'`).join("\n"));
   const ewav = join(out, "end-voice.wav"); ff("-f", "concat", "-safe", "0", "-i", join(out, "end.list"), "-c", "copy", ewav);
   ff("-i", kwebm, "-i", ewav, "-filter_complex",
     `[0:v]fps=30,drawbox=x=1896:y=1056:w=24:h=24:color=0x0d172a:t=fill,split=3[s0][s1][s2];` +
     seg.map(([a, b], i) => `[s${i}]trim=${a.toFixed(3)}:${b.toFixed(3)},setpts=(PTS-STARTPTS)*${(segs[i] / (b - a)).toFixed(5)}[v${i}]`).join(";") +
-    `;[v0][v1][v2]concat=n=3:v=1:a=0,drawbox=x=0:y=960:w=1920:h=120:color=0x0d172a:t=fill:enable='lte(t,${clip.k0.d.toFixed(2)})'[v]`,
+    `;[v0][v1][v2]concat=n=3:v=1:a=0[v]`,
     "-map", "[v]", "-map", "1:a", "-t", segs.reduce((a, x) => a + x, 0).toFixed(3), ...enc, join(out, "4-end.mp4"));
 }
 for (const p of ["1-ki", "2-intro"]) if (!existsSync(join(prev, p + ".mp4"))) throw new Error(`${p}.mp4 が video/full に無い(先に make-full.mjs を回す)`);
-// 0 秒: 応募先の名前(場面 O)。音は無音
-{
+// 0 秒: 応募先の名前(場面 O)。音は無音。story.json の opening.show が false なら出さない(2026-11-06: 名前からシーサーへの切り替わりが急に感じるので外した)
+const SHOW_OPEN = story.opening?.show !== false;
+if (SHOW_OPEN) {
   const odir = join(out, "open"); execFileSync("rm", ["-rf", odir]);
   const olen = (story.opening?.hold || 2.5) + 0.7;
   const orec = sh("node", [join(ROOT, "api/scripts/record-opening.cjs"), odir, String(olen)]);
@@ -411,15 +429,19 @@ for (const p of ["1-ki", "2-intro"]) if (!existsSync(join(prev, p + ".mp4"))) th
   ff("-ss", (trim + 0.15).toFixed(3), "-t", olen.toFixed(3), "-i", owebm, "-f", "lavfi", "-t", olen.toFixed(3), "-i", "anullsrc=r=48000:cl=stereo",
     "-map", "0:v", "-map", "1:a", "-t", olen.toFixed(3), ...enc, join(out, "0-open.mp4"));
 }
-// 導入の終わりの無音(最後の行のあとの間)と、結の終わりの無音を少し詰める(3 分に収めるため。話は削らない)
-const ITRIM = Number(process.env.ITRIM || 1.4), ETRIM = Number(process.env.ETRIM || 0.6);
+// 導入の終わりの無音(最後の行「貼ってみましょう」のあとの間)と、結の終わりの無音を少し詰める(3 分に収めるため。話は削らない)。導入のあとは、貼る操作を見せる間として少し残す
+const ITRIM = Number(process.env.ITRIM || 0.6), ETRIM = Number(process.env.ETRIM || 0.6);
 const introT = join(out, "2-intro-trim.mp4"); ff("-i", join(prev, "2-intro.mp4"), "-t", (dur(join(prev, "2-intro.mp4")) - ITRIM).toFixed(3), ...enc, introT);
 const endT9 = join(out, "4-end-trim.mp4"); ff("-i", join(out, "4-end.mp4"), "-t", (dur(join(out, "4-end.mp4")) - ETRIM).toFixed(3), "-af", `afade=t=out:st=${(dur(join(out, "4-end.mp4")) - ETRIM - 0.4).toFixed(3)}:d=0.4`, ...enc, endT9);
-writeFileSync(join(out, "all.list"), [join(out, "0-open.mp4"), join(prev, "1-ki.mp4"), introT, join(out, "3c-film-approve.mp4"), endT9].map((f) => `file '${f}'`).join("\n"));
+// 紺の背景の場面(冒頭・起・結)は、Playwright の録画(VP8)で背景の紺が数コマごとに少しずつ違う色にゆれて、ちらついて見える。紺に近い色を、ちょうどの紺 #0d172a に塗りそろえる
+const FLAT = "split[a][b];[a]drawbox=c=0x0d172a:t=fill[bg];[b]colorkey=0x0d172a:0.05:0[k];[bg][k]overlay,format=yuv420p";
+const flat = (src, name) => { const f = join(out, name); ff("-i", src, "-vf", FLAT, ...enc, f); return f; };
+const openF = SHOW_OPEN ? flat(join(out, "0-open.mp4"), "0-open-flat.mp4") : null, kiF = flat(join(prev, "1-ki.mp4"), "1-ki-flat.mp4"), endF = flat(endT9, "4-end-flat.mp4");
+writeFileSync(join(out, "all.list"), [openF, kiF, introT, join(out, "3c-film-approve.mp4"), endF].filter(Boolean).map((f) => `file '${f}'`).join("\n"));
 const OUT = process.env.OUT || "full-v5.mp4";
 ff("-f", "concat", "-safe", "0", "-i", join(out, "all.list"), "-c", "copy", "-movflags", "+faststart", join(W, OUT));
 ff("-i", join(W, OUT), "-vf", "scale=1280:720", "-c:v", "libx264", "-crf", "28", "-preset", "medium", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", join(W, OUT.replace(/\.mp4$/, "-720p.mp4")));
-console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ open: dur(join(out, "0-open.mp4")), ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));
+console.log(OUT, dur(join(W, OUT)).toFixed(1), "秒", JSON.stringify({ open: SHOW_OPEN ? dur(join(out, "0-open.mp4")) : 0, ki: dur(join(prev, "1-ki.mp4")), intro: dur(join(prev, "2-intro.mp4")), film: dur(join(out, "3-film.mp4")), approve: dur(join(out, "3b-approve.mp4")), end: dur(join(out, "4-end.mp4")) }));
 
 // 右上などの四角が白黒に反転した時刻を、録画の中で探す
 function lineFlips(file, x, y) {
