@@ -7,7 +7,7 @@
 //   2. 画面に出た確認コードを 1 文字ずつ入れて「承認して直す」を押す(marks.code)→ 結果が出る(marks.approved)
 //   3. 弱いページ(入れた文字がタグ入り)を開き、文字として出るのを見せる(marks.after)→ お店のトップ(marks.top)
 // 時刻は録画の頭からの秒(壁時計)。録画は時計より少し遅れて進むので、組み立てでは録画の長さとの比で伸ばして使う(wall_total)
-// お知らせの URL(サーバー会社の名前が入る)は、画面の上でぼかす
+// お知らせの URL(サーバー会社の名前が入る)は、画面の上でぼかす。ぼかす語は環境変数 ADV(お知らせの URL)のホスト名から取る(コードに会社名を書かない)
 const { chromium } = require(process.env.PW || "playwright");
 const { mkdirSync, writeFileSync } = require("node:fs");
 
@@ -30,13 +30,16 @@ const { mkdirSync, writeFileSync } = require("node:fs");
   const at = () => (Date.now() - t0) / 1000;
   const marks = {};
   const page = await ctx.newPage();
-  const hideAdv = () => page.evaluate(() => {
+  const advWord = process.env.ADV ? new URL(process.env.ADV).hostname.replace(/^www\./, "").split(".")[0] : "";
+  const hideAdv = () => page.evaluate((word) => {
+    if (!word) return;
+    const re = new RegExp(word, "i");
     const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const hit = [];
-    while (w.nextNode()) if (/kagoya/i.test(w.currentNode.nodeValue)) hit.push(w.currentNode);
+    while (w.nextNode()) if (re.test(w.currentNode.nodeValue)) hit.push(w.currentNode);
     for (const n of hit) { const s = document.createElement("span"); s.style.filter = "blur(5px)"; s.textContent = n.nodeValue; n.parentNode.replaceChild(s, n); }
-    document.querySelectorAll("input").forEach((i) => { if (/kagoya/i.test(i.value)) i.style.filter = "blur(5px)"; });
-  });
+    document.querySelectorAll("input").forEach((i) => { if (re.test(i.value)) i.style.filter = "blur(5px)"; });
+  }, advWord);
   await page.goto(`${base}/admin/store/plugin/SelfHarden/config?big=1`);
   await page.waitForSelector("#sh-fix-card:not([hidden]) .sh-approve-btn", { timeout: 60000 });
   // 版上げの提案があれば、そのカード(.sh-upgrade)を承認する。無ければカスタマイズの直し
